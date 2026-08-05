@@ -1,3 +1,5 @@
+// The feedback bridge intentionally shares Ant Design's instance with imperative callers.
+/* oxlint-disable react/only-export-components */
 import { App as AntdApp } from "antd";
 
 type Feedback = ReturnType<typeof AntdApp.useApp>;

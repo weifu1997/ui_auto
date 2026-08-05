@@ -1,3 +1,5 @@
+// The router exposes route components and navigation hooks as one cohesive public API.
+/* oxlint-disable react/only-export-components */
 import {
   Children,
   createContext,

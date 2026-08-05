@@ -1,3 +1,5 @@
+// Page components share these rendering and data helpers as a single, lazy-loaded module.
+/* oxlint-disable react/only-export-components */
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
 import { getAgentBindings } from "../platform-api";
@@ -144,6 +146,7 @@ export function ProjectLayout({
   const environments = storedEnvironments ?? emptyEnvironments;
   const environment =
     environments.find((item) => item.id === activeEnvironmentId) ?? environments[0];
+  const environmentId = environment?.id;
   const runningRunCount = projectRuns.filter((run) => run.status === "running").length;
   const [workerStatus, setWorkerStatus] = useState<"checking" | "online" | "offline">("checking");
   const [agentStatus, setAgentStatus] = useState<"checking" | "online" | "offline" | "unbound" | "unimported" | "unknown">("checking");
@@ -190,7 +193,7 @@ export function ProjectLayout({
         }
         return;
       }
-      if (!environment) {
+      if (!environmentId) {
         if (mounted) {
           setAgentStatus("unbound");
           setAgentName(undefined);
@@ -201,7 +204,7 @@ export function ProjectLayout({
       request = new AbortController();
       try {
         const result = await getAgentBindings(context.session.token, context.projectId);
-        const binding = result.bindings.find((item) => item.environmentId === environment.id);
+        const binding = result.bindings.find((item) => item.environmentId === environmentId);
         if (!mounted) return;
         setAgentName(binding?.agent.name);
         setAgentStatus(!binding ? "unbound" : binding.agent.status === "online" ? "online" : "offline");
@@ -219,7 +222,7 @@ export function ProjectLayout({
       request?.abort();
       window.clearInterval(interval);
     };
-  }, [environment?.id, platformContextVersion, project.id]);
+  }, [environmentId, platformContextVersion, project.id]);
 
   const workerLabel = workerStatus === "online"
     ? "Worker 在线"
