@@ -1,0 +1,88 @@
+@media (max-width: 780px) {
+  .app-shell .project-side {
+    display: none;
+  }
+
+  .app-shell .workspace-side.compact {
+    background: #172522;
+    z-index: 2;
+  }
+
+  .app-shell .workspace-side.compact .brand {
+    padding: 0;
+  }
+
+  .debug-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .debug-event-panel {
+    grid-column: auto;
+  }
+
+  .debug-session-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .debug-event-row {
+    grid-template-columns: 70px minmax(0, 1fr);
+  }
+
+  .debug-event-row span {
+    grid-column: 2;
+  }
+
+  .picker-candidate-row {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+}
+
+.validation-target {
+  margin: 0 0 12px;
+  color: #526660;
+  font-size: 13px;
+}
+
+.validation-environment-select {
+  width: 100%;
+}
+
+.validation-result.not-found .result-icon {
+  color: #c44343;
+}
+
+.step-item {
+  grid-template-columns: 20px 20px 22px minmax(0, 1fr) 25px;
+}
+
+.step-item.dragging {
+  opacity: 0.58;
+}
+
+.step-drag-handle {
+  width: 20px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  color: #98a49f;
+  background: transparent;
+  cursor: grab;
+}
+
+.step-drag-handle:hover,
+.step-drag-handle:focus-visible {
+  color: #147a73;
+  outline: none;
+}
+
+.step-drag-handle:active {
+  cursor: grabbing;
+}
+
+.worker-shot img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #f8fbfa;
+}

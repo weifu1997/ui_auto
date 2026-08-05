@@ -1,0 +1,500 @@
+import { createHmac } from "node:crypto";
+import { once } from "node:events";
+import WebSocket from "ws";
+import { removeWorkerRoot, startWorker, stopWorker, type TestWorker } from "./worker-test-utils.ts";
+
+const port = 8795;
+let worker: TestWorker | undefined;
+let root: string | undefined;
+
+type ApiResponse<T> = { response: Response; body: T };
+
+async function api<T>(path: string, init: RequestInit = {}): Promise<ApiResponse<T>> {
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    ...init,
+    headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+  });
+  return { response, body: (await response.json()) as T };
+}
+
+function createMessageInbox(socket: WebSocket) {
+  const messages: Record<string, unknown>[] = [];
+  socket.on("message", (raw) => {
+    messages.push(JSON.parse(raw.toString("utf8")) as Record<string, unknown>);
+  });
+  return {
+    async next(type: string) {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const index = messages.findIndex((message) => message.type === type);
+        if (index >= 0) return messages.splice(index, 1)[0];
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`Timed out waiting for ${type}; received: ${JSON.stringify(messages)}`);
+    },
+  };
+}
+
+function headers(token: string) {
+  return { authorization: `Bearer ${token}` };
+}
+
+try {
+  worker = await startWorker({
+    port,
+    env: {
+      DEBUG_IDLE_TIMEOUT_MS: "1000",
+      AUTOFLOW_LISTEN_HOST: "0.0.0.0",
+      AUTOFLOW_CORS_ORIGINS: "http://console.example.test",
+      PLATFORM_SECRET_KEY: "platform-contract-smoke-secret",
+    },
+  });
+  root = worker.root;
+
+  const corsPreflight = await fetch(`http://127.0.0.1:${port}/api/auth/session`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "http://console.example.test",
+      "access-control-request-method": "GET",
+    },
+  });
+  if (corsPreflight.status !== 204 || corsPreflight.headers.get("access-control-allow-origin") !== "http://console.example.test") {
+    throw new Error("Configured CORS origin was not accepted");
+  }
+  const rejectedOrigin = await fetch(`http://127.0.0.1:${port}/api/auth/session`, { headers: { origin: "http://untrusted.example.test" } });
+  if (rejectedOrigin.status !== 403) throw new Error("Unconfigured CORS origin was accepted");
+  const disabledLegacyWorker = await api<{ error?: string }>("/api/projects/legacy/runs", { method: "POST", body: JSON.stringify({}) });
+  if (disabledLegacyWorker.response.status !== 404 || disabledLegacyWorker.body.error !== "LEGACY_WORKER_API_DISABLED") {
+    throw new Error("Legacy Worker API was exposed from a non-local listener");
+  }
+
+  const health = await api<{ ok: boolean; service: string }>("/api/platform/health");
+  if (!health.response.ok || health.body.service !== "platform") throw new Error("Platform health endpoint failed");
+
+  const registration = await api<{ token: string }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email: "owner@example.test", name: "Owner", password: "development-password" }),
+  });
+  if (!registration.response.ok || !registration.body.token) throw new Error("Platform registration failed");
+  const rejectedLogin = await api<{ error?: string }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: "owner@example.test", password: "wrong-password" }),
+  });
+  if (rejectedLogin.response.status !== 401 || rejectedLogin.body.error !== "LOGIN_INVALID") {
+    throw new Error("Platform login accepted an invalid password");
+  }
+  const login = await api<{ token: string; workspaces: never }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: "owner@example.test", password: "development-password" }),
+  });
+  if (!login.response.ok || !login.body.token) throw new Error("Platform login failed");
+  const token = login.body.token;
+  const session = await api<{ workspaces: Array<{ id: string }> }>("/api/auth/session", { headers: headers(token) });
+  const workspaceId = session.body.workspaces[0]?.id;
+  if (!workspaceId) throw new Error("Login did not create a workspace");
+
+  const projectResponse = await api<{ project: { id: string } }>(`/api/workspaces/${workspaceId}/projects`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "Platform contract project", description: "contract" }),
+  });
+  const projectId = projectResponse.body.project?.id;
+  if (!projectResponse.response.ok || !projectId) throw new Error(`Project creation failed: ${JSON.stringify(projectResponse.body)}`);
+  const internalEnvironment = { id: "internal", name: "Internal", baseUrl: "https://internal.example.test", browser: "Chromium" };
+  const currentDocument = await api<{ version: number }>(`/api/platform/projects/${projectId}/document`, { headers: headers(token) });
+  if (!currentDocument.response.ok) throw new Error("Project document lookup failed");
+  const document = await api(`/api/platform/projects/${projectId}/document`, {
+    method: "PUT",
+    headers: headers(token),
+    body: JSON.stringify({ data: { environments: [internalEnvironment] }, expectedVersion: currentDocument.body.version }),
+  });
+  if (!document.response.ok) throw new Error(`Project document setup failed: ${JSON.stringify(document.body)}`);
+  const unsupportedRevision = await api<{ error?: string }>(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ flow: { id: "unsupported", steps: [] }, environment: { ...internalEnvironment, browser: "Firefox" }, elements: [] }),
+  });
+  if (unsupportedRevision.response.status !== 400 || unsupportedRevision.body.error !== "AGENT_BROWSER_UNSUPPORTED") {
+    throw new Error("Platform accepted a browser engine without an Agent implementation");
+  }
+
+  const revision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({
+      flow: { id: "contract-flow", name: "Contract flow", steps: [{ id: "uses-secret", action: "wait", value: "{{secret.login_password}}" }] },
+      environment: internalEnvironment,
+      elements: [],
+      dataset: { id: "dataset-v1", version: 1 },
+      secretNames: ["login_password"],
+    }),
+  });
+  const revisionId = revision.body.revision?.id;
+  if (!revision.response.ok || !revisionId) throw new Error(`Revision creation failed: ${JSON.stringify(revision.body)}`);
+  await api(`/api/platform/projects/${projectId}/secrets`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "login_password", value: "never-log-this" }),
+  });
+  const publish = await api(`/api/platform/projects/${projectId}/revisions/${revisionId}/publish`, { method: "POST", headers: headers(token) });
+  if (!publish.response.ok) throw new Error("Revision publish failed");
+  const secondaryRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({
+      flow: { id: "secondary-flow", name: "Secondary flow", steps: [{ id: "open", action: "wait", value: "1" }] },
+      environment: internalEnvironment,
+      elements: [],
+    }),
+  });
+  const secondaryRevisionId = secondaryRevision.body.revision?.id;
+  if (!secondaryRevision.response.ok || !secondaryRevisionId) throw new Error("Secondary revision creation failed");
+  const secondaryPublish = await api(`/api/platform/projects/${projectId}/revisions/${secondaryRevisionId}/publish`, { method: "POST", headers: headers(token) });
+  if (!secondaryPublish.response.ok) throw new Error("Secondary revision publish failed");
+  const publishedRevisions = await api<{ revisions: Array<{ id: string; flowId?: string; flowName?: string; environmentId?: string; status: string }> }>(`/api/platform/projects/${projectId}/revisions`, { headers: headers(token) });
+  const primaryPublished = publishedRevisions.body.revisions.find((item) => item.id === revisionId);
+  const secondaryPublished = publishedRevisions.body.revisions.find((item) => item.id === secondaryRevisionId);
+  if (
+    primaryPublished?.status !== "published" ||
+    secondaryPublished?.status !== "published" ||
+    primaryPublished.flowId !== "contract-flow" ||
+    secondaryPublished.flowName !== "Secondary flow" ||
+    secondaryPublished.environmentId !== "internal"
+  ) {
+    throw new Error(`Published revisions were not isolated by flow and environment: ${JSON.stringify(publishedRevisions.body)}`);
+  }
+
+  const agentRegistration = await api<{ registrationToken: string }>("/api/agent-tokens", {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ workspaceId, expiresInMinutes: 5 }),
+  });
+  const registered = await api<{ agent: { id: string }; credential: string }>("/api/agents/register", {
+    method: "POST",
+    body: JSON.stringify({ registrationToken: agentRegistration.body.registrationToken, name: "contract-agent", browserVersion: "Chromium 130", os: "win32", maxConcurrency: 1 }),
+  });
+  const agentId = registered.body.agent?.id;
+  const credential = registered.body.credential;
+  if (!registered.response.ok || !agentId || !credential) throw new Error("Agent registration failed");
+
+  const heartbeat = await api(`/api/agents/${agentId}/heartbeat`, {
+    method: "POST",
+    headers: headers(credential),
+    body: JSON.stringify({ browserVersion: "Chromium 130", os: "win32" }),
+  });
+  if (!heartbeat.response.ok) throw new Error("Agent heartbeat failed");
+  const binding = await api(`/api/platform/projects/${projectId}/agent-bindings`, {
+    method: "PUT",
+    headers: headers(token),
+    body: JSON.stringify({ environmentId: "internal", agentId }),
+  });
+  if (!binding.response.ok) throw new Error("Agent binding failed");
+
+  const createdRun = await api<{ run: { id: string; snapshot: Record<string, unknown> } }>(`/api/platform/projects/${projectId}/runs`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ revisionId, environmentId: "internal" }),
+  });
+  const runId = createdRun.body.run?.id;
+  if (!createdRun.response.ok || !runId || JSON.stringify(createdRun.body.run.snapshot).includes("never-log-this")) {
+    throw new Error(`Immutable run snapshot failed: ${JSON.stringify(createdRun.body)}`);
+  }
+
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/agents/connect?agentId=${agentId}`, { headers: headers(credential) });
+  const inbox = createMessageInbox(socket);
+  await once(socket, "open");
+  await inbox.next("connected");
+  const leaseMessage = (await inbox.next("run.lease")) as unknown as { lease: { id: string }; run: { id: string; secrets: Record<string, string> } };
+  if (leaseMessage.run.id !== runId || leaseMessage.run.secrets.login_password !== "never-log-this") {
+    throw new Error("Agent did not receive the expected leased run");
+  }
+  socket.send(JSON.stringify({ type: "lease.renew", leaseId: leaseMessage.lease.id }));
+  await inbox.next("lease.renewed");
+  const artifact = await api<{ artifact: { id: string } }>(`/api/agents/${agentId}/leases/${leaseMessage.lease.id}/artifacts`, {
+    method: "POST",
+    headers: headers(credential),
+    body: JSON.stringify({ name: "contract.txt", contentType: "text/plain", contentBase64: Buffer.from("contract artifact").toString("base64") }),
+  });
+  if (!artifact.response.ok || !artifact.body.artifact?.id) throw new Error("Agent artifact upload failed");
+  socket.send(JSON.stringify({ type: "run.event", leaseId: leaseMessage.lease.id, kind: "step.completed", data: { stepId: "open", title: "Open contract fixture", durationMs: 420 } }));
+  await inbox.next("event.ack");
+  socket.send(JSON.stringify({ type: "run.complete", leaseId: leaseMessage.lease.id, status: "success", result: { completedSteps: 0 } }));
+  await inbox.next("run.complete.ack");
+
+  const complete = await api<{ run: { status: string; artifacts: Array<{ id: string }> } }>(`/api/platform/projects/${projectId}/runs/${runId}`, { headers: headers(token) });
+  if (complete.body.run.status !== "success" || complete.body.run.artifacts[0]?.id !== artifact.body.artifact.id) {
+    throw new Error(`Run completion failed: ${JSON.stringify(complete.body)}`);
+  }
+  const downloadedArtifact = await fetch(`http://127.0.0.1:${port}/api/platform/artifacts/${artifact.body.artifact.id}`, { headers: headers(token) });
+  if (!downloadedArtifact.ok || (await downloadedArtifact.text()) !== "contract artifact") throw new Error("Artifact download failed");
+
+  const createdDebug = await api<{ session: { id: string } }>(`/api/platform/projects/${projectId}/debug-sessions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ revisionId, environmentId: "internal" }),
+  });
+  const debugSessionId = createdDebug.body.session?.id;
+  if (!createdDebug.response.ok || !debugSessionId) throw new Error(`Debug session creation failed: ${JSON.stringify(createdDebug.body)}`);
+  const debugStart = (await inbox.next("debug.start")) as unknown as { session: { id: string; secrets: Record<string, string> } };
+  if (debugStart.session.id !== debugSessionId || debugStart.session.secrets.login_password !== "never-log-this") {
+    throw new Error("Debug session did not receive its immutable snapshot and runtime secret");
+  }
+  const prematureDebugCommand = await api<{ error?: string }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/commands`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ command: "runCurrent" }),
+  });
+  if (prematureDebugCommand.response.status !== 409 || prematureDebugCommand.body.error !== "DEBUG_SESSION_NOT_READY") {
+    throw new Error("Debug commands were accepted before the headed browser became ready");
+  }
+  socket.send(JSON.stringify({ type: "debug.ready", sessionId: debugSessionId, currentStep: 0, currentUrl: "https://internal.example.test/login", browserContextId: "context-1" }));
+  await inbox.next("debug.ready.ack");
+  const readyDebug = await api<{ session: { status: string; currentUrl: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}`, { headers: headers(token) });
+  if (readyDebug.body.session.status !== "paused" || readyDebug.body.session.currentUrl !== "https://internal.example.test/login") {
+    throw new Error(`Debug ready state failed: ${JSON.stringify(readyDebug.body)}`);
+  }
+  const debugArtifact = await api<{ artifact: { id: string } }>(`/api/agents/${agentId}/debug-sessions/${debugSessionId}/artifacts`, {
+    method: "POST",
+    headers: headers(credential),
+    body: JSON.stringify({ name: "debug.png", contentType: "image/png", contentBase64: Buffer.from("debug image").toString("base64") }),
+  });
+  if (!debugArtifact.response.ok) throw new Error("Debug artifact upload failed");
+  const runCurrentRequest = api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/commands`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ command: "runCurrent" }),
+  });
+  const runCurrentCommand = await inbox.next("debug.command");
+  if (runCurrentCommand.command !== "runCurrent") throw new Error("Debug command was not sent to Agent");
+  socket.send(JSON.stringify({ type: "debug.command.ack", sessionId: debugSessionId, commandId: runCurrentCommand.commandId, command: "runCurrent", accepted: true }));
+  const runCurrent = await runCurrentRequest;
+  if (!runCurrent.response.ok) throw new Error("Debug run-current command failed");
+  socket.send(JSON.stringify({ type: "debug.event", sessionId: debugSessionId, kind: "console.error", currentStep: 0, currentUrl: "https://internal.example.test/login", data: { message: "fixture console error" } }));
+  await inbox.next("debug.event.ack");
+  socket.send(JSON.stringify({ type: "debug.state", sessionId: debugSessionId, status: "paused", currentStep: 1, currentUrl: "https://internal.example.test/dashboard" }));
+  await inbox.next("debug.state.ack");
+  const debugAfterStep = await api<{ session: { currentStep: number; artifacts: Array<{ id: string }>; events: Array<{ kind: string }> } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}`, { headers: headers(token) });
+  if (debugAfterStep.body.session.currentStep !== 1 || debugAfterStep.body.session.artifacts[0]?.id !== debugArtifact.body.artifact.id || !debugAfterStep.body.session.events.some((event) => event.kind === "console.error")) {
+    throw new Error(`Debug state/event persistence failed: ${JSON.stringify(debugAfterStep.body)}`);
+  }
+  const pickerEnabled = await api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker/enable`, { method: "POST", headers: headers(token) });
+  if (!pickerEnabled.response.ok) throw new Error("Picker enable failed");
+  const pickerEnableCommand = await inbox.next("picker.enable");
+  if (pickerEnableCommand.sessionId !== debugSessionId) throw new Error("Picker enable command was not sent to Agent");
+  socket.send(JSON.stringify({
+    type: "picker.captured",
+    sessionId: debugSessionId,
+    target: "button#save",
+    candidates: [
+      { method: "testid", value: "save-button", count: 1, score: 98, label: "data-testid: save-button" },
+      { method: "role", value: "button", count: 2, score: 72, label: "role: button" },
+    ],
+  }));
+  const pickerCaptured = await inbox.next("picker.captured.ack");
+  const captureId = String(pickerCaptured.captureId);
+  const captures = await api<{ captures: Array<{ id: string; candidates: Array<{ value: string }> }> }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures`, { headers: headers(token) });
+  if (!captures.response.ok || captures.body.captures[0]?.id !== captureId || captures.body.captures[0]?.candidates[0]?.value !== "save-button") {
+    throw new Error(`Picker candidates were not persisted: ${JSON.stringify(captures.body)}`);
+  }
+  const pickerPreview = await api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/preview`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ candidateIndex: 0 }),
+  });
+  if (!pickerPreview.response.ok) throw new Error("Picker preview failed");
+  const previewCommand = await inbox.next("picker.preview");
+  if (previewCommand.captureId !== captureId || (previewCommand.candidate as { value?: string }).value !== "save-button") throw new Error("Picker preview command did not include candidate");
+  const pickerConfirmed = await api<{ element: { name: string; value: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ candidateIndex: 0, target: "element", name: "Save button" }),
+  });
+  if (!pickerConfirmed.response.ok || pickerConfirmed.body.element.value !== "save-button") throw new Error("Picker confirmation did not create an element");
+  const stoppedDebugRequest = api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/commands`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ command: "stop" }),
+  });
+  const stopDebugCommand = await inbox.next("debug.command");
+  if (stopDebugCommand.command !== "stop") throw new Error("Debug stop command was not sent to Agent");
+  socket.send(JSON.stringify({ type: "debug.command.ack", sessionId: debugSessionId, commandId: stopDebugCommand.commandId, command: "stop", accepted: true }));
+  const stoppedDebug = await stoppedDebugRequest;
+  if (!stoppedDebug.response.ok) throw new Error("Debug stop command failed");
+  socket.send(JSON.stringify({ type: "debug.ended", sessionId: debugSessionId, status: "ended", reason: "MANUAL_STOP" }));
+  await inbox.next("debug.ended.ack");
+  const endedDebug = await api<{ session: { status: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}`, { headers: headers(token) });
+  if (endedDebug.body.session.status !== "ended") throw new Error("Debug session did not end");
+
+  const expiringDebug = await api<{ session: { id: string } }>(`/api/platform/projects/${projectId}/debug-sessions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ revisionId, environmentId: "internal" }),
+  });
+  const expiringDebugId = expiringDebug.body.session?.id;
+  if (!expiringDebug.response.ok || !expiringDebugId) throw new Error("Second debug session creation failed");
+  await inbox.next("debug.start");
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const expiredDebug = await api<{ session: { status: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${expiringDebugId}`, { headers: headers(token) });
+  const expiryCommand = await inbox.next("debug.command");
+  if (expiredDebug.body.session.status !== "expired" || expiryCommand.command !== "stop") throw new Error("Debug idle timeout was not recovered");
+
+  const secondRun = await api<{ run: { id: string } }>(`/api/platform/projects/${projectId}/runs`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ revisionId, environmentId: "internal" }),
+  });
+  socket.send(JSON.stringify({ type: "ready", browserVersion: "Chromium 130", os: "win32" }));
+  const secondLease = (await inbox.next("run.lease")) as unknown as { lease: { id: string }; run: { id: string } };
+  const canceled = await api<{ run: { cancellationRequested: boolean } }>(`/api/platform/projects/${projectId}/runs/${secondRun.body.run.id}/cancel`, { method: "POST", headers: headers(token) });
+  if (!canceled.response.ok || !canceled.body.run.cancellationRequested) throw new Error("Run cancellation request failed");
+  const cancelCommand = await inbox.next("run.cancel");
+  if (cancelCommand.leaseId !== secondLease.lease.id) throw new Error("Agent did not receive cancellation command");
+  socket.send(JSON.stringify({ type: "run.complete", leaseId: secondLease.lease.id, status: "success", result: {} }));
+  await inbox.next("run.complete.ack");
+  const canceledRun = await api<{ run: { status: string } }>(`/api/platform/projects/${projectId}/runs/${secondRun.body.run.id}`, { headers: headers(token) });
+  if (canceledRun.body.run.status !== "canceled") throw new Error("Agent cancellation did not settle the run");
+
+  const csv = "account,expectedOrder\nalice,A-100\nbob,B-200\n";
+  const importedDataset = await api<{ dataset: { id: string }; version: { id: string; rowCount: number; columns: string[] } }>(`/api/platform/projects/${projectId}/datasets`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "Accounts", fileName: "accounts.csv", contentBase64: Buffer.from(csv).toString("base64") }),
+  });
+  const datasetVersionId = importedDataset.body.version?.id;
+  if (!importedDataset.response.ok || !datasetVersionId || importedDataset.body.version.rowCount !== 2 || importedDataset.body.version.columns[0] !== "account") {
+    throw new Error(`Dataset import failed: ${JSON.stringify(importedDataset.body)}`);
+  }
+  const datasetPreview = await api<{ rows: Array<{ rowNumber: number; data: { account: string } }> }>(`/api/platform/projects/${projectId}/dataset-versions/${datasetVersionId}`, { headers: headers(token) });
+  if (!datasetPreview.response.ok || datasetPreview.body.rows[1]?.data.account !== "bob") throw new Error("Dataset rows were not versioned");
+
+  const dataRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({
+      flow: { id: "parameterized-flow", name: "Parameterized flow", steps: [{ id: "input", action: "fill", value: "{{data.account}}", output: "orderId", outputPublic: true }, { id: "reuse", action: "fill", value: "{{flow.orderId}}" }] },
+      environment: { id: "internal", name: "Internal", baseUrl: "https://internal.example.test" },
+      elements: [],
+      datasetVersionId,
+    }),
+  });
+  const dataRevisionId = dataRevision.body.revision?.id;
+  if (!dataRevision.response.ok || !dataRevisionId) throw new Error("Dataset revision creation failed");
+  const dataPublished = await api(`/api/platform/projects/${projectId}/revisions/${dataRevisionId}/publish`, { method: "POST", headers: headers(token) });
+  if (!dataPublished.response.ok) throw new Error("Dataset revision publish failed");
+
+  const channel = await api<{ channel: { id: string; name: string }; config?: unknown }>(`/api/platform/workspaces/${workspaceId}/notification-channels`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "Contract webhook", type: "webhook", config: { url: "https://example.com/notification-sink", headers: { "x-contract": "yes" } } }),
+  });
+  const channelId = channel.body.channel?.id;
+  if (!channel.response.ok || !channelId || "config" in channel.body) throw new Error("Notification channel was not securely created");
+  const subscription = await api(`/api/platform/projects/${projectId}/notification-subscriptions`, {
+    method: "PUT",
+    headers: headers(token),
+    body: JSON.stringify({ channelId, onSuccess: true, onFailure: true }),
+  });
+  if (!subscription.response.ok) throw new Error("Notification subscription failed");
+
+  const parameterized = await api<{ runs: Array<{ id: string; snapshot: Record<string, unknown> }> }>(`/api/platform/projects/${projectId}/runs`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ revisionId: dataRevisionId, environmentId: "internal", datasetVersionId }),
+  });
+  if (!parameterized.response.ok || parameterized.body.runs.length !== 2 || (parameterized.body.runs[0]?.snapshot.datasetRow as { data?: { account?: string } } | undefined)?.data?.account !== "alice") {
+    throw new Error(`Parameterized run snapshot failed: ${JSON.stringify(parameterized.body)}`);
+  }
+  socket.send(JSON.stringify({ type: "ready", browserVersion: "Chromium 130", os: "win32" }));
+  const parameterizedLease = (await inbox.next("run.lease")) as unknown as { lease: { id: string }; run: { id: string } };
+  if (!parameterized.body.runs.some((run) => run.id === parameterizedLease.run.id)) throw new Error("Parameterized run was not leased");
+  socket.send(JSON.stringify({ type: "run.complete", leaseId: parameterizedLease.lease.id, status: "success", result: { flowOutputs: { orderId: "A-100", unsafe: "never-log-this" } } }));
+  await inbox.next("run.complete.ack");
+  const outputRun = await api<{ run: { flowOutputs: Array<{ name: string; value: string }>; result: Record<string, unknown> } }>(`/api/platform/projects/${projectId}/runs/${parameterizedLease.run.id}`, { headers: headers(token) });
+  if (outputRun.body.run.flowOutputs.find((item) => item.name === "orderId")?.value !== "A-100" || JSON.stringify(outputRun.body).includes("never-log-this")) {
+    throw new Error(`Flow outputs were not persisted safely: ${JSON.stringify(outputRun.body)}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const deliveries = await api<{ deliveries: Array<{ channel: { name: string } }> }>(`/api/platform/projects/${projectId}/deliveries`, { headers: headers(token) });
+  if (!deliveries.response.ok || deliveries.body.deliveries[0]?.channel.name !== "Contract webhook") throw new Error("Run notification delivery was not queued");
+
+  const schedule = await api<{ schedule: { id: string } }>(`/api/platform/projects/${projectId}/schedules`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "Daily parameterized check", revisionId: dataRevisionId, environmentId: "internal", datasetVersionId, cron: "0 9 * * 1-5", timezone: "Asia/Shanghai" }),
+  });
+  if (!schedule.response.ok || !schedule.body.schedule?.id) throw new Error(`Schedule creation failed: ${JSON.stringify(schedule.body)}`);
+  const scheduled = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/schedules/${schedule.body.schedule.id}/run`, { method: "POST", headers: headers(token) });
+  if (!scheduled.response.ok || scheduled.body.runIds.length !== 2) throw new Error("Schedule did not create one run per dataset row");
+
+  const webhook = await api<{ trigger: { id: string }; triggerUrl: string; signingSecret: string }>(`/api/platform/projects/${projectId}/webhook-triggers`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "CI parameterized check", revisionId: dataRevisionId, environmentId: "internal", datasetVersionId }),
+  });
+  if (!webhook.response.ok || !webhook.body.triggerUrl || !webhook.body.signingSecret) throw new Error("Webhook trigger creation failed");
+  const timestamp = String(Date.now());
+  const rawBody = "";
+  const deliveryId = "contract-webhook-delivery";
+  const signature = `sha256=${createHmac("sha256", webhook.body.signingSecret).update(`${timestamp}.${rawBody}`).digest("hex")}`;
+  const webhookRun = await api<{ accepted: boolean; runIds: string[] }>(webhook.body.triggerUrl, {
+    method: "POST",
+    headers: {
+      "x-autoflow-timestamp": timestamp,
+      "x-autoflow-delivery-id": deliveryId,
+      "x-autoflow-signature": signature,
+    },
+    body: rawBody,
+  });
+  if (!webhookRun.response.ok || !webhookRun.body.accepted || webhookRun.body.runIds.length !== 2) throw new Error("Webhook did not run the published parameterized revision");
+
+  const analytics = await api<{ analytics: { summary: { totalRuns: number }; slowSteps: Array<{ stepId: string; averageMs: number }> } }>(`/api/platform/projects/${projectId}/analytics`, { headers: headers(token) });
+  if (!analytics.response.ok || analytics.body.analytics.summary.totalRuns < 1 || analytics.body.analytics.slowSteps.find((item) => item.stepId === "open")?.averageMs !== 420) {
+    throw new Error(`Analytics aggregation failed: ${JSON.stringify(analytics.body)}`);
+  }
+  const viewerRegistration = await api<{ token: string }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email: "viewer@example.test", name: "Viewer", password: "viewer-password" }),
+  });
+  if (!viewerRegistration.response.ok || !viewerRegistration.body.token) throw new Error("Viewer registration failed");
+  const addedMember = await api<{ member: { id: string; role: string } }>(`/api/workspaces/${workspaceId}/members`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ email: "viewer@example.test", name: "Viewer", role: "viewer" }),
+  });
+  if (!addedMember.response.ok || addedMember.body.member.role !== "viewer") throw new Error("Workspace member creation failed");
+  const viewerRead = await api(`/api/platform/projects/${projectId}/revisions`, { headers: headers(viewerRegistration.body.token) });
+  if (!viewerRead.response.ok) throw new Error("Viewer should retain project read access");
+  const viewerPublish = await api<{ error?: string }>(`/api/platform/projects/${projectId}/revisions/${dataRevisionId}/publish`, { method: "POST", headers: headers(viewerRegistration.body.token) });
+  if (viewerPublish.response.status !== 403 || viewerPublish.body.error !== "WORKSPACE_WRITE_DENIED") throw new Error("Viewer was allowed to publish a release");
+  const viewerDraft = await api(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(viewerRegistration.body.token),
+    body: JSON.stringify({ flow: { id: "viewer-flow", steps: [] }, environment: { id: "internal" }, elements: [] }),
+  });
+  if (viewerDraft.response.status !== 403) throw new Error("Viewer was allowed to create a draft");
+
+  const invitedMember = await api<{ member?: { id: string }; invitationToken?: string }>(`/api/workspaces/${workspaceId}/members`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ email: "invited@example.test", name: "Invited", role: "editor" }),
+  });
+  if (!invitedMember.response.ok || !invitedMember.body.member?.id || !invitedMember.body.invitationToken) {
+    throw new Error("Workspace invitation was not created");
+  }
+  const missingInvitation = await api<{ error?: string }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email: "invited@example.test", name: "Invited", password: "invited-password" }),
+  });
+  if (missingInvitation.response.status !== 409 || missingInvitation.body.error !== "INVITATION_VERIFICATION_REQUIRED") {
+    throw new Error("Pending member registered without an invitation token");
+  }
+  const acceptedInvitation = await api<{ token?: string }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email: "invited@example.test", name: "Invited", password: "invited-password", invitationToken: invitedMember.body.invitationToken }),
+  });
+  if (!acceptedInvitation.response.ok || !acceptedInvitation.body.token) throw new Error("Valid invitation token was not accepted");
+  socket.close();
+  console.log("Platform contract smoke test passed");
+} finally {
+  if (worker) await stopWorker(worker);
+  if (root) await removeWorkerRoot(root);
+}
