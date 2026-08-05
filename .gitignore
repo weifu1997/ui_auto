@@ -13,6 +13,7 @@ server/.platform-artifacts
 dist
 dist-ssr
 *.local
+.reasonix
 
 # Editor directories and files
 .vscode/*

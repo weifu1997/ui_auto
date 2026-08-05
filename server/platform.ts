@@ -1,272 +1,71 @@
 import {
+  PlatformError,
+  agentLeaseDurationMs,
+  agentOfflineAfterMs,
+  allowInsecureNotificationTargets,
+  allowPrivateNotificationTargets,
+  asRecord,
+  authorization,
+  debugIdleTimeoutMs,
+  digest,
+  failureCategory,
+  json,
+  leaseExpiresAt,
+  nextCronTime,
+  normalizeDatasetRows,
+  normalizeLocatorCandidates,
+  notificationMaxAttempts,
+  notificationRetryBaseMs,
+  now,
+  parseCsv,
+  parseJson,
+  publicFlowOutputNames,
+  publicIpAddress,
+  safeArtifactName,
+  webhookRateLimitPerMinute,
+} from "./platform-core";
+import type {
+  AgentRecord,
+  AuthUser,
+  DatasetVersionRecord,
+  DebugSession,
+  DebugSessionStatus,
+  DeliveryStatus,
+  ElementValidation,
+  ElementValidationStatus,
+  Lease,
+  LeaseStatus,
+  LocatorCandidate,
+  NotificationChannelType,
+  PlatformApi,
+  PlatformRun,
+  PlatformRunStatus,
+  ProjectDocument,
+  PublishedRevision,
+  Role,
+  ValidatedNotificationTarget,
+} from "./platform-core";
+import { createPlatformHandler } from "./platform-handler";
+import {
   createCipheriv,
   createDecipheriv,
   createHash,
-  createHmac,
   randomBytes,
   randomUUID,
-  scryptSync,
-  timingSafeEqual,
 } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { createReadStream } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { basename, join, resolve } from "node:path";
 import { isIP } from "node:net";
-import type { Duplex } from "node:stream";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import type { WebSocket, RawData } from "ws";
+import { WebSocketServer } from "ws";
 import { readSheet } from "read-excel-file/node";
 
-type Role = "owner" | "admin" | "editor" | "viewer";
-type RevisionStatus = "draft" | "published" | "superseded";
-type PlatformRunStatus = "queued" | "dispatched" | "running" | "success" | "failed" | "canceled";
-type LeaseStatus = "offered" | "leased" | "expired" | "completed" | "canceled";
-type DebugSessionStatus = "requested" | "active" | "paused" | "ending" | "ended" | "failed" | "expired";
-type NotificationChannelType = "webhook" | "feishu" | "dingtalk" | "wecom" | "email";
-type DeliveryStatus = "pending" | "retrying" | "delivering" | "delivered" | "failed";
-type ValidatedNotificationTarget = { url: URL; address: string };
-type ElementValidationStatus = "queued" | "running" | "success" | "failed" | "canceled";
-
-type ElementValidation = {
-  id: string;
-  projectId: string;
-  environmentId: string;
-  agentId: string;
-  status: ElementValidationStatus;
-  element: Record<string, unknown>;
-  result?: Record<string, unknown>;
-  error?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type AuthUser = { id: string; email: string; name: string };
-type AgentRecord = {
-  id: string;
-  workspaceId: string;
-  name: string;
-  status: "online" | "offline" | "disabled";
-  browserVersion: string;
-  os: string;
-  maxConcurrency: number;
-  currentTask: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-};
-type PlatformRun = {
-  id: string;
-  projectId: string;
-  revisionId: string;
-  agentId: string;
-  environmentId: string;
-  status: PlatformRunStatus;
-  snapshot: Record<string, unknown>;
-  result?: Record<string, unknown>;
-  cancellationRequested: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-type Lease = {
-  id: string;
-  runId: string;
-  agentId: string;
-  status: LeaseStatus;
-  expiresAt: string;
-  attempt: number;
-};
-type DebugSession = {
-  id: string;
-  projectId: string;
-  revisionId: string;
-  environmentId: string;
-  agentId: string;
-  status: DebugSessionStatus;
-  snapshot: Record<string, unknown>;
-  currentStep: number;
-  currentUrl: string | null;
-  browserContextId: string | null;
-  idleExpiresAt: string;
-  maxExpiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-};
-type LocatorCandidate = {
-  method: "testid" | "role" | "label" | "text" | "css";
-  value: string;
-  count: number;
-  score: number;
-  label: string;
-};
-
-type ProjectDocument = {
-  data: Record<string, unknown>;
-  version: number;
-  updatedAt?: string;
-};
-
-type DatasetVersionRecord = {
-  id: string;
-  datasetId: string;
-  projectId: string;
-  versionNumber: number;
-  columns: string[];
-  rowCount: number;
-  checksum: string;
-  sourceName: string;
-  createdAt: string;
-};
-
-type PublishedRevision = {
-  id: string;
-  flow_snapshot: string;
-  environment_snapshot: string;
-  element_snapshot: string;
-  dataset_snapshot: string;
-  checksum: string;
-};
-
-export type PlatformApi = {
-  handle: (request: IncomingMessage, response: ServerResponse, url: URL) => Promise<boolean>;
-  handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
-};
-
-const jsonContentType = { "content-type": "application/json; charset=utf-8" };
-const platformArtifactDirectory = resolve(
-  process.env.PLATFORM_ARTIFACT_DIRECTORY ?? join("server", ".platform-artifacts"),
-);
-const agentLeaseDurationMs = Number(process.env.AGENT_LEASE_DURATION_MS ?? 45_000);
-const agentOfflineAfterMs = Number(process.env.AGENT_OFFLINE_AFTER_MS ?? 45_000);
-const debugIdleTimeoutMs = Number(process.env.DEBUG_IDLE_TIMEOUT_MS ?? 15 * 60_000);
-const debugMaxDurationMs = Number(process.env.DEBUG_MAX_DURATION_MS ?? 2 * 60 * 60_000);
-const webhookTimestampToleranceMs = Number(process.env.WEBHOOK_TIMESTAMP_TOLERANCE_MS ?? 5 * 60_000);
-const webhookRateLimitPerMinute = Number(process.env.WEBHOOK_RATE_LIMIT_PER_MINUTE ?? 10);
-const webhookMaxRuns = Number(process.env.WEBHOOK_MAX_RUNS ?? 100);
-const notificationMaxAttempts = Math.max(1, Number(process.env.NOTIFICATION_MAX_ATTEMPTS ?? 5));
-const notificationRetryBaseMs = Math.max(1_000, Number(process.env.NOTIFICATION_RETRY_BASE_MS ?? 30_000));
-const allowPrivateNotificationTargets = process.env.PLATFORM_ALLOW_PRIVATE_NOTIFICATION_URLS === "1";
-const allowInsecureNotificationTargets = process.env.PLATFORM_ALLOW_INSECURE_NOTIFICATION_URLS === "1";
-
-function now() {
-  return new Date().toISOString();
-}
-
-function digest(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function passwordHash(password: string) {
-  const salt = randomBytes(16);
-  const derived = scryptSync(password, salt, 64);
-  return `${salt.toString("base64url")}:${derived.toString("base64url")}`;
-}
-
-function passwordMatches(password: string, encoded: string) {
-  const [saltText, hashText] = encoded.split(":");
-  if (!saltText || !hashText) return false;
-  try {
-    const expected = Buffer.from(hashText, "base64url");
-    const actual = scryptSync(password, Buffer.from(saltText, "base64url"), expected.length);
-    return actual.length === expected.length && timingSafeEqual(actual, expected);
-  } catch {
-    return false;
-  }
-}
-
-function json(value: unknown) {
-  return JSON.stringify(value);
-}
-
-function parseJson<T>(value: string | null, fallback: T): T {
-  if (!value) return fallback;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function sendJson(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, jsonContentType);
-  response.end(json(body));
-}
-
-function sendError(response: ServerResponse, status: number, error: string) {
-  sendJson(response, status, { error });
-}
-
-async function readBody(request: IncomingMessage, maxBytes = 1_000_000) {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += value.length;
-    if (size > maxBytes) throw new PlatformError(413, "PAYLOAD_TOO_LARGE");
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
-
-async function readJson<T>(request: IncomingMessage, maxBytes = 1_000_000) {
-  const body = await readBody(request, maxBytes);
-  if (body.length === 0) return {} as T;
-  try {
-    return JSON.parse(body.toString("utf8")) as T;
-  } catch {
-    throw new PlatformError(400, "INVALID_JSON");
-  }
-}
-
-class PlatformError extends Error {
-  readonly status: number;
-  readonly code: string;
-
-  constructor(status: number, code: string) {
-    super(code);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-function authorization(request: IncomingMessage) {
-  const value = request.headers.authorization;
-  if (!value?.startsWith("Bearer ")) return undefined;
-  return value.slice("Bearer ".length).trim();
-}
-
-function leaseExpiresAt() {
-  return new Date(Date.now() + agentLeaseDurationMs).toISOString();
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function cleanProjectSlug(value: string) {
-  const cleaned = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned || "project";
-}
-
-function revisionNumber(rows: Array<{ revision_number: number }>) {
-  return Math.max(0, ...rows.map((row) => row.revision_number)) + 1;
-}
-
-function safeArtifactName(value: string) {
-  const filename = basename(value).replace(/[^a-zA-Z0-9._-]/g, "_");
-  return filename || "artifact.bin";
-}
-
-export function createPlatformApi(dataDirectory: string): PlatformApi {
+function createPlatformServices(dataDirectory: string) {
   const database = new DatabaseSync(join(dataDirectory, "platform.sqlite"));
   database.exec(`
     PRAGMA journal_mode = WAL;
@@ -730,13 +529,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
     return Buffer.concat([decipher.update(Buffer.from(row.ciphertext, "base64")), decipher.final()]).toString("utf8");
   }
 
-  function webhookSignatureMatches(secret: string, timestamp: string, body: Buffer, signature: string) {
-    const expected = `sha256=${createHmac("sha256", secret).update(`${timestamp}.${body.toString("utf8")}`).digest("hex")}`;
-    const actual = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expected);
-    return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
-  }
-
   function allowWebhookRequest(triggerId: string) {
     const cutoff = Date.now() - 60_000;
     const requests = (webhookRequests.get(triggerId) ?? []).filter((time) => time > cutoff);
@@ -744,30 +536,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
     requests.push(Date.now());
     webhookRequests.set(triggerId, requests);
     return true;
-  }
-
-  function publicIpAddress(address: string) {
-    const version = isIP(address);
-    if (version === 4) {
-      const [first, second] = address.split(".").map(Number);
-      return !(
-        first === 0 || first === 10 || first === 127 ||
-        (first === 100 && second >= 64 && second <= 127) ||
-        (first === 169 && second === 254) ||
-        (first === 172 && second >= 16 && second <= 31) ||
-        (first === 192 && second === 168) ||
-        (first === 192 && second === 0) ||
-        (first === 198 && (second === 18 || second === 19)) ||
-        first >= 224
-      );
-    }
-    if (version === 6) {
-      const normalized = address.toLowerCase();
-      return normalized !== "::" && normalized !== "::1" &&
-        !normalized.startsWith("fc") && !normalized.startsWith("fd") &&
-        !normalized.startsWith("fe80:") && !normalized.startsWith("::ffff:");
-    }
-    return false;
   }
 
   async function notificationTarget(value: string): Promise<ValidatedNotificationTarget> {
@@ -814,66 +582,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
       request.once("error", reject);
       request.end(body);
     });
-  }
-
-  function normalizeDatasetRows(input: unknown[][]) {
-    if (input.length < 2) throw new PlatformError(400, "DATASET_ROWS_REQUIRED");
-    const headers = input[0].map((value) => String(value ?? "").trim().replace(/^\uFEFF/, ""));
-    if (headers.length === 0 || headers.length > 200 || headers.some((value) => !value)) {
-      throw new PlatformError(400, "DATASET_HEADERS_INVALID");
-    }
-    const canonical = headers.map((value) => value.toLocaleLowerCase());
-    if (new Set(canonical).size !== headers.length) throw new PlatformError(400, "DATASET_HEADERS_DUPLICATE");
-    const rows = input.slice(1, 10_001).flatMap((source) => {
-      const row = Object.fromEntries(headers.map((header, index) => [header, String(source[index] ?? "").slice(0, 10_000)]));
-      return Object.values(row).some((value) => value.length > 0) ? [row] : [];
-    });
-    if (rows.length === 0) throw new PlatformError(400, "DATASET_ROWS_REQUIRED");
-    if (input.length > 10_001) throw new PlatformError(413, "DATASET_ROW_LIMIT_EXCEEDED");
-    return { columns: headers, rows };
-  }
-
-  function parseCsv(content: string): string[][] {
-    const rows: string[][] = [];
-    let row: string[] = [];
-    let cell = "";
-    let quoted = false;
-    for (let index = 0; index < content.length; index += 1) {
-      const character = content[index];
-      if (quoted) {
-        if (character === '"') {
-          if (content[index + 1] === '"') {
-            cell += '"';
-            index += 1;
-          } else {
-            quoted = false;
-          }
-        } else {
-          cell += character;
-        }
-        continue;
-      }
-      if (character === '"') {
-        if (cell.length > 0) throw new PlatformError(400, "DATASET_FILE_INVALID");
-        quoted = true;
-      } else if (character === ",") {
-        row.push(cell);
-        cell = "";
-      } else if (character === "\n") {
-        row.push(cell);
-        rows.push(row);
-        row = [];
-        cell = "";
-      } else if (character !== "\r") {
-        cell += character;
-      }
-    }
-    if (quoted) throw new PlatformError(400, "DATASET_FILE_INVALID");
-    if (cell.length > 0 || row.length > 0) {
-      row.push(cell);
-      rows.push(row);
-    }
-    return rows;
   }
 
   async function parseDatasetUpload(fileName: string, contentBase64: string) {
@@ -1085,17 +793,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
     return value;
   }
 
-  function publicFlowOutputNames(run: PlatformRun) {
-    const flow = asRecord(run.snapshot.flow);
-    const steps = Array.isArray(flow.steps) ? flow.steps.map(asRecord) : [];
-    return new Set(
-      steps.flatMap((step) => {
-        const name = typeof step.output === "string" ? step.output : typeof step.storeAs === "string" ? step.storeAs : "";
-        return step.outputPublic === true && /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(name) ? [name] : [];
-      }),
-    );
-  }
-
   function persistFlowOutputs(run: PlatformRun, result: Record<string, unknown>) {
     const outputs = asRecord(result.flowOutputs);
     const allowedNames = publicFlowOutputNames(run);
@@ -1212,53 +909,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
     }
   }
 
-  function cronFieldMatches(field: string, value: number, minimum: number, maximum: number) {
-    return field.split(",").some((part) => {
-      const [range, intervalText] = part.split("/");
-      const interval = intervalText === undefined ? 1 : Number(intervalText);
-      if (!Number.isInteger(interval) || interval < 1) return false;
-      const [startText, endText] = range === "*" ? [String(minimum), String(maximum)] : range.split("-");
-      const start = Number(startText);
-      const end = endText === undefined ? start : Number(endText);
-      return Number.isInteger(start) && Number.isInteger(end) && start >= minimum && end <= maximum && value >= start && value <= end && (value - start) % interval === 0;
-    });
-  }
-
-  function cronMatches(expression: string, date: Date, timeZone: string) {
-    const fields = expression.trim().split(/\s+/);
-    if (fields.length !== 5) return false;
-    let values: Record<string, number>;
-    try {
-      const parts = new Intl.DateTimeFormat("en-US", { timeZone, minute: "numeric", hour: "numeric", day: "numeric", month: "numeric", weekday: "short", hourCycle: "h23" }).formatToParts(date);
-      const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-      values = { minute: Number(lookup.minute), hour: Number(lookup.hour), day: Number(lookup.day), month: Number(lookup.month), weekDay: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(lookup.weekday) };
-    } catch {
-      throw new PlatformError(400, "SCHEDULE_TIMEZONE_INVALID");
-    }
-    const dayOfMonthMatches = cronFieldMatches(fields[2], values.day, 1, 31);
-    const dayOfWeekMatches = cronFieldMatches(fields[4], values.weekDay, 0, 6);
-    const dayMatches = fields[2] === "*"
-      ? dayOfWeekMatches
-      : fields[4] === "*"
-        ? dayOfMonthMatches
-        : dayOfMonthMatches || dayOfWeekMatches;
-    return cronFieldMatches(fields[0], values.minute, 0, 59)
-      && cronFieldMatches(fields[1], values.hour, 0, 23)
-      && dayMatches
-      && cronFieldMatches(fields[3], values.month, 1, 12);
-  }
-
-  function nextCronTime(expression: string, timeZone: string, from = new Date()) {
-    const cursor = new Date(from.getTime());
-    cursor.setUTCSeconds(0, 0);
-    cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
-    for (let minute = 0; minute < 527_040; minute += 1) {
-      if (cronMatches(expression, cursor, timeZone)) return cursor.toISOString();
-      cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
-    }
-    throw new PlatformError(400, "SCHEDULE_CRON_INVALID");
-  }
-
   function processDueSchedules() {
     const rows = database
       .prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, cron_expression, timezone FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT 20`)
@@ -1277,17 +927,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
         audit(project.workspace_id, { type: "system", id: `schedule:${schedule.id}` }, "schedule.skipped", { type: "schedule", id: schedule.id }, { error: error instanceof PlatformError ? error.code : "SCHEDULE_TRIGGER_FAILED" }, schedule.project_id);
       }
     }
-  }
-
-  function failureCategory(message: unknown) {
-    const value = String(message ?? "").toUpperCase();
-    if (value.includes("TIMEOUT")) return "timeout";
-    if (value.includes("ELEMENT_NOT_FOUND") || value.includes("LOCATOR") || value.includes("STRICT MODE")) return "locator";
-    if (value.includes("ASSERT") || value.includes("TEXT_")) return "assertion";
-    if (value.includes("NET::") || value.includes("ERR_") || value.includes("NETWORK") || value.includes("ECONN")) return "network";
-    if (value.includes("BROWSER")) return "browser";
-    if (value.includes("CANCELED")) return "canceled";
-    return "other";
   }
 
   function projectAnalytics(projectId: string) {
@@ -1665,24 +1304,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
       artifacts: artifacts.map((artifact) => ({ id: artifact.id, name: artifact.name, contentType: artifact.content_type, createdAt: artifact.created_at })),
       events: events.reverse().map((event) => ({ id: event.id, kind: event.kind, data: parseJson<Record<string, unknown>>(event.data, {}), at: event.created_at })),
     };
-  }
-
-  function normalizeLocatorCandidates(value: unknown) {
-    if (!Array.isArray(value)) return [] as LocatorCandidate[];
-    const supportedMethods = new Set<LocatorCandidate["method"]>(["testid", "role", "label", "text", "css"]);
-    return value.flatMap((item) => {
-      const candidate = asRecord(item);
-      const method = candidate.method;
-      const locatorValue = candidate.value;
-      if (typeof method !== "string" || !supportedMethods.has(method as LocatorCandidate["method"]) || typeof locatorValue !== "string" || !locatorValue.trim()) return [];
-      return [{
-        method: method as LocatorCandidate["method"],
-        value: locatorValue.slice(0, 500),
-        count: typeof candidate.count === "number" && Number.isFinite(candidate.count) ? Math.max(0, Math.floor(candidate.count)) : 0,
-        score: typeof candidate.score === "number" && Number.isFinite(candidate.score) ? Math.max(0, Math.min(100, Math.round(candidate.score))) : 0,
-        label: typeof candidate.label === "string" ? candidate.label.slice(0, 160) : locatorValue.slice(0, 160),
-      } satisfies LocatorCandidate];
-    }).slice(0, 12);
   }
 
   function pickerCaptureResponse(row: { id: string; session_id: string; candidates: string; target: string; status: string; captured_at: string; confirmed_at: string | null }) {
@@ -2172,1264 +1793,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
     };
   }
 
-  async function handle(request: IncomingMessage, response: ServerResponse, url: URL) {
-    if (!url.pathname.startsWith("/api/")) return false;
-    try {
-      recoverExpiredLeases();
-      recoverStaleElementValidations();
-      expireDebugSessions();
-      processDueSchedules();
-      if (url.pathname === "/api/platform/health" && request.method === "GET") {
-        const agents = database.prepare(`SELECT COUNT(*) AS count FROM agents WHERE status = 'online'`).get() as { count: number };
-        sendJson(response, 200, { ok: true, service: "platform", onlineAgents: agents.count });
-        return true;
-      }
-
-      const publicWebhook = url.pathname.match(/^\/api\/platform\/webhooks\/([^/]+)$/);
-      if (publicWebhook && request.method === "POST") {
-        const triggerId = decodeURIComponent(publicWebhook[1]);
-        const timestamp = Array.isArray(request.headers["x-autoflow-timestamp"]) ? request.headers["x-autoflow-timestamp"][0] : request.headers["x-autoflow-timestamp"];
-        const signature = Array.isArray(request.headers["x-autoflow-signature"]) ? request.headers["x-autoflow-signature"][0] : request.headers["x-autoflow-signature"];
-        const deliveryId = Array.isArray(request.headers["x-autoflow-delivery-id"]) ? request.headers["x-autoflow-delivery-id"][0] : request.headers["x-autoflow-delivery-id"];
-        if (!timestamp || !signature || !deliveryId || !/^\d{10,13}$/.test(timestamp) || deliveryId.length > 160) {
-          throw new PlatformError(401, "WEBHOOK_SIGNATURE_REQUIRED");
-        }
-        const timestampMs = timestamp.length === 10 ? Number(timestamp) * 1000 : Number(timestamp);
-        if (!Number.isSafeInteger(timestampMs) || Math.abs(Date.now() - timestampMs) > webhookTimestampToleranceMs) {
-          throw new PlatformError(401, "WEBHOOK_TIMESTAMP_INVALID");
-        }
-        const body = await readBody(request, 1_000_000);
-        const trigger = database.prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, enabled, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext FROM webhook_triggers WHERE id = ?`).get(triggerId) as { id: string; project_id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; enabled: number; signing_secret_iv: string | null; signing_secret_tag: string | null; signing_secret_ciphertext: string | null } | undefined;
-        if (!trigger || !trigger.enabled) throw new PlatformError(404, "WEBHOOK_TRIGGER_NOT_FOUND");
-        if (!trigger.signing_secret_iv || !trigger.signing_secret_tag || !trigger.signing_secret_ciphertext) throw new PlatformError(409, "WEBHOOK_SIGNING_SECRET_REQUIRED");
-        const secret = decrypt({ iv: trigger.signing_secret_iv, tag: trigger.signing_secret_tag, ciphertext: trigger.signing_secret_ciphertext });
-        if (!webhookSignatureMatches(secret, timestamp, body, signature)) throw new PlatformError(401, "WEBHOOK_SIGNATURE_INVALID");
-        if (!allowWebhookRequest(trigger.id)) throw new PlatformError(429, "WEBHOOK_RATE_LIMITED");
-        const delivery = database.prepare(`INSERT OR IGNORE INTO webhook_deliveries (trigger_id, delivery_id, received_at) VALUES (?, ?, ?)`).run(trigger.id, deliveryId, now());
-        if (delivery.changes === 0) {
-          sendJson(response, 202, { accepted: true, duplicate: true, runIds: [] });
-          return true;
-        }
-        let queued: ReturnType<typeof queuePublishedRuns>;
-        try {
-          queued = queuePublishedRuns({ projectId: trigger.project_id, revisionId: trigger.revision_id, environmentId: trigger.environment_id, datasetVersionId: trigger.dataset_version_id ?? undefined, createdBy: `webhook:${trigger.id}`, source: "webhook", maxRuns: webhookMaxRuns });
-        } catch (error) {
-          database.prepare(`DELETE FROM webhook_deliveries WHERE trigger_id = ? AND delivery_id = ?`).run(trigger.id, deliveryId);
-          throw error;
-        }
-        database.prepare(`UPDATE webhook_triggers SET last_triggered_at = ? WHERE id = ?`).run(now(), trigger.id);
-        const project = projectFor(trigger.project_id);
-        audit(project.workspace_id, { type: "system", id: `webhook:${trigger.id}` }, "webhook.triggered", { type: "webhook_trigger", id: trigger.id }, { runIds: queued.runIds }, trigger.project_id);
-        sendJson(response, 202, { accepted: true, runIds: queued.runIds });
-        return true;
-      }
-
-      if (url.pathname === "/api/auth/register" && request.method === "POST") {
-        const body = await readJson<{ email?: string; name?: string; password?: string; invitationToken?: string }>(request);
-        const email = body.email?.trim().toLowerCase();
-        const password = body.password?.trim();
-        if (!email || !email.includes("@") || !password || password.length < 8) throw new PlatformError(400, "REGISTER_INPUT_INVALID");
-        let user = database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ?`).get(email) as AuthUser | undefined;
-        if (user) {
-          const existingCredential = database.prepare(`SELECT user_id FROM platform_user_credentials WHERE user_id = ?`).get(user.id) as { user_id: string } | undefined;
-          if (existingCredential) throw new PlatformError(409, "EMAIL_ALREADY_REGISTERED");
-          const invitationToken = body.invitationToken?.trim();
-          if (!invitationToken) throw new PlatformError(409, "INVITATION_VERIFICATION_REQUIRED");
-          const invitation = database.prepare(`
-            SELECT id FROM workspace_invitations
-            WHERE user_id = ? AND token_hash = ? AND accepted_at IS NULL AND expires_at > ?
-          `).get(user.id, digest(invitationToken), now()) as { id: string } | undefined;
-          if (!invitation) throw new PlatformError(409, "INVITATION_TOKEN_INVALID");
-          const created = now();
-          database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
-            .run(user.id, passwordHash(password), created, created);
-          database.prepare(`UPDATE workspace_invitations SET accepted_at = ? WHERE id = ?`).run(created, invitation.id);
-        } else {
-          user = { id: randomUUID(), email, name: body.name?.trim().slice(0, 100) || email.split("@")[0] };
-          database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(user.id, user.email, user.name, now());
-          const created = now();
-          database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
-            .run(user.id, passwordHash(password), created, created);
-          createWorkspace(user, `${user.name}'s workspace`);
-        }
-        const session = createAuthSession(user);
-        sendJson(response, 201, session);
-        return true;
-      }
-
-      if (url.pathname === "/api/auth/login" && request.method === "POST") {
-        const body = await readJson<{ email?: string; password?: string }>(request);
-        const email = body.email?.trim().toLowerCase();
-        const password = body.password?.trim();
-        if (!email || !email.includes("@") || !password) throw new PlatformError(400, "LOGIN_INPUT_INVALID");
-        const user = database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ?`).get(email) as AuthUser | undefined;
-        const credential = user ? database.prepare(`SELECT password_hash FROM platform_user_credentials WHERE user_id = ?`).get(user.id) as { password_hash: string } | undefined : undefined;
-        if (!user || !credential || !passwordMatches(password, credential.password_hash)) throw new PlatformError(401, "LOGIN_INVALID");
-        sendJson(response, 200, createAuthSession(user));
-        return true;
-      }
-
-      if (url.pathname === "/api/auth/session" && request.method === "GET") {
-        const user = sessionUser(request);
-        const workspaces = database
-          .prepare(`SELECT w.id, w.name, w.created_at, m.role FROM workspaces w JOIN workspace_members m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at ASC`)
-          .all(user.id) as Array<{ id: string; name: string; created_at: string; role: Role }>;
-        sendJson(response, 200, { user, workspaces: workspaces.map((item) => ({ id: item.id, name: item.name, createdAt: item.created_at, role: item.role })) });
-        return true;
-      }
-
-      if (url.pathname === "/api/workspaces" && request.method === "GET") {
-        const user = sessionUser(request);
-        const workspaces = database
-          .prepare(`SELECT w.id, w.name, w.created_at, m.role FROM workspaces w JOIN workspace_members m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at ASC`)
-          .all(user.id) as Array<{ id: string; name: string; created_at: string; role: Role }>;
-        sendJson(response, 200, { workspaces: workspaces.map((item) => ({ id: item.id, name: item.name, createdAt: item.created_at, role: item.role })) });
-        return true;
-      }
-
-      if (url.pathname === "/api/workspaces" && request.method === "POST") {
-        const user = sessionUser(request);
-        const body = await readJson<{ name?: string }>(request);
-        if (!body.name?.trim()) throw new PlatformError(400, "WORKSPACE_NAME_REQUIRED");
-        sendJson(response, 201, { workspace: createWorkspace(user, body.name) });
-        return true;
-      }
-
-      const workspaceMembers = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/members$/);
-      if (workspaceMembers) {
-        const user = sessionUser(request);
-        const workspaceId = decodeURIComponent(workspaceMembers[1]);
-        const actorRole = requireWorkspaceRole(workspaceId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const members = database.prepare(
-            `SELECT u.id, u.email, u.name, m.role FROM workspace_members m
-             JOIN platform_users u ON u.id = m.user_id WHERE m.workspace_id = ? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, u.email`,
-          ).all(workspaceId) as Array<{ id: string; email: string; name: string; role: Role }>;
-          sendJson(response, 200, { members });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ email?: string; name?: string; role?: Role }>(request);
-          const email = body.email?.trim().toLowerCase();
-          const role = normalizeRole(body.role ?? "viewer");
-          if (!email || !email.includes("@")) throw new PlatformError(400, "WORKSPACE_MEMBER_EMAIL_INVALID");
-          if (role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-          let member = database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ?`).get(email) as AuthUser | undefined;
-          if (!member) {
-            member = { id: randomUUID(), email, name: body.name?.trim().slice(0, 100) || email.split("@")[0] };
-            database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(member.id, member.email, member.name, now());
-          }
-          const existing = database.prepare(`SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?`).get(workspaceId, member.id) as { role: Role } | undefined;
-          if (existing?.role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-          database.prepare(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role`).run(workspaceId, member.id, role);
-          const pendingInvitation = database.prepare(`SELECT user_id FROM platform_user_credentials WHERE user_id = ?`).get(member.id) as { user_id: string } | undefined;
-          const invitation = pendingInvitation ? undefined : createWorkspaceInvitation(workspaceId, member.id, user.id);
-          audit(workspaceId, { type: "user", id: user.id }, existing ? "workspace_member.role_changed" : "workspace_member.added", { type: "member", id: member.id }, { email, role });
-          sendJson(response, existing ? 200 : 201, { member: { ...member, role }, invitationToken: invitation?.token, invitationExpiresAt: invitation?.expiresAt });
-          return true;
-        }
-      }
-
-      const workspaceMember = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/members\/([^/]+)$/);
-      if (workspaceMember && (request.method === "PATCH" || request.method === "DELETE")) {
-        const user = sessionUser(request);
-        const workspaceId = decodeURIComponent(workspaceMember[1]);
-        const memberId = decodeURIComponent(workspaceMember[2]);
-        const actorRole = requireWorkspaceRole(workspaceId, user.id, true);
-        const member = database.prepare(`SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?`).get(workspaceId, memberId) as { role: Role } | undefined;
-        if (!member) throw new PlatformError(404, "WORKSPACE_MEMBER_NOT_FOUND");
-        if (member.role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-        if (request.method === "PATCH") {
-          const body = await readJson<{ role?: Role }>(request);
-          const role = normalizeRole(body.role);
-          if (role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-          if (member.role === "owner" && role !== "owner") {
-            const owners = database.prepare(`SELECT COUNT(*) AS count FROM workspace_members WHERE workspace_id = ? AND role = 'owner'`).get(workspaceId) as { count: number };
-            if (owners.count <= 1) throw new PlatformError(409, "WORKSPACE_OWNER_REQUIRED");
-          }
-          database.prepare(`UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?`).run(role, workspaceId, memberId);
-          audit(workspaceId, { type: "user", id: user.id }, "workspace_member.role_changed", { type: "member", id: memberId }, { role });
-          sendJson(response, 200, { memberId, role });
-          return true;
-        }
-        if (member.role === "owner") {
-          const owners = database.prepare(`SELECT COUNT(*) AS count FROM workspace_members WHERE workspace_id = ? AND role = 'owner'`).get(workspaceId) as { count: number };
-          if (owners.count <= 1) throw new PlatformError(409, "WORKSPACE_OWNER_REQUIRED");
-        }
-        database.prepare(`DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?`).run(workspaceId, memberId);
-        audit(workspaceId, { type: "user", id: user.id }, "workspace_member.removed", { type: "member", id: memberId });
-        sendJson(response, 200, { memberId, removed: true });
-        return true;
-      }
-
-      const workspaceProjects = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/projects$/);
-      if (workspaceProjects) {
-        const user = sessionUser(request);
-        const workspaceId = decodeURIComponent(workspaceProjects[1]);
-        if (request.method === "GET") {
-          requireWorkspaceRole(workspaceId, user.id);
-          const projects = database
-            .prepare(`SELECT id, workspace_id, source_project_id, slug, name, description, archived_at, created_at, updated_at FROM platform_projects WHERE workspace_id = ? AND archived_at IS NULL ORDER BY updated_at DESC`)
-            .all(workspaceId) as Array<{ id: string; workspace_id: string; source_project_id: string | null; slug: string; name: string; description: string; archived_at: string | null; created_at: string; updated_at: string }>;
-          sendJson(response, 200, { projects: projects.map(projectResponse) });
-          return true;
-        }
-        if (request.method === "POST") {
-          requireWorkspaceRole(workspaceId, user.id, true);
-          const body = await readJson<{ name?: string; description?: string; slug?: string }>(request);
-          if (!body.name?.trim()) throw new PlatformError(400, "PROJECT_NAME_REQUIRED");
-          const project = {
-            id: randomUUID(),
-            workspaceId,
-            slug: cleanProjectSlug(body.slug ?? body.name),
-            name: body.name.trim().slice(0, 160),
-            description: body.description?.trim().slice(0, 1000) ?? "",
-            createdAt: now(),
-          };
-          try {
-            database.prepare(`INSERT INTO platform_projects (id, workspace_id, slug, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-              .run(project.id, project.workspaceId, project.slug, project.name, project.description, project.createdAt, project.createdAt);
-          } catch {
-            throw new PlatformError(409, "PROJECT_SLUG_EXISTS");
-          }
-          putDocument(project.id, {});
-          audit(workspaceId, { type: "user", id: user.id }, "project.created", { type: "project", id: project.id }, { name: project.name }, project.id);
-          sendJson(response, 201, { project });
-          return true;
-        }
-      }
-
-      const importRoute = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/imports\/local-storage$/);
-      if (importRoute && request.method === "POST") {
-        const user = sessionUser(request);
-        const workspaceId = decodeURIComponent(importRoute[1]);
-        requireWorkspaceRole(workspaceId, user.id, true);
-        const body = await readJson<{ sourceId?: string; data?: Record<string, unknown> }>(request, 5_000_000);
-        const sourceId = body.sourceId?.trim();
-        if (!sourceId) throw new PlatformError(400, "IMPORT_SOURCE_ID_REQUIRED");
-        const existing = database.prepare(`SELECT result FROM platform_imports WHERE workspace_id = ? AND source_id = ?`).get(workspaceId, sourceId) as { result: string } | undefined;
-        const existingProjects = existing ? parseJson<{ projects?: Array<{ sourceProjectId: string; projectId: string }> }>(existing.result, {}) : {};
-        const existingMap = new Map((existingProjects.projects ?? []).map((item) => [item.sourceProjectId, item.projectId]));
-        const source = asRecord(body.data);
-        const projects = Array.isArray(source.projects) ? source.projects.map(asRecord) : [];
-        const importedProjects: Array<{ sourceProjectId: string; projectId: string }> = [];
-        let createdProjects = 0;
-        database.exec("BEGIN IMMEDIATE");
-        try {
-          for (const sourceProject of projects) {
-            const name = typeof sourceProject.name === "string" ? sourceProject.name.trim() : "";
-            const sourceProjectId = typeof sourceProject.id === "string" ? sourceProject.id : randomUUID();
-            if (!name) continue;
-            let projectId = existingMap.get(sourceProjectId);
-            if (projectId) {
-              const current = database.prepare(`SELECT id FROM platform_projects WHERE id = ? AND workspace_id = ?`).get(projectId, workspaceId) as { id: string } | undefined;
-              if (!current) projectId = undefined;
-            }
-            if (!projectId) {
-              const existingSource = database
-                .prepare(`SELECT id FROM platform_projects WHERE workspace_id = ? AND source_project_id = ?`)
-                .get(workspaceId, sourceProjectId) as { id: string } | undefined;
-              projectId = existingSource?.id;
-            }
-            if (!projectId) {
-              projectId = randomUUID();
-              let slug = cleanProjectSlug(`${name}-${sourceProjectId.slice(0, 6)}`);
-              let suffix = 2;
-              while (database.prepare(`SELECT id FROM platform_projects WHERE workspace_id = ? AND slug = ?`).get(workspaceId, slug)) {
-                slug = `${cleanProjectSlug(name)}-${suffix++}`;
-              }
-              database.prepare(`INSERT INTO platform_projects (id, workspace_id, source_project_id, slug, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-                .run(projectId, workspaceId, sourceProjectId, slug, name.slice(0, 160), typeof sourceProject.description === "string" ? sourceProject.description.slice(0, 1000) : "", now(), now());
-              createdProjects += 1;
-            } else {
-              database.prepare(`UPDATE platform_projects SET source_project_id = COALESCE(source_project_id, ?), archived_at = NULL, updated_at = ? WHERE id = ? AND workspace_id = ?`)
-                .run(sourceProjectId, now(), projectId, workspaceId);
-            }
-            const data = {
-              sourceProjectId,
-              flows: asRecord(source.flowsByProject)[sourceProjectId] ?? [],
-              elements: asRecord(source.elementsByProject)[sourceProjectId] ?? [],
-              variables: asRecord(source.variablesByProject)[sourceProjectId] ?? [],
-              environments: asRecord(source.environmentsByProject)[sourceProjectId] ?? [],
-              activeEnvironmentId: asRecord(source.activeEnvironmentByProject)[sourceProjectId] ?? "",
-              members: asRecord(source.membersByProject)[sourceProjectId] ?? [],
-            };
-            const document = documentFor(projectId);
-            if (document.version === 0) {
-              putDocument(projectId, data);
-            } else if (typeof document.data.sourceProjectId !== "string") {
-              putDocument(projectId, { ...document.data, sourceProjectId }, document.version);
-            }
-            importedProjects.push({ sourceProjectId, projectId });
-          }
-          const result = { projects: importedProjects };
-          database.prepare(`INSERT INTO platform_imports (id, workspace_id, source_id, imported_at, result) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(workspace_id, source_id) DO UPDATE SET imported_at = excluded.imported_at, result = excluded.result`)
-            .run(randomUUID(), workspaceId, sourceId, now(), json(result));
-          database.exec("COMMIT");
-          audit(workspaceId, { type: "user", id: user.id }, "workspace.local_storage_imported", { type: "import", id: sourceId }, { count: importedProjects.length });
-          sendJson(response, createdProjects > 0 ? 201 : 200, { imported: createdProjects > 0, ...result });
-          return true;
-        } catch (error) {
-          database.exec("ROLLBACK");
-          throw error;
-        }
-      }
-
-      const projectBase = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)$/);
-      if (projectBase) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(projectBase[1]);
-        const { project } = request.method === "GET" ? requireProjectRole(projectId, user.id) : requireProjectAdmin(projectId, user.id);
-        if (request.method === "GET") {
-          sendJson(response, 200, { project: projectResponse(project) });
-          return true;
-        }
-        if (request.method === "PATCH") {
-          const body = await readJson<{ name?: string; description?: string; archived?: boolean }>(request);
-          const name = body.name?.trim().slice(0, 160) || project.name;
-          const description = body.description === undefined ? project.description : body.description.trim().slice(0, 1000);
-          const archivedAt = body.archived === true ? now() : body.archived === false ? null : project.archived_at;
-          database.prepare(`UPDATE platform_projects SET name = ?, description = ?, archived_at = ?, updated_at = ? WHERE id = ?`).run(name, description, archivedAt, now(), projectId);
-          audit(project.workspace_id, { type: "user", id: user.id }, "project.updated", { type: "project", id: projectId }, { archived: body.archived }, projectId);
-          sendJson(response, 200, { project: projectResponse(projectFor(projectId)) });
-          return true;
-        }
-      }
-
-      const projectDocument = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/document$/);
-      if (projectDocument) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(projectDocument[1]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          sendJson(response, 200, documentFor(projectId));
-          return true;
-        }
-        if (request.method === "PUT") {
-          const body = await readJson<{ data?: Record<string, unknown>; expectedVersion?: number }>(request, 5_000_000);
-          if (!body.data) throw new PlatformError(400, "DOCUMENT_REQUIRED");
-          const result = putDocument(projectId, asRecord(body.data), body.expectedVersion);
-          database.prepare(`UPDATE platform_projects SET updated_at = ? WHERE id = ?`).run(now(), projectId);
-          audit(project.workspace_id, { type: "user", id: user.id }, "project.document_saved", { type: "project", id: projectId }, { version: result.version }, projectId);
-          sendJson(response, 200, result);
-          return true;
-        }
-      }
-
-      const revisionRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/revisions$/);
-      if (revisionRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(revisionRoot[1]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const revisions = database.prepare(`SELECT id, flow_id, flow_name, environment_id, revision_number, status, checksum, created_by, created_at, published_at, flow_snapshot FROM flow_revisions WHERE project_id = ? ORDER BY revision_number DESC`).all(projectId) as Array<{ id: string; flow_id: string | null; flow_name: string | null; environment_id: string | null; revision_number: number; status: RevisionStatus; checksum: string; created_by: string; created_at: string; published_at: string | null; flow_snapshot: string }>;
-          sendJson(response, 200, {
-            revisions: revisions.map((item) => {
-              const flow = parseJson<Record<string, unknown>>(item.flow_snapshot, {});
-              const steps = Array.isArray(flow.steps) ? flow.steps : [];
-              return {
-                id: item.id,
-                flowId: item.flow_id ?? (typeof flow.id === "string" ? flow.id : undefined),
-                flowName: item.flow_name ?? (typeof flow.name === "string" ? flow.name : undefined),
-                revisionNumber: item.revision_number,
-                status: item.status,
-                checksum: item.checksum,
-                createdBy: item.created_by,
-                createdAt: item.created_at,
-                publishedAt: item.published_at,
-                environmentId: item.environment_id ?? undefined,
-                stepCount: steps.length,
-              };
-            }),
-          });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ flow?: Record<string, unknown>; environment?: Record<string, unknown>; elements?: unknown; dataset?: unknown; datasetVersionId?: string; secretNames?: unknown }>(request, 5_000_000);
-          if (!body.flow || !body.environment) throw new PlatformError(400, "REVISION_SNAPSHOT_INCOMPLETE");
-          requireChromiumEnvironment(asRecord(body.environment));
-          const flowId = typeof body.flow.id === "string" ? body.flow.id.trim() : "";
-          if (!flowId) throw new PlatformError(400, "FLOW_ID_REQUIRED");
-          const flowName = typeof body.flow.name === "string" ? body.flow.name.trim().slice(0, 240) : "";
-          const environmentId = typeof body.environment.id === "string" ? body.environment.id.trim() : "";
-          if (!environmentId) throw new PlatformError(400, "REVISION_ENVIRONMENT_REQUIRED");
-          const secretNames = Array.isArray(body.secretNames)
-            ? body.secretNames.filter((item): item is string => typeof item === "string")
-            : [];
-          const datasetVersion = body.datasetVersionId ? datasetVersionFor(projectId, body.datasetVersionId) : undefined;
-          const dataset = datasetVersion
-            ? { datasetId: datasetVersion.datasetId, versionId: datasetVersion.id, versionNumber: datasetVersion.versionNumber, checksum: datasetVersion.checksum, columns: datasetVersion.columns, rowCount: datasetVersion.rowCount }
-            : body.dataset ?? null;
-          const flowSnapshot: Record<string, unknown> = { ...asRecord(body.flow), secretNames };
-          const flowStepCount = Array.isArray(flowSnapshot.steps) ? flowSnapshot.steps.length : 0;
-          const snapshot = {
-            flow: flowSnapshot,
-            environment: asRecord(body.environment),
-            elements: Array.isArray(body.elements) ? body.elements : [],
-            dataset,
-            secretNames,
-          };
-          const rows = database.prepare(`SELECT revision_number FROM flow_revisions WHERE project_id = ?`).all(projectId) as Array<{ revision_number: number }>;
-          const revision = { id: randomUUID(), number: revisionNumber(rows), checksum: digest(json(snapshot)), createdAt: now() };
-          database.prepare(`INSERT INTO flow_revisions (id, project_id, flow_id, flow_name, environment_id, revision_number, status, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`)
-            .run(revision.id, projectId, flowId, flowName || null, environmentId, revision.number, json(snapshot.flow), json(snapshot.environment), json(snapshot.elements), json(snapshot.dataset), revision.checksum, user.id, revision.createdAt);
-          audit(project.workspace_id, { type: "user", id: user.id }, "flow_revision.created", { type: "flow_revision", id: revision.id }, { revisionNumber: revision.number }, projectId);
-          sendJson(response, 201, { revision: { id: revision.id, flowId, flowName: flowName || undefined, environmentId, stepCount: flowStepCount, revisionNumber: revision.number, status: "draft", checksum: revision.checksum, createdAt: revision.createdAt } });
-          return true;
-        }
-      }
-
-      const revisionAction = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/revisions\/([^/]+)\/(publish|rollback)$/);
-      if (revisionAction && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(revisionAction[1]);
-        const revisionId = decodeURIComponent(revisionAction[2]);
-        const action = revisionAction[3];
-        const { project } = requireProjectAdmin(projectId, user.id);
-        const revision = database.prepare(`SELECT id, status, flow_id, environment_id FROM flow_revisions WHERE id = ? AND project_id = ?`).get(revisionId, projectId) as { id: string; status: RevisionStatus; flow_id: string | null; environment_id: string | null } | undefined;
-        if (!revision) throw new PlatformError(404, "REVISION_NOT_FOUND");
-        if (!revision.flow_id || !revision.environment_id) throw new PlatformError(409, "REVISION_SCOPE_REQUIRED");
-        database.exec("BEGIN IMMEDIATE");
-        try {
-          database.prepare(`UPDATE flow_revisions SET status = 'superseded' WHERE project_id = ? AND flow_id = ? AND environment_id = ? AND status = 'published'`).run(projectId, revision.flow_id, revision.environment_id);
-          database.prepare(`UPDATE flow_revisions SET status = 'published', published_at = ? WHERE id = ?`).run(now(), revisionId);
-          database.exec("COMMIT");
-        } catch (error) {
-          database.exec("ROLLBACK");
-          throw error;
-        }
-        audit(project.workspace_id, { type: "user", id: user.id }, action === "publish" ? "flow_revision.published" : "flow_revision.rolled_back", { type: "flow_revision", id: revisionId }, {}, projectId);
-        sendJson(response, 200, { revisionId, status: "published", action });
-        return true;
-      }
-
-      const projectSecrets = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/secrets$/);
-      if (projectSecrets) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(projectSecrets[1]);
-        const { project } = request.method === "GET" ? requireProjectRole(projectId, user.id) : requireProjectAdmin(projectId, user.id);
-        if (request.method === "GET") {
-          const secrets = database.prepare(`SELECT id, name, key_version, created_at, updated_at FROM project_secrets WHERE project_id = ? ORDER BY name`).all(projectId) as Array<{ id: string; name: string; key_version: number; created_at: string; updated_at: string }>;
-          sendJson(response, 200, { secrets: secrets.map((item) => ({ id: item.id, name: item.name, keyVersion: item.key_version, createdAt: item.created_at, updatedAt: item.updated_at })) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ name?: string; value?: string }>(request);
-          const name = body.name?.trim();
-          if (!name || !body.value) throw new PlatformError(400, "SECRET_INPUT_INVALID");
-          const encrypted = encrypt(body.value);
-          const existing = database.prepare(`SELECT id, key_version, created_at FROM project_secrets WHERE project_id = ? AND name = ?`).get(projectId, name) as { id: string; key_version: number; created_at: string } | undefined;
-          const id = existing?.id ?? randomUUID();
-          const keyVersion = (existing?.key_version ?? 0) + 1;
-          database.prepare(`INSERT INTO project_secrets (id, project_id, name, key_version, iv, tag, ciphertext, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, name) DO UPDATE SET key_version = excluded.key_version, iv = excluded.iv, tag = excluded.tag, ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`)
-            .run(id, projectId, name, keyVersion, encrypted.iv, encrypted.tag, encrypted.ciphertext, existing?.created_at ?? now(), now());
-          audit(project.workspace_id, { type: "user", id: user.id }, "secret.rotated", { type: "secret", id }, { name, keyVersion }, projectId);
-          sendJson(response, 201, { secret: { id, name, keyVersion } });
-          return true;
-        }
-      }
-
-      const auditRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/audit-events$/);
-      if (auditRoute && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(auditRoute[1]);
-        requireProjectRole(projectId, user.id);
-        const events = database.prepare(`SELECT id, actor_type, actor_id, action, target_type, target_id, detail, created_at FROM audit_events WHERE project_id = ? ORDER BY created_at DESC LIMIT 500`).all(projectId) as Array<{ id: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string; detail: string; created_at: string }>;
-        sendJson(response, 200, { events: events.map((item) => ({ id: item.id, actorType: item.actor_type, actorId: item.actor_id, action: item.action, targetType: item.target_type, targetId: item.target_id, detail: parseJson(item.detail, {}), createdAt: item.created_at })) });
-        return true;
-      }
-
-      const analyticsRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/analytics$/);
-      if (analyticsRoute && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(analyticsRoute[1]);
-        requireProjectRole(projectId, user.id);
-        sendJson(response, 200, { analytics: projectAnalytics(projectId) });
-        return true;
-      }
-
-      const datasetRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/datasets$/);
-      if (datasetRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(datasetRoot[1]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const datasets = database.prepare(
-            `SELECT d.id, d.name, d.description, d.created_at, d.updated_at,
-                    v.id AS version_id, v.version_number, v.columns_json, v.row_count, v.checksum, v.source_name, v.created_at AS version_created_at
-             FROM datasets d LEFT JOIN dataset_versions v ON v.id = (
-               SELECT id FROM dataset_versions WHERE dataset_id = d.id ORDER BY version_number DESC LIMIT 1
-             ) WHERE d.project_id = ? ORDER BY d.updated_at DESC`,
-          ).all(projectId) as Array<{ id: string; name: string; description: string; created_at: string; updated_at: string; version_id: string | null; version_number: number | null; columns_json: string | null; row_count: number | null; checksum: string | null; source_name: string | null; version_created_at: string | null }>;
-          sendJson(response, 200, {
-            datasets: datasets.map((dataset) => ({
-              id: dataset.id,
-              name: dataset.name,
-              description: dataset.description,
-              createdAt: dataset.created_at,
-              updatedAt: dataset.updated_at,
-              latestVersion: dataset.version_id ? {
-                id: dataset.version_id,
-                datasetId: dataset.id,
-                projectId,
-                versionNumber: dataset.version_number,
-                columns: parseJson<string[]>(dataset.columns_json, []),
-                rowCount: dataset.row_count,
-                checksum: dataset.checksum,
-                sourceName: dataset.source_name,
-                createdAt: dataset.version_created_at,
-              } : undefined,
-            })),
-          });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ name?: string; description?: string; fileName?: string; contentBase64?: string }>(request, 18_000_000);
-          const name = body.name?.trim().slice(0, 160);
-          if (!name || !body.fileName || !body.contentBase64) throw new PlatformError(400, "DATASET_IMPORT_INPUT_INVALID");
-          const parsed = await parseDatasetUpload(body.fileName, body.contentBase64);
-          const dataset = { id: randomUUID(), name, createdAt: now() };
-          try {
-            database.prepare(`INSERT INTO datasets (id, project_id, name, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-              .run(dataset.id, projectId, dataset.name, body.description?.trim().slice(0, 1_000) ?? "", user.id, dataset.createdAt, dataset.createdAt);
-          } catch {
-            throw new PlatformError(409, "DATASET_NAME_EXISTS");
-          }
-          const version = { id: randomUUID(), number: 1, checksum: digest(json({ columns: parsed.columns, rows: parsed.rows })), createdAt: now() };
-          database.prepare(`INSERT INTO dataset_versions (id, dataset_id, version_number, columns_json, row_count, checksum, source_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(version.id, dataset.id, version.number, json(parsed.columns), parsed.rows.length, version.checksum, parsed.sourceName, user.id, version.createdAt);
-          const insert = database.prepare(`INSERT INTO dataset_rows (id, dataset_version_id, row_number, data_json) VALUES (?, ?, ?, ?)`);
-          for (const [index, row] of parsed.rows.entries()) insert.run(randomUUID(), version.id, index + 1, json(row));
-          audit(project.workspace_id, { type: "user", id: user.id }, "dataset.imported", { type: "dataset", id: dataset.id }, { versionId: version.id, rows: parsed.rows.length, sourceName: parsed.sourceName }, projectId);
-          sendJson(response, 201, { dataset: { id: dataset.id, name: dataset.name, description: body.description?.trim() ?? "", createdAt: dataset.createdAt }, version: datasetVersionFor(projectId, version.id) });
-          return true;
-        }
-      }
-
-      const datasetVersionRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/datasets\/([^/]+)\/versions$/);
-      if (datasetVersionRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(datasetVersionRoot[1]);
-        const datasetId = decodeURIComponent(datasetVersionRoot[2]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        const dataset = database.prepare(`SELECT id, name FROM datasets WHERE id = ? AND project_id = ?`).get(datasetId, projectId) as { id: string; name: string } | undefined;
-        if (!dataset) throw new PlatformError(404, "DATASET_NOT_FOUND");
-        if (request.method === "GET") {
-          const versions = database.prepare(
-            `SELECT v.id, v.dataset_id, d.project_id, v.version_number, v.columns_json, v.row_count, v.checksum, v.source_name, v.created_at
-             FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id WHERE v.dataset_id = ? ORDER BY v.version_number DESC`,
-          ).all(datasetId) as Array<{ id: string; dataset_id: string; project_id: string; version_number: number; columns_json: string; row_count: number; checksum: string; source_name: string; created_at: string }>;
-          sendJson(response, 200, { versions: versions.map(datasetVersionResponse) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ fileName?: string; contentBase64?: string }>(request, 18_000_000);
-          if (!body.fileName || !body.contentBase64) throw new PlatformError(400, "DATASET_IMPORT_INPUT_INVALID");
-          const parsed = await parseDatasetUpload(body.fileName, body.contentBase64);
-          const latest = database.prepare(`SELECT MAX(version_number) AS number FROM dataset_versions WHERE dataset_id = ?`).get(datasetId) as { number: number | null };
-          const version = { id: randomUUID(), number: Number(latest.number ?? 0) + 1, checksum: digest(json({ columns: parsed.columns, rows: parsed.rows })), createdAt: now() };
-          database.prepare(`INSERT INTO dataset_versions (id, dataset_id, version_number, columns_json, row_count, checksum, source_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(version.id, datasetId, version.number, json(parsed.columns), parsed.rows.length, version.checksum, parsed.sourceName, user.id, version.createdAt);
-          const insert = database.prepare(`INSERT INTO dataset_rows (id, dataset_version_id, row_number, data_json) VALUES (?, ?, ?, ?)`);
-          for (const [index, row] of parsed.rows.entries()) insert.run(randomUUID(), version.id, index + 1, json(row));
-          database.prepare(`UPDATE datasets SET updated_at = ? WHERE id = ?`).run(now(), datasetId);
-          audit(project.workspace_id, { type: "user", id: user.id }, "dataset.version_imported", { type: "dataset_version", id: version.id }, { datasetId, version: version.number, rows: parsed.rows.length }, projectId);
-          sendJson(response, 201, { version: datasetVersionFor(projectId, version.id) });
-          return true;
-        }
-      }
-
-      const datasetVersionDetail = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/dataset-versions\/([^/]+)$/);
-      if (datasetVersionDetail && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(datasetVersionDetail[1]);
-        const version = datasetVersionFor(projectId, decodeURIComponent(datasetVersionDetail[2]));
-        requireProjectRole(projectId, user.id);
-        sendJson(response, 200, { version, rows: datasetRowsFor(version.id).slice(0, 100), truncated: version.rowCount > 100 });
-        return true;
-      }
-
-      const scheduleRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/schedules$/);
-      if (scheduleRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(scheduleRoot[1]);
-        const { project } = request.method === "GET" ? requireProjectRole(projectId, user.id) : requireProjectAdmin(projectId, user.id);
-        if (request.method === "GET") {
-          const schedules = database.prepare(`SELECT id, revision_id, environment_id, dataset_version_id, name, cron_expression, timezone, enabled, last_run_at, next_run_at, created_at, updated_at FROM schedules WHERE project_id = ? ORDER BY created_at DESC`).all(projectId) as Array<{ id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; name: string; cron_expression: string; timezone: string; enabled: number; last_run_at: string | null; next_run_at: string; created_at: string; updated_at: string }>;
-          sendJson(response, 200, { schedules: schedules.map((item) => ({ id: item.id, revisionId: item.revision_id, environmentId: item.environment_id, datasetVersionId: item.dataset_version_id, name: item.name, cron: item.cron_expression, timezone: item.timezone, enabled: Boolean(item.enabled), lastRunAt: item.last_run_at, nextRunAt: item.next_run_at, createdAt: item.created_at, updatedAt: item.updated_at })) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ name?: string; revisionId?: string; environmentId?: string; datasetVersionId?: string; cron?: string; timezone?: string }>(request);
-          const name = body.name?.trim().slice(0, 160);
-          const cron = body.cron?.trim();
-          const timezone = body.timezone?.trim() || "Asia/Shanghai";
-          if (!name || !cron || !body.environmentId) throw new PlatformError(400, "SCHEDULE_INPUT_INVALID");
-          const revision = publishedRevisionFor(projectId, body.revisionId);
-          requireRevisionEnvironment(revision, body.environmentId);
-          if (body.datasetVersionId) datasetVersionFor(projectId, body.datasetVersionId);
-          const schedule = { id: randomUUID(), nextRunAt: nextCronTime(cron, timezone), createdAt: now() };
-          database.prepare(`INSERT INTO schedules (id, project_id, revision_id, environment_id, dataset_version_id, name, cron_expression, timezone, enabled, next_run_at, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`)
-            .run(schedule.id, projectId, revision.id, body.environmentId, body.datasetVersionId ?? null, name, cron, timezone, schedule.nextRunAt, user.id, schedule.createdAt, schedule.createdAt);
-          audit(project.workspace_id, { type: "user", id: user.id }, "schedule.created", { type: "schedule", id: schedule.id }, { revisionId: revision.id, environmentId: body.environmentId, datasetVersionId: body.datasetVersionId, cron, timezone }, projectId);
-          sendJson(response, 201, { schedule: { id: schedule.id, name, revisionId: revision.id, environmentId: body.environmentId, datasetVersionId: body.datasetVersionId ?? null, cron, timezone, enabled: true, nextRunAt: schedule.nextRunAt } });
-          return true;
-        }
-      }
-
-      const scheduleAction = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/schedules\/([^/]+)\/(enable|disable|run)$/);
-      if (scheduleAction && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(scheduleAction[1]);
-        const scheduleId = decodeURIComponent(scheduleAction[2]);
-        const action = scheduleAction[3];
-        const { project } = requireProjectAdmin(projectId, user.id);
-        const schedule = database.prepare(`SELECT id, revision_id, environment_id, dataset_version_id FROM schedules WHERE id = ? AND project_id = ?`).get(scheduleId, projectId) as { id: string; revision_id: string; environment_id: string; dataset_version_id: string | null } | undefined;
-        if (!schedule) throw new PlatformError(404, "SCHEDULE_NOT_FOUND");
-        if (action === "run") {
-          const queued = queuePublishedRuns({ projectId, revisionId: schedule.revision_id, environmentId: schedule.environment_id, datasetVersionId: schedule.dataset_version_id ?? undefined, createdBy: `schedule:${schedule.id}`, source: "schedule" });
-          database.prepare(`UPDATE schedules SET last_run_at = ?, updated_at = ? WHERE id = ?`).run(now(), now(), schedule.id);
-          audit(project.workspace_id, { type: "user", id: user.id }, "schedule.run_requested", { type: "schedule", id: schedule.id }, { runIds: queued.runIds }, projectId);
-          sendJson(response, 202, { runIds: queued.runIds });
-          return true;
-        }
-        database.prepare(`UPDATE schedules SET enabled = ?, updated_at = ? WHERE id = ?`).run(action === "enable" ? 1 : 0, now(), schedule.id);
-        audit(project.workspace_id, { type: "user", id: user.id }, action === "enable" ? "schedule.enabled" : "schedule.disabled", { type: "schedule", id: schedule.id }, {}, projectId);
-        sendJson(response, 200, { scheduleId: schedule.id, enabled: action === "enable" });
-        return true;
-      }
-
-      const webhookRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/webhook-triggers$/);
-      if (webhookRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(webhookRoot[1]);
-        const { project } = request.method === "GET" ? requireProjectRole(projectId, user.id) : requireProjectAdmin(projectId, user.id);
-        if (request.method === "GET") {
-          const triggers = database.prepare(`SELECT id, revision_id, environment_id, dataset_version_id, name, enabled, created_at, last_triggered_at FROM webhook_triggers WHERE project_id = ? ORDER BY created_at DESC`).all(projectId) as Array<{ id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; name: string; enabled: number; created_at: string; last_triggered_at: string | null }>;
-          sendJson(response, 200, { triggers: triggers.map((item) => ({ id: item.id, revisionId: item.revision_id, environmentId: item.environment_id, datasetVersionId: item.dataset_version_id, name: item.name, enabled: Boolean(item.enabled), createdAt: item.created_at, lastTriggeredAt: item.last_triggered_at })) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ name?: string; revisionId?: string; environmentId?: string; datasetVersionId?: string }>(request);
-          const name = body.name?.trim().slice(0, 160);
-          if (!name || !body.environmentId) throw new PlatformError(400, "WEBHOOK_TRIGGER_INPUT_INVALID");
-          const revision = publishedRevisionFor(projectId, body.revisionId);
-          requireRevisionEnvironment(revision, body.environmentId);
-          if (body.datasetVersionId) datasetVersionFor(projectId, body.datasetVersionId);
-          const signingSecret = `whsec_${randomBytes(32).toString("base64url")}`;
-          const encryptedSecret = encrypt(signingSecret);
-          const trigger = { id: randomUUID(), createdAt: now() };
-          database.prepare(`INSERT INTO webhook_triggers (id, project_id, revision_id, environment_id, dataset_version_id, name, token_hash, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-            .run(trigger.id, projectId, revision.id, body.environmentId, body.datasetVersionId ?? null, name, digest(randomBytes(32).toString("base64url")), encryptedSecret.iv, encryptedSecret.tag, encryptedSecret.ciphertext, user.id, trigger.createdAt);
-          audit(project.workspace_id, { type: "user", id: user.id }, "webhook_trigger.created", { type: "webhook_trigger", id: trigger.id }, { revisionId: revision.id, environmentId: body.environmentId }, projectId);
-          sendJson(response, 201, { trigger: { id: trigger.id, name, revisionId: revision.id, environmentId: body.environmentId, datasetVersionId: body.datasetVersionId ?? null, enabled: true, createdAt: trigger.createdAt }, triggerUrl: `/api/platform/webhooks/${encodeURIComponent(trigger.id)}`, signingSecret });
-          return true;
-        }
-      }
-
-      const webhookAction = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/webhook-triggers\/([^/]+)\/(enable|disable)$/);
-      if (webhookAction && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(webhookAction[1]);
-        const triggerId = decodeURIComponent(webhookAction[2]);
-        const action = webhookAction[3];
-        const { project } = requireProjectAdmin(projectId, user.id);
-        const result = database.prepare(`UPDATE webhook_triggers SET enabled = ? WHERE id = ? AND project_id = ?`).run(action === "enable" ? 1 : 0, triggerId, projectId);
-        if (result.changes === 0) throw new PlatformError(404, "WEBHOOK_TRIGGER_NOT_FOUND");
-        audit(project.workspace_id, { type: "user", id: user.id }, action === "enable" ? "webhook_trigger.enabled" : "webhook_trigger.disabled", { type: "webhook_trigger", id: triggerId }, {}, projectId);
-        sendJson(response, 200, { triggerId, enabled: action === "enable" });
-        return true;
-      }
-
-      const notificationChannelRoot = url.pathname.match(/^\/api\/platform\/workspaces\/([^/]+)\/notification-channels$/);
-      if (notificationChannelRoot) {
-        const user = sessionUser(request);
-        const workspaceId = decodeURIComponent(notificationChannelRoot[1]);
-        requireWorkspaceRole(workspaceId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const channels = database.prepare(`SELECT id, name, channel_type, enabled, created_at, updated_at FROM notification_channels WHERE workspace_id = ? ORDER BY name`).all(workspaceId) as Array<{ id: string; name: string; channel_type: NotificationChannelType; enabled: number; created_at: string; updated_at: string }>;
-          sendJson(response, 200, { channels: channels.map((item) => ({ id: item.id, name: item.name, type: item.channel_type, enabled: Boolean(item.enabled), createdAt: item.created_at, updatedAt: item.updated_at })) });
-          return true;
-        }
-        if (request.method === "POST") {
-          requireWorkspaceRole(workspaceId, user.id, true);
-          const body = await readJson<{ name?: string; type?: NotificationChannelType; config?: Record<string, unknown> }>(request);
-          const name = body.name?.trim().slice(0, 160);
-          const types: NotificationChannelType[] = ["webhook", "feishu", "dingtalk", "wecom", "email"];
-          if (!name || !body.type || !types.includes(body.type) || !body.config || typeof body.config.url !== "string") {
-            throw new PlatformError(400, "NOTIFICATION_CHANNEL_INPUT_INVALID");
-          }
-          let endpoint: ValidatedNotificationTarget;
-          try {
-            endpoint = await notificationTarget(body.config.url);
-          } catch {
-            throw new PlatformError(400, "NOTIFICATION_URL_INVALID");
-          }
-          const encrypted = encrypt(json({ url: endpoint.url.toString(), headers: asRecord(body.config.headers) }));
-          const channel = { id: randomUUID(), createdAt: now() };
-          try {
-            database.prepare(`INSERT INTO notification_channels (id, workspace_id, name, channel_type, config_iv, config_tag, config_ciphertext, enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
-              .run(channel.id, workspaceId, name, body.type, encrypted.iv, encrypted.tag, encrypted.ciphertext, user.id, channel.createdAt, channel.createdAt);
-          } catch {
-            throw new PlatformError(409, "NOTIFICATION_CHANNEL_NAME_EXISTS");
-          }
-          audit(workspaceId, { type: "user", id: user.id }, "notification_channel.created", { type: "notification_channel", id: channel.id }, { name, type: body.type });
-          sendJson(response, 201, { channel: { id: channel.id, name, type: body.type, enabled: true, createdAt: channel.createdAt } });
-          return true;
-        }
-      }
-
-      const notificationSubscriptions = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/notification-subscriptions$/);
-      if (notificationSubscriptions) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(notificationSubscriptions[1]);
-        const { project } = request.method === "GET" ? requireProjectRole(projectId, user.id) : requireProjectAdmin(projectId, user.id);
-        if (request.method === "GET") {
-          const subscriptions = database.prepare(
-            `SELECT s.channel_id, s.on_success, s.on_failure, c.name, c.channel_type, c.enabled
-             FROM notification_subscriptions s JOIN notification_channels c ON c.id = s.channel_id
-             WHERE s.project_id = ? ORDER BY c.name`,
-          ).all(projectId) as Array<{ channel_id: string; on_success: number; on_failure: number; name: string; channel_type: NotificationChannelType; enabled: number }>;
-          sendJson(response, 200, { subscriptions: subscriptions.map((item) => ({ channelId: item.channel_id, name: item.name, type: item.channel_type, channelEnabled: Boolean(item.enabled), onSuccess: Boolean(item.on_success), onFailure: Boolean(item.on_failure) })) });
-          return true;
-        }
-        if (request.method === "PUT") {
-          const body = await readJson<{ channelId?: string; onSuccess?: boolean; onFailure?: boolean }>(request);
-          if (!body.channelId) throw new PlatformError(400, "NOTIFICATION_SUBSCRIPTION_INPUT_INVALID");
-          const channel = database.prepare(`SELECT id FROM notification_channels WHERE id = ? AND workspace_id = ?`).get(body.channelId, project.workspace_id) as { id: string } | undefined;
-          if (!channel) throw new PlatformError(404, "NOTIFICATION_CHANNEL_NOT_FOUND");
-          database.prepare(
-            `INSERT INTO notification_subscriptions (project_id, channel_id, on_success, on_failure) VALUES (?, ?, ?, ?)
-             ON CONFLICT(project_id, channel_id) DO UPDATE SET on_success = excluded.on_success, on_failure = excluded.on_failure`,
-          ).run(projectId, channel.id, body.onSuccess ? 1 : 0, body.onFailure === false ? 0 : 1);
-          audit(project.workspace_id, { type: "user", id: user.id }, "notification_subscription.saved", { type: "notification_channel", id: channel.id }, { onSuccess: Boolean(body.onSuccess), onFailure: body.onFailure !== false }, projectId);
-          sendJson(response, 200, { channelId: channel.id, onSuccess: Boolean(body.onSuccess), onFailure: body.onFailure !== false });
-          return true;
-        }
-      }
-
-      const deliveryRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/deliveries$/);
-      if (deliveryRoute && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(deliveryRoute[1]);
-        requireProjectRole(projectId, user.id);
-        const deliveries = database.prepare(
-          `SELECT d.id, d.run_id, d.status, d.attempt_count, d.response_code, d.error, d.created_at, d.delivered_at, c.name, c.channel_type
-           FROM deliveries d JOIN platform_runs r ON r.id = d.run_id JOIN notification_channels c ON c.id = d.channel_id
-           WHERE r.project_id = ? ORDER BY d.created_at DESC LIMIT 200`,
-        ).all(projectId) as Array<{ id: string; run_id: string; status: DeliveryStatus; attempt_count: number; response_code: number | null; error: string | null; created_at: string; delivered_at: string | null; name: string; channel_type: NotificationChannelType }>;
-        sendJson(response, 200, { deliveries: deliveries.map((item) => ({ id: item.id, runId: item.run_id, status: item.status, attempts: item.attempt_count, responseCode: item.response_code, error: item.error, createdAt: item.created_at, deliveredAt: item.delivered_at, channel: { name: item.name, type: item.channel_type } })) });
-        return true;
-      }
-
-      if (url.pathname === "/api/agent-tokens" && request.method === "POST") {
-        const user = sessionUser(request);
-        const body = await readJson<{ workspaceId?: string; expiresInMinutes?: number }>(request);
-        if (!body.workspaceId) throw new PlatformError(400, "WORKSPACE_REQUIRED");
-        requireWorkspaceRole(body.workspaceId, user.id, true);
-        const minutes = Math.max(1, Math.min(24 * 60, Number(body.expiresInMinutes ?? 30)));
-        const token = `agt_${randomBytes(24).toString("base64url")}`;
-        const item = { id: randomUUID(), expiresAt: new Date(Date.now() + minutes * 60_000).toISOString() };
-        database.prepare(`INSERT INTO agent_tokens (id, workspace_id, token_hash, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(item.id, body.workspaceId, digest(token), item.expiresAt, user.id, now());
-        audit(body.workspaceId, { type: "user", id: user.id }, "agent_token.created", { type: "agent_token", id: item.id }, { expiresAt: item.expiresAt });
-        sendJson(response, 201, { registrationToken: token, expiresAt: item.expiresAt });
-        return true;
-      }
-
-      if (url.pathname === "/api/agents/register" && request.method === "POST") {
-        const body = await readJson<{ registrationToken?: string; name?: string; browserVersion?: string; os?: string; maxConcurrency?: number }>(request);
-        const registrationToken = body.registrationToken?.trim();
-        if (!registrationToken || !body.name?.trim()) throw new PlatformError(400, "AGENT_REGISTRATION_INPUT_INVALID");
-        const token = database.prepare(`SELECT id, workspace_id, expires_at, used_at, revoked_at FROM agent_tokens WHERE token_hash = ?`).get(digest(registrationToken)) as { id: string; workspace_id: string; expires_at: string; used_at: string | null; revoked_at: string | null } | undefined;
-        if (!token || token.used_at || token.revoked_at || token.expires_at <= now()) throw new PlatformError(401, "AGENT_REGISTRATION_TOKEN_INVALID");
-        const maxConcurrency = Number(body.maxConcurrency ?? 1);
-        if (maxConcurrency !== 1) throw new PlatformError(400, "AGENT_SINGLE_CONCURRENCY_REQUIRED");
-        const agent = { id: randomUUID(), workspaceId: token.workspace_id, name: body.name.trim().slice(0, 120), credential: `agc_${randomBytes(32).toString("base64url")}`, createdAt: now() };
-        database.exec("BEGIN IMMEDIATE");
-        try {
-          const consumed = database.prepare(`UPDATE agent_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).run(now(), token.id, now());
-          if (consumed.changes !== 1) throw new PlatformError(401, "AGENT_REGISTRATION_TOKEN_INVALID");
-          database.prepare(`INSERT INTO agents (id, workspace_id, name, credential_hash, status, browser_version, os, max_concurrency, created_at) VALUES (?, ?, ?, ?, 'offline', ?, ?, 1, ?)`)
-            .run(agent.id, agent.workspaceId, agent.name, digest(agent.credential), body.browserVersion?.slice(0, 160) ?? "Chromium", body.os?.slice(0, 160) ?? "unknown", agent.createdAt);
-          database.exec("COMMIT");
-        } catch (error) {
-          database.exec("ROLLBACK");
-          throw error;
-        }
-        audit(agent.workspaceId, { type: "agent", id: agent.id }, "agent.registered", { type: "agent", id: agent.id }, { name: agent.name });
-        sendJson(response, 201, { agent: { id: agent.id, workspaceId: agent.workspaceId, name: agent.name, status: "offline", maxConcurrency: 1 }, credential: agent.credential });
-        return true;
-      }
-
-      if (url.pathname === "/api/agents" && request.method === "GET") {
-        const user = sessionUser(request);
-        const workspaceId = url.searchParams.get("workspaceId");
-        if (!workspaceId) throw new PlatformError(400, "WORKSPACE_REQUIRED");
-        requireWorkspaceRole(workspaceId, user.id);
-        const agents = database.prepare(`SELECT id, workspace_id, name, status, browser_version, os, max_concurrency, current_task, last_seen_at, created_at FROM agents WHERE workspace_id = ? ORDER BY created_at DESC`).all(workspaceId) as Array<AgentRecord & { workspace_id: string; browser_version: string; max_concurrency: number; current_task: string | null; last_seen_at: string | null; created_at: string }>;
-        sendJson(response, 200, { agents: agents.map(mapAgent) });
-        return true;
-      }
-
-      const heartbeatRoute = url.pathname.match(/^\/api\/agents\/([^/]+)\/heartbeat$/);
-      if (heartbeatRoute && request.method === "POST") {
-        const agent = agentByCredential(authorization(request));
-        if (agent.id !== decodeURIComponent(heartbeatRoute[1])) throw new PlatformError(403, "AGENT_ID_MISMATCH");
-        const body = await readJson<Record<string, unknown>>(request);
-        const updated = updateAgentHeartbeat(agent, body);
-        dispatchWaitingRuns();
-        sendJson(response, 200, { agent: updated, heartbeatIntervalSeconds: 15 });
-        return true;
-      }
-
-      const agentDisableRoute = url.pathname.match(/^\/api\/agents\/([^/]+)\/(disable|revoke)$/);
-      if (agentDisableRoute && request.method === "POST") {
-        const user = sessionUser(request);
-        const agentId = decodeURIComponent(agentDisableRoute[1]);
-        const action = agentDisableRoute[2];
-        const agent = database.prepare(`SELECT id, workspace_id FROM agents WHERE id = ?`).get(agentId) as { id: string; workspace_id: string } | undefined;
-        if (!agent) throw new PlatformError(404, "AGENT_NOT_FOUND");
-        requireWorkspaceRole(agent.workspace_id, user.id, true);
-        database.prepare(`UPDATE agents SET status = 'disabled', revoked_at = CASE WHEN ? = 'revoke' THEN ? ELSE revoked_at END WHERE id = ?`).run(action, now(), agentId);
-        sockets.get(agentId)?.close(4003, "disabled");
-        audit(agent.workspace_id, { type: "user", id: user.id }, `agent.${action}d`, { type: "agent", id: agentId });
-        sendJson(response, 200, { agentId, status: "disabled", revoked: action === "revoke" });
-        return true;
-      }
-
-      const bindingRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/agent-bindings$/);
-      if (bindingRoute) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(bindingRoute[1]);
-        const { project } = request.method === "GET" ? requireProjectRole(projectId, user.id) : requireProjectAdmin(projectId, user.id);
-        if (request.method === "GET") {
-          const bindings = database.prepare(`SELECT b.environment_id, a.id, a.name, a.status, a.browser_version, a.last_seen_at FROM agent_bindings b JOIN agents a ON a.id = b.agent_id WHERE b.project_id = ? AND b.is_default = 1 ORDER BY b.environment_id, a.name`).all(projectId) as Array<{ environment_id: string; id: string; name: string; status: string; browser_version: string; last_seen_at: string | null }>;
-          sendJson(response, 200, { bindings: bindings.map((item) => ({ environmentId: item.environment_id, agent: { id: item.id, name: item.name, status: item.status, browserVersion: item.browser_version, lastSeenAt: item.last_seen_at } })) });
-          return true;
-        }
-        if (request.method === "PUT") {
-          const body = await readJson<{ environmentId?: string; agentId?: string }>(request);
-          if (!body.environmentId || !body.agentId) throw new PlatformError(400, "AGENT_BINDING_INPUT_INVALID");
-          const document = documentFor(projectId);
-          const environments = Array.isArray(document.data.environments) ? document.data.environments.map(asRecord) : [];
-          const environment = environments.find((item) => item.id === body.environmentId);
-          if (!environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
-          requireChromiumEnvironment(environment);
-          const agent = database.prepare(`SELECT workspace_id FROM agents WHERE id = ?`).get(body.agentId) as { workspace_id: string } | undefined;
-          if (!agent) throw new PlatformError(404, "AGENT_NOT_FOUND");
-          if (agent.workspace_id !== project.workspace_id) throw new PlatformError(409, "AGENT_WORKSPACE_MISMATCH");
-          database.exec("BEGIN IMMEDIATE");
-          try {
-            database.prepare(`UPDATE agent_bindings SET is_default = 0 WHERE project_id = ? AND environment_id = ?`).run(projectId, body.environmentId);
-            database.prepare(`INSERT INTO agent_bindings (project_id, environment_id, agent_id, is_default, created_at) VALUES (?, ?, ?, 1, ?)
-              ON CONFLICT(project_id, environment_id, agent_id) DO UPDATE SET is_default = 1, created_at = excluded.created_at`).run(projectId, body.environmentId, body.agentId, now());
-            database.exec("COMMIT");
-          } catch (error) {
-            database.exec("ROLLBACK");
-            throw error;
-          }
-          audit(project.workspace_id, { type: "user", id: user.id }, "agent.bound", { type: "agent", id: body.agentId }, { environmentId: body.environmentId }, projectId);
-          sendJson(response, 201, { projectId, environmentId: body.environmentId, agentId: body.agentId });
-          return true;
-        }
-      }
-
-      const debugSessionRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions$/);
-      if (debugSessionRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(debugSessionRoot[1]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const rows = database
-            .prepare(`SELECT id FROM debug_sessions WHERE project_id = ? ORDER BY created_at DESC LIMIT 100`)
-            .all(projectId) as Array<{ id: string }>;
-          sendJson(response, 200, { sessions: rows.map((row) => debugSessionResponse(debugSessionById(row.id))) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ revisionId?: string; environmentId?: string; startStep?: number }>(request);
-          const revision = body.revisionId
-            ? database
-                .prepare(`SELECT id, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum FROM flow_revisions WHERE id = ? AND project_id = ? AND status = 'published'`)
-                .get(body.revisionId, projectId) as { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined
-            : database
-                .prepare(`SELECT id, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum FROM flow_revisions WHERE project_id = ? AND status = 'published' ORDER BY published_at DESC LIMIT 1`)
-                .get(projectId) as { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined;
-          if (!revision) throw new PlatformError(409, "PUBLISHED_REVISION_REQUIRED");
-           const environment = parseJson<Record<string, unknown>>(revision.environment_snapshot, {});
-           const environmentId = body.environmentId ?? (typeof environment.id === "string" ? environment.id : "");
-           if (!environmentId) throw new PlatformError(400, "ENVIRONMENT_REQUIRED");
-            requireRevisionEnvironment(revision, environmentId);
-            requireChromiumEnvironment(environment);
-          const agent = candidateAgent(projectId, environmentId);
-          if (!agent || !sockets.has(agent.id)) throw new PlatformError(409, "AGENT_UNAVAILABLE");
-          const snapshot = {
-            flowRevisionId: revision.id,
-            flowRevisionChecksum: revision.checksum,
-            environmentId,
-            flow: parseJson<Record<string, unknown>>(revision.flow_snapshot, {}),
-            environment,
-            elements: parseJson<unknown[]>(revision.element_snapshot, []),
-            dataset: parseJson<unknown>(revision.dataset_snapshot, null),
-            secretNames: parseJson<Record<string, unknown>>(revision.flow_snapshot, {}).secretNames ?? [],
-            agent: { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency },
-          };
-          const createdAt = now();
-          const maxExpiresAt = new Date(Date.now() + debugMaxDurationMs).toISOString();
-          const session = {
-            id: randomUUID(),
-            projectId,
-            revisionId: revision.id,
-            environmentId,
-            agentId: agent.id,
-            currentStep: Math.max(0, Math.floor(Number(body.startStep ?? 0))),
-            createdAt,
-            maxExpiresAt,
-          };
-          database
-            .prepare(
-              `INSERT INTO debug_sessions (id, project_id, revision_id, environment_id, agent_id, status, snapshot, current_step, idle_expires_at, max_expires_at, created_by, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              session.id,
-              session.projectId,
-              session.revisionId,
-              session.environmentId,
-              session.agentId,
-              json(snapshot),
-              session.currentStep,
-              nextDebugIdleExpiry(maxExpiresAt),
-              session.maxExpiresAt,
-              user.id,
-              session.createdAt,
-              session.createdAt,
-            );
-          const persisted = debugSessionById(session.id);
-          if (!sendAgent(agent.id, debugSessionPayload(persisted))) {
-            database.prepare(`DELETE FROM debug_sessions WHERE id = ?`).run(session.id);
-            throw new PlatformError(409, "AGENT_UNAVAILABLE");
-          }
-          appendDebugEvent(session.id, "session.requested", { revisionId: session.revisionId, environmentId, agentId: agent.id, currentStep: session.currentStep });
-          audit(project.workspace_id, { type: "user", id: user.id }, "debug_session.created", { type: "debug_session", id: session.id }, { revisionId: session.revisionId, environmentId, agentId: agent.id }, projectId);
-          sendJson(response, 202, { session: debugSessionResponse(debugSessionById(session.id)) });
-          return true;
-        }
-      }
-
-      const debugCommandRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions\/([^/]+)\/commands$/);
-      if (debugCommandRoute && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(debugCommandRoute[1]);
-        const sessionId = decodeURIComponent(debugCommandRoute[2]);
-        const { project } = requireProjectRole(projectId, user.id, true);
-        const session = debugSessionById(sessionId);
-        if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-        const body = await readJson<{ command?: string }>(request);
-        const command = body.command;
-        if (!command || !["start", "continue", "runCurrent", "skip", "pause", "retry", "stop"].includes(command)) {
-          throw new PlatformError(400, "DEBUG_COMMAND_INVALID");
-        }
-        if (["ended", "failed", "expired"].includes(session.status)) throw new PlatformError(409, "DEBUG_SESSION_CLOSED");
-        if (session.status === "requested" && command !== "stop") {
-          throw new PlatformError(409, "DEBUG_SESSION_NOT_READY");
-        }
-        const acknowledgement = await sendConfirmedDebugCommand(session.agentId, sessionId, command);
-        if (!acknowledgement.accepted) throw new PlatformError(acknowledgement.reason === "DEBUG_COMMAND_ACK_TIMEOUT" ? 504 : 409, acknowledgement.reason ?? "DEBUG_COMMAND_REJECTED");
-        const updated = touchDebugSession(session, {
-          status: command === "stop" ? "ending" : "active",
-          currentStep: command === "start" ? 0 : session.currentStep,
-        });
-        appendDebugEvent(sessionId, "command.requested", { command, actorId: user.id });
-        audit(project.workspace_id, { type: "user", id: user.id }, "debug_session.commanded", { type: "debug_session", id: sessionId }, { command }, projectId);
-        sendJson(response, 202, { session: debugSessionResponse(updated) });
-        return true;
-      }
-
-      const pickerEnableRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions\/([^/]+)\/picker\/enable$/);
-      if (pickerEnableRoute && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(pickerEnableRoute[1]);
-        const sessionId = decodeURIComponent(pickerEnableRoute[2]);
-        const { project } = requireProjectRole(projectId, user.id, true);
-        const session = debugSessionById(sessionId);
-        if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-        if (["ended", "failed", "expired"].includes(session.status)) throw new PlatformError(409, "DEBUG_SESSION_CLOSED");
-        if (!sendAgent(session.agentId, { type: "picker.enable", sessionId })) throw new PlatformError(409, "DEBUG_AGENT_DISCONNECTED");
-        appendDebugEvent(session.id, "picker.enabled", { actorId: user.id });
-        audit(project.workspace_id, { type: "user", id: user.id }, "picker.enabled", { type: "debug_session", id: session.id }, {}, projectId);
-        sendJson(response, 202, { session: debugSessionResponse(session) });
-        return true;
-      }
-
-      const pickerCaptureRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions\/([^/]+)\/picker-captures$/);
-      if (pickerCaptureRoot && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(pickerCaptureRoot[1]);
-        const sessionId = decodeURIComponent(pickerCaptureRoot[2]);
-        requireProjectRole(projectId, user.id);
-        const session = debugSessionById(sessionId);
-        if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-        const captures = database.prepare(`SELECT id, session_id, candidates, target, status, captured_at, confirmed_at FROM picker_captures WHERE session_id = ? ORDER BY captured_at DESC LIMIT 100`)
-          .all(sessionId) as Array<{ id: string; session_id: string; candidates: string; target: string; status: string; captured_at: string; confirmed_at: string | null }>;
-        sendJson(response, 200, { captures: captures.map(pickerCaptureResponse) });
-        return true;
-      }
-
-      const pickerPreviewRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions\/([^/]+)\/picker-captures\/([^/]+)\/preview$/);
-      if (pickerPreviewRoute && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(pickerPreviewRoute[1]);
-        const sessionId = decodeURIComponent(pickerPreviewRoute[2]);
-        const captureId = decodeURIComponent(pickerPreviewRoute[3]);
-        requireProjectRole(projectId, user.id, true);
-        const session = debugSessionById(sessionId);
-        if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-        const capture = database.prepare(`SELECT id, session_id, candidates, target, status, captured_at, confirmed_at FROM picker_captures WHERE id = ? AND session_id = ?`).get(captureId, sessionId) as { id: string; session_id: string; candidates: string; target: string; status: string; captured_at: string; confirmed_at: string | null } | undefined;
-        if (!capture) throw new PlatformError(404, "PICKER_CAPTURE_NOT_FOUND");
-        const body = await readJson<{ candidateIndex?: number }>(request);
-        const candidates = parseJson<LocatorCandidate[]>(capture.candidates, []);
-        const candidateIndex = Number(body.candidateIndex);
-        const candidate = candidates[candidateIndex];
-        if (!Number.isInteger(candidateIndex) || !candidate) throw new PlatformError(400, "PICKER_CANDIDATE_INVALID");
-        if (!sendAgent(session.agentId, { type: "picker.preview", sessionId, captureId, candidateIndex, candidate })) throw new PlatformError(409, "DEBUG_AGENT_DISCONNECTED");
-        sendJson(response, 202, { capture: pickerCaptureResponse(capture), candidateIndex });
-        return true;
-      }
-
-      const pickerConfirmRoute = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions\/([^/]+)\/picker-captures\/([^/]+)\/confirm$/);
-      if (pickerConfirmRoute && request.method === "POST") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(pickerConfirmRoute[1]);
-        const sessionId = decodeURIComponent(pickerConfirmRoute[2]);
-        const captureId = decodeURIComponent(pickerConfirmRoute[3]);
-        const { project } = requireProjectRole(projectId, user.id, true);
-        const session = debugSessionById(sessionId);
-        if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-        const capture = database.prepare(`SELECT id, session_id, candidates, target, status, captured_at, confirmed_at FROM picker_captures WHERE id = ? AND session_id = ?`).get(captureId, sessionId) as { id: string; session_id: string; candidates: string; target: string; status: string; captured_at: string; confirmed_at: string | null } | undefined;
-        if (!capture) throw new PlatformError(404, "PICKER_CAPTURE_NOT_FOUND");
-        if (capture.status !== "pending") throw new PlatformError(409, "PICKER_CAPTURE_ALREADY_CONFIRMED");
-        const body = await readJson<{ candidateIndex?: number; target?: "element" | "step"; name?: string; flowId?: string; stepId?: string }>(request);
-        const candidates = parseJson<LocatorCandidate[]>(capture.candidates, []);
-        const candidateIndex = Number(body.candidateIndex);
-        const candidate = candidates[candidateIndex];
-        if (!Number.isInteger(candidateIndex) || !candidate || (body.target !== "element" && body.target !== "step")) throw new PlatformError(400, "PICKER_CONFIRMATION_INVALID");
-        const document = documentFor(projectId);
-        const elements: unknown[] = Array.isArray(document.data.elements) ? [...document.data.elements] : [];
-        const elementName = body.name?.trim().slice(0, 160) || capture.target || candidate.label;
-        let path = "/";
-        try {
-          path = session.currentUrl ? new URL(session.currentUrl).pathname || "/" : "/";
-        } catch {
-          path = "/";
-        }
-        const element = {
-          id: `element-${randomUUID()}`,
-          name: elementName,
-          description: "Captured from a debug browser session",
-          path,
-          method: candidate.method,
-          value: candidate.value,
-          environment: session.environmentId,
-          validation: candidate.count === 1 ? "verified" : "unverified",
-          updatedAt: now(),
-        };
-        elements.push(element);
-        const nextData: Record<string, unknown> = { ...document.data, elements };
-        if (body.target === "step") {
-          const flows: Array<Record<string, unknown>> = Array.isArray(document.data.flows)
-            ? document.data.flows.map((flow: unknown) => asRecord(flow))
-            : [];
-          const flow = flows.find((item) => item.id === body.flowId);
-          if (!flow || !body.stepId) throw new PlatformError(400, "PICKER_STEP_TARGET_REQUIRED");
-          const steps: Array<Record<string, unknown>> = Array.isArray(flow.steps)
-            ? flow.steps.map((step: unknown) => asRecord(step))
-            : [];
-          const stepIndex = steps.findIndex((step) => step.id === body.stepId);
-          if (stepIndex < 0) throw new PlatformError(404, "FLOW_STEP_NOT_FOUND");
-          steps[stepIndex] = { ...steps[stepIndex], element: element.name };
-          flow.steps = steps;
-          nextData.flows = flows;
-        }
-        const saved = putDocument(projectId, nextData, document.version);
-        database.prepare(`UPDATE picker_captures SET status = 'confirmed', confirmed_at = ? WHERE id = ?`).run(now(), capture.id);
-        appendDebugEvent(session.id, "picker.confirmed", { captureId: capture.id, candidateIndex, target: body.target, elementId: element.id });
-        audit(project.workspace_id, { type: "user", id: user.id }, "picker.confirmed", { type: "element", id: element.id }, { captureId: capture.id, candidateIndex, target: body.target, documentVersion: saved.version }, projectId);
-        sendJson(response, 201, { element, documentVersion: saved.version, target: body.target });
-        return true;
-      }
-
-      const debugSessionDetail = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/debug-sessions\/([^/]+)$/);
-      if (debugSessionDetail && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(debugSessionDetail[1]);
-        const sessionId = decodeURIComponent(debugSessionDetail[2]);
-        requireProjectRole(projectId, user.id);
-        const session = debugSessionById(sessionId);
-        if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-        sendJson(response, 200, { session: debugSessionResponse(session) });
-        return true;
-      }
-
-      const debugArtifactUpload = url.pathname.match(/^\/api\/agents\/([^/]+)\/debug-sessions\/([^/]+)\/artifacts$/);
-      if (debugArtifactUpload && request.method === "POST") {
-        const agent = agentByCredential(authorization(request));
-        if (agent.id !== decodeURIComponent(debugArtifactUpload[1])) throw new PlatformError(403, "AGENT_ID_MISMATCH");
-        const session = agentOwnsDebugSession(agent.id, decodeURIComponent(debugArtifactUpload[2]));
-        if (["ended", "failed", "expired"].includes(session.status)) throw new PlatformError(409, "DEBUG_SESSION_CLOSED");
-        const body = await readJson<{ name?: string; contentType?: string; contentBase64?: string }>(request, 26_000_000);
-        if (!body.contentBase64) throw new PlatformError(400, "ARTIFACT_CONTENT_REQUIRED");
-        const content = Buffer.from(body.contentBase64, "base64");
-        if (content.length === 0 || content.length > 18_000_000) throw new PlatformError(413, "ARTIFACT_TOO_LARGE");
-        await mkdir(platformArtifactDirectory, { recursive: true });
-        const artifact = { id: randomUUID(), name: safeArtifactName(body.name ?? "debug-artifact.bin"), contentType: body.contentType?.slice(0, 120) ?? "application/octet-stream" };
-        const path = join(platformArtifactDirectory, `${artifact.id}-${artifact.name}`);
-        await writeFile(path, content);
-        database.prepare(`INSERT INTO debug_artifacts (id, session_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, session.id, session.projectId, artifact.name, artifact.contentType, path, now());
-        appendDebugEvent(session.id, "artifact.uploaded", { artifactId: artifact.id, name: artifact.name });
-        sendJson(response, 201, { artifact: { id: artifact.id, name: artifact.name, contentType: artifact.contentType } });
-        return true;
-      }
-
-      const debugArtifact = url.pathname.match(/^\/api\/platform\/debug-artifacts\/([^/]+)$/);
-      if (debugArtifact && request.method === "GET") {
-        const user = sessionUser(request);
-        const artifact = database.prepare(`SELECT id, name, content_type, path, project_id FROM debug_artifacts WHERE id = ?`).get(decodeURIComponent(debugArtifact[1])) as { id: string; name: string; content_type: string; path: string; project_id: string } | undefined;
-        if (!artifact) throw new PlatformError(404, "ARTIFACT_NOT_FOUND");
-        requireProjectRole(artifact.project_id, user.id);
-        response.writeHead(200, { "content-type": artifact.content_type, "content-disposition": `inline; filename="${safeArtifactName(artifact.name)}"` });
-        createReadStream(artifact.path).on("error", () => response.destroy()).pipe(response);
-        return true;
-      }
-
-      const platformRunRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/runs$/);
-      if (platformRunRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(platformRunRoot[1]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const rows = database.prepare(`SELECT id FROM platform_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 200`).all(projectId) as Array<{ id: string }>;
-          sendJson(response, 200, { runs: rows.map((row) => runResponse(runById(row.id))) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ revisionId?: string; environmentId?: string; datasetVersionId?: string; upToStepId?: string }>(request);
-          const queued = queuePublishedRuns({ projectId, revisionId: body.revisionId, environmentId: body.environmentId, datasetVersionId: body.datasetVersionId, upToStepId: body.upToStepId, createdBy: user.id, source: "manual" });
-          const runs = queued.runIds.map((runId) => runResponse(runById(runId)));
-          audit(project.workspace_id, { type: "user", id: user.id }, "run.created", { type: "run_batch", id: queued.runIds[0] ?? randomUUID() }, { revisionId: queued.revision.id, environmentId: queued.environmentId, datasetVersionId: queued.datasetVersionId, runIds: queued.runIds }, projectId);
-          sendJson(response, 202, { run: runs[0], runs, runIds: queued.runIds, leaseOffered: runs.some((run) => run.status === "dispatched") });
-          return true;
-        }
-      }
-
-      const validationRoot = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/element-validations$/);
-      if (validationRoot) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(validationRoot[1]);
-        const { project } = requireProjectRole(projectId, user.id, request.method !== "GET");
-        if (request.method === "POST") {
-          const body = await readJson<{ environmentId?: string; element?: Record<string, unknown> }>(request);
-          if (!body.environmentId || !body.element) throw new PlatformError(400, "ELEMENT_VALIDATION_INPUT_INVALID");
-          const document = documentFor(projectId);
-          const environments = Array.isArray(document.data.environments) ? document.data.environments.map(asRecord) : [];
-          const environment = environments.find((item) => item.id === body.environmentId);
-          if (!environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
-          requireChromiumEnvironment(environment);
-          const element = asRecord(body.element);
-          requireSameOriginElementPath(environment, element);
-          const agent = candidateAgent(projectId, body.environmentId);
-          if (!agent || !sockets.has(agent.id)) throw new PlatformError(409, "AGENT_UNAVAILABLE");
-          const validation = { id: randomUUID(), createdAt: now() };
-          database.prepare(`INSERT INTO element_validations (id, project_id, environment_id, agent_id, status, element_snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
-            .run(validation.id, projectId, body.environmentId, agent.id, json(element), user.id, validation.createdAt, validation.createdAt);
-          const persisted = elementValidationById(validation.id);
-          if (!sendAgent(agent.id, agentValidationPayload(persisted))) {
-            database.prepare(`UPDATE element_validations SET status = 'failed', error = 'AGENT_UNAVAILABLE', updated_at = ? WHERE id = ?`).run(now(), validation.id);
-            throw new PlatformError(409, "AGENT_UNAVAILABLE");
-          }
-          audit(project.workspace_id, { type: "user", id: user.id }, "element.validation_started", { type: "element_validation", id: validation.id }, { environmentId: body.environmentId, elementId: body.element.id }, projectId);
-          sendJson(response, 202, { validation: elementValidationById(validation.id) });
-          return true;
-        }
-      }
-
-      const validationDetail = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/element-validations\/([^/]+)$/);
-      if (validationDetail && request.method === "GET") {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(validationDetail[1]);
-        requireProjectRole(projectId, user.id);
-        const validation = elementValidationById(decodeURIComponent(validationDetail[2]));
-        if (validation.projectId !== projectId) throw new PlatformError(404, "ELEMENT_VALIDATION_NOT_FOUND");
-        sendJson(response, 200, { validation });
-        return true;
-      }
-
-      const platformRunDetail = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/runs\/([^/]+)(?:\/(cancel))?$/);
-      if (platformRunDetail) {
-        const user = sessionUser(request);
-        const projectId = decodeURIComponent(platformRunDetail[1]);
-        const runId = decodeURIComponent(platformRunDetail[2]);
-        const action = platformRunDetail[3];
-        requireProjectRole(projectId, user.id, request.method !== "GET");
-        const run = runById(runId);
-        if (run.projectId !== projectId) throw new PlatformError(404, "RUN_NOT_FOUND");
-        if (request.method === "GET" && !action) {
-          sendJson(response, 200, { run: runResponse(run) });
-          return true;
-        }
-        if (request.method === "POST" && action === "cancel") {
-          database.prepare(`UPDATE platform_runs SET cancellation_requested = 1, status = CASE WHEN status = 'queued' THEN 'canceled' ELSE status END, updated_at = ? WHERE id = ?`).run(now(), run.id);
-          const lease = activeLeaseForRun(run.id);
-          if (lease) {
-            sendAgent(lease.agentId, { type: "run.cancel", leaseId: lease.id, runId: run.id });
-          }
-          appendRunEvent(run.id, "run.cancel_requested", { actorId: user.id });
-          sendJson(response, 202, { run: runResponse(runById(run.id)) });
-          return true;
-        }
-      }
-
-      const uploadRoute = url.pathname.match(/^\/api\/agents\/([^/]+)\/leases\/([^/]+)\/artifacts$/);
-      if (uploadRoute && request.method === "POST") {
-        const agent = agentByCredential(authorization(request));
-        if (agent.id !== decodeURIComponent(uploadRoute[1])) throw new PlatformError(403, "AGENT_ID_MISMATCH");
-        const lease = activeLeaseForAgent(agent.id, decodeURIComponent(uploadRoute[2]));
-        if (!lease) throw new PlatformError(409, "LEASE_NOT_ACTIVE");
-        const body = await readJson<{ name?: string; contentType?: string; contentBase64?: string }>(request, 26_000_000);
-        if (!body.contentBase64) throw new PlatformError(400, "ARTIFACT_CONTENT_REQUIRED");
-        const content = Buffer.from(body.contentBase64, "base64");
-        if (content.length === 0 || content.length > 18_000_000) throw new PlatformError(413, "ARTIFACT_TOO_LARGE");
-        const run = runById(lease.runId);
-        await mkdir(platformArtifactDirectory, { recursive: true });
-        const artifact = { id: randomUUID(), name: safeArtifactName(body.name ?? "artifact.bin"), contentType: body.contentType?.slice(0, 120) ?? "application/octet-stream" };
-        const path = join(platformArtifactDirectory, `${artifact.id}-${artifact.name}`);
-        await writeFile(path, content);
-        database.prepare(`INSERT INTO platform_artifacts (id, run_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, run.id, run.projectId, artifact.name, artifact.contentType, path, now());
-        appendRunEvent(run.id, "artifact.uploaded", { artifactId: artifact.id, name: artifact.name });
-        sendJson(response, 201, { artifact: { id: artifact.id, name: artifact.name, contentType: artifact.contentType } });
-        return true;
-      }
-
-      const platformArtifact = url.pathname.match(/^\/api\/platform\/artifacts\/([^/]+)$/);
-      if (platformArtifact && request.method === "GET") {
-        const user = sessionUser(request);
-        const artifactId = decodeURIComponent(platformArtifact[1]);
-        const artifact = database.prepare(`SELECT a.id, a.name, a.content_type, a.path, a.project_id FROM platform_artifacts a WHERE a.id = ?`).get(artifactId) as { id: string; name: string; content_type: string; path: string; project_id: string } | undefined;
-        if (!artifact) throw new PlatformError(404, "ARTIFACT_NOT_FOUND");
-        requireProjectRole(artifact.project_id, user.id);
-        response.writeHead(200, { "content-type": artifact.content_type, "content-disposition": `inline; filename="${safeArtifactName(artifact.name)}"` });
-        createReadStream(artifact.path).on("error", () => response.destroy()).pipe(response);
-        return true;
-      }
-
-      return false;
-    } catch (error) {
-      const platformError = error instanceof PlatformError ? error : new PlatformError(500, "PLATFORM_INTERNAL_ERROR");
-      sendError(response, platformError.status, platformError.code);
-      return true;
-    }
-  }
 
   webSocketServer.on("connection", (socket: WebSocket, _request: IncomingMessage, agent: AgentRecord) => {
     sockets.get(agent.id)?.close(4001, "replaced");
@@ -3473,22 +1836,6 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
     });
   });
 
-  function handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
-    if (url.pathname !== "/api/agents/connect") return false;
-    try {
-      const agent = agentByCredential(authorization(request));
-      if (url.searchParams.get("agentId") !== agent.id) throw new PlatformError(403, "AGENT_ID_MISMATCH");
-      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
-        webSocketServer.emit("connection", webSocket, request, agent);
-      });
-      return true;
-    } catch {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return true;
-    }
-  }
 
   const maintenanceTimer = setInterval(() => {
     try {
@@ -3503,5 +1850,71 @@ export function createPlatformApi(dataDirectory: string): PlatformApi {
   }, 10_000);
   maintenanceTimer.unref();
 
-  return { handle, handleUpgrade };
+  return {
+    activeLeaseForAgent,
+    activeLeaseForRun,
+    agentByCredential,
+    agentOwnsDebugSession,
+    agentValidationPayload,
+    allowWebhookRequest,
+    appendDebugEvent,
+    appendRunEvent,
+    audit,
+    candidateAgent,
+    createAuthSession,
+    createWorkspace,
+    createWorkspaceInvitation,
+    datasetRowsFor,
+    datasetVersionFor,
+    debugSessionById,
+    debugSessionPayload,
+    debugSessionResponse,
+    decrypt,
+    dispatchWaitingRuns,
+    documentFor,
+    elementValidationById,
+    encrypt,
+    expireDebugSessions,
+    nextDebugIdleExpiry,
+    normalizeRole,
+    notificationTarget,
+    parseDatasetUpload,
+    pickerCaptureResponse,
+    processDueSchedules,
+    projectAnalytics,
+    projectFor,
+    projectResponse,
+    publishedRevisionFor,
+    putDocument,
+    queuePublishedRuns,
+    recoverExpiredLeases,
+    recoverStaleElementValidations,
+    requireChromiumEnvironment,
+    requireProjectAdmin,
+    requireProjectRole,
+    requireRevisionEnvironment,
+    requireSameOriginElementPath,
+    requireWorkspaceRole,
+    runById,
+    runResponse,
+    sendAgent,
+    sendConfirmedDebugCommand,
+    sessionUser,
+    touchDebugSession,
+    updateAgentHeartbeat,
+    datasetVersionResponse,
+    mapAgent,
+    database,
+    sockets,
+    pendingDebugCommands,
+    webSocketServer,
+    webhookRequests,
+    keyMaterial,
+  };
+}
+
+export type PlatformServices = ReturnType<typeof createPlatformServices>;
+
+export function createPlatformApi(dataDirectory: string): PlatformApi {
+  return createPlatformHandler(createPlatformServices(dataDirectory));
 }

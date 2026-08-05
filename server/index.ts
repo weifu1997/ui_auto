@@ -10,6 +10,7 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, Locator, Page } from "playwright";
 import type { ElementAsset, Environment, FlowStep } from "../src/mock-data";
 import { createPlatformApi } from "./platform.ts";
+import { applyCors, readJson, routeHandler, sendJson } from "./http-utils";
 
 const port = Number(process.env.PORT ?? 8787);
 const listenHost = process.env.AUTOFLOW_LISTEN_HOST ?? "127.0.0.1";
@@ -879,21 +880,6 @@ async function executeValidation(task: Task, request: ValidationRequest) {
   }
 }
 
-async function readJson<T>(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    if (Buffer.concat(chunks).length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE");
-  }
-  if (chunks.length === 0) return {} as T;
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
-}
-
-function sendJson(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
-}
-
 function attachSse(request: IncomingMessage, response: ServerResponse, task: Task) {
   response.writeHead(200, {
     "content-type": "text/event-stream",
@@ -931,32 +917,16 @@ function fixtureHtml(pathname: string) {
 
 hydratePersistedTasks();
 
-function corsOrigin(request: IncomingMessage) {
-  const origin = request.headers.origin;
-  if (!origin) return undefined;
-  if (configuredCorsOrigins.includes(origin)) return origin;
-  if (configuredCorsOrigins.length === 0 && /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin)) return origin;
-  return null;
-}
-
-const server = createServer(async (request, response) => {
-  const origin = corsOrigin(request);
-  if (origin === null) {
+const server = createServer(routeHandler(async (request, response, url) => {
+  if (!applyCors(request, response, configuredCorsOrigins, true)) {
     sendJson(response, 403, { error: "CORS_ORIGIN_FORBIDDEN" });
     return;
   }
-  if (origin) {
-    response.setHeader("access-control-allow-origin", origin);
-    response.setHeader("vary", "origin");
-  }
-  response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, OPTIONS");
-  response.setHeader("access-control-allow-headers", "content-type, authorization");
   if (request.method === "OPTIONS") {
     response.writeHead(204);
     response.end();
     return;
   }
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
   if (url.pathname === "/__fixture/response-json") {
     sendJson(response, 200, { order: { id: "response-order-1" } });
     return;
@@ -992,7 +962,6 @@ const server = createServer(async (request, response) => {
     createReadStream(artifact.path).pipe(response);
     return;
   }
-  try {
     const runRoute = parseProjectRoute(url.pathname, "runs");
     if (runRoute) {
       const [, encodedProjectId, taskId, action] = runRoute;
@@ -1073,18 +1042,7 @@ const server = createServer(async (request, response) => {
       }
     }
     sendJson(response, 404, { error: "NOT_FOUND" });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "INTERNAL_ERROR";
-    const status = message.includes("NOT_FOUND")
-      ? 404
-      : message === "PAYLOAD_TOO_LARGE"
-        ? 413
-        : message === "RUN_SECRETS_REQUIRED"
-          ? 409
-          : 400;
-    sendJson(response, status, { error: message });
-  }
-});
+  }, { errorResponse: { exposeMessage: true } }));
 
 server.on("upgrade", (request, socket, head) => {
   if (!platform.handleUpgrade(request, socket, head)) socket.destroy();
