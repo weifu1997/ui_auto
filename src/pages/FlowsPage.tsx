@@ -1,13 +1,10 @@
 import { message } from "../antd-feedback";
 import { localWorkerRunRequest } from "../local-worker-run";
 import type { Flow, Project, Run } from "../mock-data";
-import { createPlatformRun, getAgentBindings, getPlatformRevisions, savePlatformSecret } from "../platform-api";
-import type { PlatformRevision } from "../platform-api";
-import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, requestRunSecrets, requiredSecretVariables, statusTag, variableReference, watchWorkerRun } from "./shared";
+import { PageHeading, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, requestRunSecrets, requiredSecretVariables, statusTag, watchWorkerRun } from "./shared";
 import { createRun } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
@@ -62,6 +59,47 @@ export function FlowsPage({ project }: { project: Project }) {
       message.error("当前项目没有可用运行环境");
       return;
     }
+    const secretValues = await requestRunSecrets(
+      project.id,
+      variables,
+      steps,
+      sessionSecretValues,
+      setSecretValues,
+    );
+    if (!secretValues) return;
+    try {
+      const secretVariables = requiredSecretVariables(variables, steps);
+      const request = localWorkerRunRequest({
+        environment: activeEnvironment,
+        flow: { id: flow.id, name: flow.name },
+        steps,
+        elements,
+        variables,
+        secretValues,
+        secretVariables,
+      });
+      const { runId } = await createRun(project.id, request);
+      const run: Run = {
+        id: runId,
+        flowName: flow.name,
+        status: "queued",
+        environment: activeEnvironment.name,
+        progress: 0,
+        completedSteps: 0,
+        totalSteps: steps.length,
+        startedAt: "刚刚",
+        duration: "排队中",
+        screenshots: 0,
+        retries: 0,
+      };
+      upsertRun(project.id, run);
+      watchWorkerRun(project.id, run, upsertRun);
+      navigate(`/project/${project.id}/runs`);
+    } catch {
+      message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
+    }
+    return;
+    /* Legacy remote execution is intentionally unreachable from the default action.
     const platformContext = platformProjectContext(project.id);
     let revision: PlatformRevision | undefined;
     let platformReady = false;
@@ -162,6 +200,8 @@ export function FlowsPage({ project }: { project: Project }) {
     } catch {
       message.error("创建 Agent 运行失败，请确认密钥、版本和环境绑定配置");
     }
+  };
+    */
   };
   const columns: TableColumnsType<Flow> = [
     {

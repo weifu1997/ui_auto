@@ -58,6 +58,13 @@ export function storePlatformProjectMap(projectMap: Record<string, string>, work
   localStorage.setItem(platformProjectMapStorageKey, JSON.stringify(maps));
 }
 
+export function disconnectPlatformProject(localProjectId: string, workspaceId = readStoredPlatformWorkspaceId()) {
+  if (!workspaceId) return;
+  const projectMap = readPlatformProjectMap(workspaceId);
+  const { [localProjectId]: _removed, ...remaining } = projectMap;
+  storePlatformProjectMap(remaining, workspaceId);
+}
+
 function allDocumentVersions(): DocumentVersionMaps {
   try {
     const value = JSON.parse(localStorage.getItem(platformDocumentVersionsStorageKey) ?? "{}") as Record<string, unknown>;

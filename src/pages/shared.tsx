@@ -2,9 +2,8 @@
 /* oxlint-disable react/only-export-components */
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
-import { getAgentBindings } from "../platform-api";
 import type { PlatformRun, PlatformSession } from "../platform-api";
-import { platformContextChangedEvent, platformProjectContext, readStoredPlatformSession } from "../platform-context";
+import { readStoredPlatformSession } from "../platform-context";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { WorkerApiError, getWorkerHealth, subscribeToTask } from "../worker-api";
@@ -28,7 +27,8 @@ export type ProjectSection =
   | "automations"
   | "governance"
   | "runs"
-  | "settings";
+  | "settings"
+  | "platform";
 
 export const sectionMeta: Record<
   ProjectSection,
@@ -46,6 +46,7 @@ export const sectionMeta: Record<
   governance: { label: "治理分析", icon: <SafetyCertificateOutlined /> },
   runs: { label: "运行中心", icon: <PlayCircleFilled /> },
   settings: { label: "项目设置", icon: <SettingOutlined /> },
+  platform: { label: "发布与远程执行", icon: <CloudServerOutlined /> },
 };
 
 export const statusMeta = {
@@ -146,18 +147,10 @@ export function ProjectLayout({
   const environments = storedEnvironments ?? emptyEnvironments;
   const environment =
     environments.find((item) => item.id === activeEnvironmentId) ?? environments[0];
-  const environmentId = environment?.id;
   const runningRunCount = projectRuns.filter((run) => run.status === "running").length;
   const [workerStatus, setWorkerStatus] = useState<"checking" | "online" | "offline">("checking");
-  const [agentStatus, setAgentStatus] = useState<"checking" | "online" | "offline" | "unbound" | "unimported" | "unknown">("checking");
-  const [agentName, setAgentName] = useState<string>();
-  const [platformContextVersion, setPlatformContextVersion] = useState(0);
-
-  useEffect(() => {
-    const refresh = () => setPlatformContextVersion((value) => value + 1);
-    window.addEventListener(platformContextChangedEvent, refresh);
-    return () => window.removeEventListener(platformContextChangedEvent, refresh);
-  }, []);
+  const agentStatus: string = "local";
+  const agentName = undefined;
 
   useEffect(() => {
     let mounted = true;
@@ -181,49 +174,6 @@ export function ProjectLayout({
     };
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    let request: AbortController | undefined;
-    const refresh = async () => {
-      const context = platformProjectContext(project.id);
-      if (!context) {
-        if (mounted) {
-          setAgentStatus("unimported");
-          setAgentName(undefined);
-        }
-        return;
-      }
-      if (!environmentId) {
-        if (mounted) {
-          setAgentStatus("unbound");
-          setAgentName(undefined);
-        }
-        return;
-      }
-      request?.abort();
-      request = new AbortController();
-      try {
-        const result = await getAgentBindings(context.session.token, context.projectId);
-        const binding = result.bindings.find((item) => item.environmentId === environmentId);
-        if (!mounted) return;
-        setAgentName(binding?.agent.name);
-        setAgentStatus(!binding ? "unbound" : binding.agent.status === "online" ? "online" : "offline");
-      } catch {
-        if (mounted) {
-          setAgentStatus("unknown");
-          setAgentName(undefined);
-        }
-      }
-    };
-    void refresh();
-    const interval = window.setInterval(() => void refresh(), 15_000);
-    return () => {
-      mounted = false;
-      request?.abort();
-      window.clearInterval(interval);
-    };
-  }, [environmentId, platformContextVersion, project.id]);
-
   const workerLabel = workerStatus === "online"
     ? "Worker 在线"
     : workerStatus === "offline"
@@ -240,6 +190,7 @@ export function ProjectLayout({
           : agentStatus === "unknown"
             ? "Platform 状态未知"
             : "正在检查 Agent";
+  void agentLabel;
   return (
     <div className="app-shell">
       <WorkspaceSide compact />
@@ -256,7 +207,9 @@ export function ProjectLayout({
           <DownOutlined />
         </button>
         <nav className="project-nav" aria-label="项目导航">
-          {(Object.keys(sectionMeta) as ProjectSection[]).map((key) => (
+          {(Object.keys(sectionMeta) as ProjectSection[])
+            .filter((key) => !["data", "agents", "debug", "automations", "governance"].includes(key))
+            .map((key) => (
             <Link
               key={key}
               className={
@@ -270,7 +223,7 @@ export function ProjectLayout({
                 <Badge count={runningRunCount} size="small" color="#147a73" />
               )}
             </Link>
-          ))}
+            ))}
         </nav>
         <div className="project-side-footer">
           <SafetyCertificateOutlined />
@@ -285,9 +238,6 @@ export function ProjectLayout({
             <strong>{sectionMeta[section].label}</strong>
           </div>
           <div className="topbar-actions">
-            <span className={`agent-status ${agentStatus}`} title={agentLabel}>
-              <i /> {agentLabel}
-            </span>
             <span className={`worker-status ${workerStatus}`} title={workerLabel}>
               <i /> {workerLabel}
             </span>

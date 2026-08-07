@@ -23,6 +23,9 @@ export type PlatformWorkspaceProject = {
   document: Record<string, unknown>;
 };
 
+export type ProjectMode = "local" | "platform-enabled";
+export type PlatformSyncStatus = "synced" | "syncing" | "retrying" | "failed";
+
 type WorkspaceStore = {
   projects: Project[];
   flowsByProject: Record<string, Flow[]>;
@@ -31,6 +34,10 @@ type WorkspaceStore = {
   environmentsByProject: Record<string, Environment[]>;
   activeEnvironmentByProject: Record<string, string>;
   membersByProject: Record<string, ProjectMember[]>;
+  projectModesById: Record<string, ProjectMode>;
+  platformProjectIdsById: Record<string, string>;
+  platformSyncStatusById: Record<string, PlatformSyncStatus>;
+  platformSyncErrorById: Record<string, string>;
   createProject: (input: NewProjectInput) => Project;
   persistWorkspace: () => void;
   archiveProject: (projectId: string) => void;
@@ -41,6 +48,10 @@ type WorkspaceStore = {
   setEnvironments: (projectId: string, environments: Environment[]) => void;
   setActiveEnvironment: (projectId: string, environmentId: string) => void;
   addMember: (projectId: string, member: Omit<ProjectMember, "id">) => void;
+  enablePlatformProject: (projectId: string, platformProjectId: string) => void;
+  disconnectPlatformProject: (projectId: string) => void;
+  setPlatformSyncStatus: (projectId: string, status: PlatformSyncStatus) => void;
+  setPlatformSyncError: (projectId: string, error?: string) => void;
   hydratePlatformProjects: (projects: PlatformWorkspaceProject[]) => void;
   hydratePlatformProjectMetadata: (
     projects: Array<Pick<PlatformWorkspaceProject, "sourceProjectId" | "name" | "description">>,
@@ -95,6 +106,33 @@ function addSauceDemoSeed(value: unknown) {
   };
 }
 
+function ensureProjectModes(value: unknown) {
+  const state = addSauceDemoSeed(value) as Partial<WorkspaceStore>;
+  const projects = state.projects ?? [];
+  const platformProjectIdsById = state.platformProjectIdsById ?? legacyPlatformProjectIds();
+  return {
+    ...state,
+    projectModesById: Object.fromEntries(projects.map((project) => [
+      project.id,
+      state.projectModesById?.[project.id] ?? (platformProjectIdsById[project.id] ? "platform-enabled" : "local"),
+    ])),
+    platformProjectIdsById,
+    platformSyncErrorById: state.platformSyncErrorById ?? {},
+  };
+}
+
+function legacyPlatformProjectIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("autoflow-platform-project-map") ?? "{}") as Record<string, unknown>;
+    const directMap = Object.values(raw).every((value) => typeof value === "string")
+      ? raw
+      : Object.values(raw).find((value) => value && typeof value === "object" && !Array.isArray(value));
+    return Object.fromEntries(Object.entries(directMap ?? {}).filter(([, value]) => typeof value === "string")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
 function projectIdFrom(name: string, existing: Project[]) {
   const base = name
     .trim()
@@ -126,6 +164,10 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       environmentsByProject: { "sauce-demo": [initialSauceDemoSeed.environment] },
       activeEnvironmentByProject: { "sauce-demo": "sauce-demo-web" },
       membersByProject: { "sauce-demo": [] },
+      projectModesById: { "sauce-demo": "local" },
+      platformProjectIdsById: {},
+      platformSyncStatusById: {},
+      platformSyncErrorById: {},
       createProject: ({ name, description }) => {
         const project: Project = {
           id: projectIdFrom(name, get().projects),
@@ -143,6 +185,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             [project.id]: "",
           },
           membersByProject: { ...state.membersByProject, [project.id]: [] },
+          projectModesById: { ...state.projectModesById, [project.id]: "local" },
         }));
         return project;
       },
@@ -161,6 +204,10 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             projectId,
           ),
           membersByProject: withoutProject(state.membersByProject, projectId),
+          projectModesById: withoutProject(state.projectModesById, projectId),
+          platformProjectIdsById: withoutProject(state.platformProjectIdsById, projectId),
+          platformSyncStatusById: withoutProject(state.platformSyncStatusById, projectId),
+          platformSyncErrorById: withoutProject(state.platformSyncErrorById, projectId),
         })),
       updateProject: (projectId, patch) =>
         set((state) => ({
@@ -212,6 +259,30 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
               { ...member, id: `member-${Date.now()}` },
             ],
           },
+        })),
+      enablePlatformProject: (projectId, platformProjectId) =>
+        set((state) => ({
+          projectModesById: { ...state.projectModesById, [projectId]: "platform-enabled" },
+          platformProjectIdsById: { ...state.platformProjectIdsById, [projectId]: platformProjectId },
+          platformSyncStatusById: { ...state.platformSyncStatusById, [projectId]: "syncing" },
+          platformSyncErrorById: withoutProject(state.platformSyncErrorById, projectId),
+        })),
+      disconnectPlatformProject: (projectId) =>
+        set((state) => ({
+          projectModesById: { ...state.projectModesById, [projectId]: "local" },
+          platformProjectIdsById: withoutProject(state.platformProjectIdsById, projectId),
+          platformSyncStatusById: withoutProject(state.platformSyncStatusById, projectId),
+          platformSyncErrorById: withoutProject(state.platformSyncErrorById, projectId),
+        })),
+      setPlatformSyncStatus: (projectId, status) =>
+        set((state) => ({
+          platformSyncStatusById: { ...state.platformSyncStatusById, [projectId]: status },
+        })),
+      setPlatformSyncError: (projectId, error) =>
+        set((state) => ({
+          platformSyncErrorById: error
+            ? { ...state.platformSyncErrorById, [projectId]: error }
+            : withoutProject(state.platformSyncErrorById, projectId),
         })),
       hydratePlatformProjects: (platformProjects) =>
         set((state) => {
@@ -273,6 +344,19 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             environmentsByProject: nextEnvironments,
             activeEnvironmentByProject: nextActiveEnvironments,
             membersByProject: nextMembers,
+            projectModesById: {
+              ...state.projectModesById,
+              ...Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "platform-enabled"])),
+            },
+            platformProjectIdsById: {
+              ...state.platformProjectIdsById,
+              ...Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, item.platformProjectId])),
+            },
+            platformSyncStatusById: {
+              ...state.platformSyncStatusById,
+              ...Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "synced"])),
+            },
+            platformSyncErrorById: state.platformSyncErrorById,
           };
         }),
       hydratePlatformProjectMetadata: (platformProjects) =>
@@ -294,10 +378,10 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
     }),
     {
       name: "autoflow-workspace-projects",
-      version: 6,
-      migrate: (persistedState) => addSauceDemoSeed(persistedState),
+      version: 7,
+      migrate: (persistedState) => ensureProjectModes(persistedState) as WorkspaceStore,
       merge: (persistedState, currentState) =>
-        addSauceDemoSeed({
+        ensureProjectModes({
           ...currentState,
           ...(persistedState && typeof persistedState === "object" ? persistedState : {}),
         }) as WorkspaceStore,
@@ -319,6 +403,10 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         environmentsByProject: state.environmentsByProject,
         activeEnvironmentByProject: state.activeEnvironmentByProject,
         membersByProject: state.membersByProject,
+        projectModesById: state.projectModesById,
+        platformProjectIdsById: state.platformProjectIdsById,
+        platformSyncStatusById: state.platformSyncStatusById,
+        platformSyncErrorById: state.platformSyncErrorById,
       }),
     },
   ),

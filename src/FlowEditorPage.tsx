@@ -21,8 +21,6 @@ import { useFlowStore } from "./flow-store";
 import { useRunStore } from "./run-store";
 import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
-import { createPlatformRun, getAgentBindings, getPlatformRevisions, savePlatformSecret } from "./platform-api";
-import { platformProjectContext } from "./platform-context";
 import { message, modal } from "./antd-feedback";
 import { localWorkerRunRequest } from "./local-worker-run";
 import { createRun } from "./worker-api";
@@ -144,7 +142,6 @@ export default function FlowEditorPage() {
   const activeEnvironment =
     environments.find((environment) => environment.id === activeEnvironmentId) ??
     environments[0];
-  const platformContext = project ? platformProjectContext(project.id) : undefined;
   const upsertRun = useRunStore((state) => state.upsertRun);
   const sessionSecretValues = useSecretStore((state) =>
     project ? state.valuesByProject[project.id] ?? emptySecretValues : emptySecretValues,
@@ -215,6 +212,54 @@ export default function FlowEditorPage() {
     const stepsToRun = upToStepId
       ? steps.slice(0, steps.findIndex((step) => step.id === upToStepId) + 1)
       : steps;
+    const secretValues = await requestRunSecrets(
+      project.id,
+      variables,
+      stepsToRun,
+      sessionSecretValues,
+      setSecretValues,
+    );
+    if (!secretValues) {
+      setRunToStep(false);
+      return;
+    }
+    try {
+      const request = localWorkerRunRequest({
+        environment,
+        flow: { id: flow.id, name: flow.name },
+        steps,
+        elements,
+        variables,
+        secretValues,
+        secretVariables: requiredSecretVariables(variables, stepsToRun),
+        upToStepId,
+      });
+      const { runId } = await createRun(project.id, request);
+      const totalSteps = upToStepId
+        ? steps.findIndex((step) => step.id === upToStepId) + 1
+        : steps.length;
+      upsertRun(project.id, {
+        id: runId,
+        flowName: flow.name,
+        status: "queued",
+        environment: environment.name,
+        progress: 0,
+        completedSteps: 0,
+        totalSteps,
+        startedAt: "刚刚",
+        duration: "排队中",
+        screenshots: 0,
+        retries: 0,
+        request,
+      });
+      navigate(`/project/${project.id}/runs/${runId}`);
+    } catch {
+      message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
+    } finally {
+      setRunToStep(false);
+    }
+    return;
+    /* Remote execution remains available only from the Platform page.
     let revisionId: string | undefined;
     let publishedStepCount: number | undefined;
     let platformReady = false;
@@ -323,6 +368,8 @@ export default function FlowEditorPage() {
     } finally {
       setRunToStep(false);
     }
+  };
+    */
   };
   return (
     <div className="editor-page">

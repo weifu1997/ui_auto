@@ -22,7 +22,7 @@ import {
 } from "./platform-context";
 import "./App.css";
 import "./responsive.css";
-import { AntdFeedbackBridge, message, modal } from "./antd-feedback";
+import { AntdFeedbackBridge, modal } from "./antd-feedback";
 import {
   PageHeading,
   ProjectLayout,
@@ -45,6 +45,8 @@ const LazyProjectShell = lazy(() =>
 const routeFallback = (
   <div className="route-loading"><Spin size="large" /></div>
 );
+
+const syncMessage = { warning: (_value: unknown) => undefined, error: (_value: unknown) => undefined };
 
 function App() {
   return (
@@ -132,6 +134,8 @@ function hasUnsavedFlowDraft(projectId: string) {
 }
 
 function PlatformWorkspaceSynchronizer() {
+  // Synchronization is best-effort; failures are surfaced from the Platform workspace only.
+  const message = syncMessage;
   const [contextRevision, setContextRevision] = useState(0);
 
   useEffect(() => {
@@ -157,7 +161,16 @@ function PlatformWorkspaceSynchronizer() {
       const session = readStoredPlatformSession();
       const workspaceId = readStoredPlatformWorkspaceId(session);
       if (!session?.token || !workspaceId) return undefined;
-      return { session, workspaceId, projectMap: readPlatformProjectMap(workspaceId) };
+      const state = useWorkspaceStore.getState();
+      const projectMap = readPlatformProjectMap(workspaceId);
+      // Existing localStorage mappings predate project modes and remain opt-in mappings.
+      for (const [localId, remoteId] of Object.entries(projectMap)) {
+        if (
+          state.projectModesById?.[localId] !== "platform-enabled"
+          || state.platformProjectIdsById?.[localId] !== remoteId
+        ) state.enablePlatformProject(localId, remoteId);
+      }
+      return { session, workspaceId, projectMap };
     };
 
     const applyRemoteDocument = (
@@ -195,6 +208,10 @@ function PlatformWorkspaceSynchronizer() {
       remoteName: string,
       remoteDescription: string,
     ) => {
+      if (!window.location.pathname.endsWith("/platform")) {
+        scheduleDocument(localId, 5_000);
+        return;
+      }
       if (conflicts.has(localId)) return;
       conflicts.add(localId);
       modal.confirm({
@@ -225,12 +242,17 @@ function PlatformWorkspaceSynchronizer() {
     };
 
     const saveDocument = async (localId: string) => {
-      if (cancelled || inFlight.has(localId)) return;
+      if (
+        cancelled
+        || inFlight.has(localId)
+        || useWorkspaceStore.getState().projectModesById?.[localId] !== "platform-enabled"
+      ) return;
       const currentContext = context();
       const remoteId = currentContext?.projectMap[localId];
       const document = workspaceDocumentFor(useWorkspaceStore.getState(), localId);
       if (!currentContext || !remoteId || !document) return;
       inFlight.add(localId);
+      useWorkspaceStore.getState().setPlatformSyncStatus(localId, "syncing");
       const serialized = JSON.stringify(document);
       try {
         let version = readPlatformDocumentVersion(remoteId, currentContext.workspaceId);
@@ -245,7 +267,14 @@ function PlatformWorkspaceSynchronizer() {
         const currentSerialized = JSON.stringify(workspaceDocumentFor(useWorkspaceStore.getState(), localId));
         if (currentSerialized === serialized) dirty.delete(localId);
         else scheduleDocument(localId);
+        useWorkspaceStore.getState().setPlatformSyncStatus(localId, "synced");
+        useWorkspaceStore.getState().setPlatformSyncError(localId);
       } catch (error) {
+        useWorkspaceStore.getState().setPlatformSyncStatus(localId, "failed");
+        useWorkspaceStore.getState().setPlatformSyncError(
+          localId,
+          error instanceof Error ? error.message : "Unable to synchronize with Platform.",
+        );
         if (error instanceof PlatformApiError && error.code === "DOCUMENT_VERSION_CONFLICT") {
           try {
             const latest = await getPlatformProjectDocument(currentContext.session.token, remoteId);
@@ -299,15 +328,23 @@ function PlatformWorkspaceSynchronizer() {
       }
       try {
         const response = await getWorkspaceProjects(currentContext.session.token, currentContext.workspaceId);
-        const loaded = await Promise.all(response.projects.map(async (project) => {
+        const enabledRemoteIds = new Set(Object.values(currentContext.projectMap));
+        const loaded = await Promise.all(response.projects
+          .filter((project) => enabledRemoteIds.has(project.id))
+          .map(async (project) => {
           const document = await getPlatformProjectDocument(currentContext.session.token, project.id);
           const existingLocalId = Object.entries(currentContext.projectMap).find(([, remoteId]) => remoteId === project.id)?.[0];
           const sourceProjectId = project.sourceProjectId ?? (typeof document.data.sourceProjectId === "string" ? document.data.sourceProjectId : existingLocalId ?? `platform-${project.id}`);
           return { project, document, sourceProjectId };
-        }));
+          }));
         if (cancelled) return;
         const nextMap = { ...currentContext.projectMap };
         const state = useWorkspaceStore.getState();
+        for (const [localId, remoteId] of Object.entries(currentContext.projectMap)) {
+          if (state.projects.some((project) => project.id === localId)) {
+            state.enablePlatformProject(localId, remoteId);
+          }
+        }
         const remoteHydration: PlatformWorkspaceProject[] = [];
         for (const item of loaded) {
           nextMap[item.sourceProjectId] = item.project.id;
@@ -381,12 +418,6 @@ function PlatformWorkspaceSynchronizer() {
             resolveDocumentConflict(item.sourceProjectId, item.project.id, item.document, item.project.name, item.project.description);
           }
         }
-        const remoteIds = new Set(loaded.map((item) => item.project.id));
-        const archivedLocalIds = Object.entries(currentContext.projectMap)
-          .filter(([, remoteId]) => !remoteIds.has(remoteId))
-          .map(([localId]) => localId)
-          .filter((localId) => !hasUnsavedFlowDraft(localId));
-        for (const localId of archivedLocalIds) delete nextMap[localId];
         storePlatformProjectMap(nextMap, currentContext.workspaceId);
         hydrating = true;
         useWorkspaceStore.getState().hydratePlatformProjectMetadata(
@@ -407,11 +438,6 @@ function PlatformWorkspaceSynchronizer() {
             );
           }
         }
-        for (const localId of archivedLocalIds) {
-          useWorkspaceStore.getState().archiveProject(localId);
-          lastDocuments.delete(localId);
-          lastMetadata.delete(localId);
-        }
         if (remoteHydration.length > 0) {
           useWorkspaceStore.getState().hydratePlatformProjects(remoteHydration);
           for (const item of remoteHydration) {
@@ -421,8 +447,13 @@ function PlatformWorkspaceSynchronizer() {
           }
         }
         hydrating = false;
-      } catch {
+      } catch (error) {
         // A platform outage must not erase local data. Mapped edits can still retry with their stored version.
+        const detail = error instanceof Error ? error.message : "Unable to read Platform projects.";
+        for (const localId of Object.keys(currentContext.projectMap)) {
+          useWorkspaceStore.getState().setPlatformSyncStatus(localId, "failed");
+          useWorkspaceStore.getState().setPlatformSyncError(localId, detail);
+        }
       } finally {
         ready = true;
       }
@@ -433,6 +464,7 @@ function PlatformWorkspaceSynchronizer() {
       const currentContext = context();
       if (!currentContext) return;
       for (const [localId] of Object.entries(currentContext.projectMap)) {
+        if (state.projectModesById?.[localId] !== "platform-enabled") continue;
         const document = workspaceDocumentFor(state, localId);
         const project = state.projects.find((item) => item.id === localId);
         const serialized = document ? JSON.stringify(document) : undefined;
@@ -460,7 +492,7 @@ function PlatformWorkspaceSynchronizer() {
       window.clearInterval(poll);
       timers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [contextRevision]);
+  }, [contextRevision, message]);
 
   return null;
 }

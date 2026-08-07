@@ -124,3 +124,58 @@ test("removes retired demo storage before resolving an old project route", async
     )
     .toBe(1);
 });
+
+test("opens the local publish page with a pre-mode persisted workspace", async ({ page }) => {
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "autoflow-workspace-projects",
+      JSON.stringify({
+        state: {
+          projects: [{ id: "legacy-local", name: "Legacy local", description: "" }],
+          flowsByProject: { "legacy-local": [] },
+          elementsByProject: { "legacy-local": [] },
+          variablesByProject: { "legacy-local": [] },
+          environmentsByProject: { "legacy-local": [] },
+          activeEnvironmentByProject: { "legacy-local": "" },
+          membersByProject: { "legacy-local": [] },
+        },
+        version: 7,
+      }),
+    );
+  });
+
+  await page.reload();
+  await page.goto("/project/legacy-local/platform");
+  await expect(page.getByRole("heading", { name: "发布与远程执行" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "发布当前项目" })).toBeVisible();
+});
+
+test("returns a published-project attempt with an invalid session to the Platform login form", async ({ page }) => {
+  await page.route("**/api/workspaces/workspace-invalid/imports/local-storage", (route) =>
+    route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "SESSION_INVALID" }),
+    }),
+  );
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "autoflow-platform-session",
+      JSON.stringify({
+        token: "expired-token",
+        user: { id: "user-invalid", email: "invalid@example.test", name: "Invalid" },
+        workspaces: [{ id: "workspace-invalid", name: "Invalid workspace", role: "owner" }],
+      }),
+    );
+    localStorage.setItem("autoflow-platform-workspace", "workspace-invalid");
+  });
+
+  await page.goto("/project/sauce-demo/platform");
+  await page.getByRole("button", { name: "发布到 Platform" }).click();
+
+  await expect(page.getByText("Platform 登录凭证已失效，请重新登录后重试发布。")).toBeVisible();
+  await expect(page.locator(".platform-login-panel button").first()).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("autoflow-platform-session")))
+    .toBeNull();
+});

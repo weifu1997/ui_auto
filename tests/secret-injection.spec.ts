@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { configurePlatformRunUiMocks } from "./platform-ui-fixtures";
 
 test("injects a secret only for the current run and asks again after a refresh", async ({ page }) => {
   await page.goto("/projects");
@@ -72,13 +71,23 @@ test("injects a secret only for the current run and asks again after a refresh",
   });
   await page.reload();
   await page.goto("/project/secret-ui/flows");
-  const calls = await configurePlatformRunUiMocks(page, "secret-ui");
+  let workerRequests = 0;
+  const platformRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/platform/") || request.url().includes("/api/workspaces/")) {
+      platformRequests.push(request.url());
+    }
+  });
+  await page.route("**/api/projects/secret-ui/runs", async (route) => {
+    workerRequests += 1;
+    await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ runId: `run_secret_${workerRequests}` }) });
+  });
   await page.getByRole("button", { name: "运行流程 密钥流程" }).click();
   await expect(page.getByRole("dialog")).toContainText("运行前注入密钥");
   await page.getByLabel("运行密钥 密码").fill("only-in-memory");
   await page.getByRole("button", { name: "注入并运行" }).click();
-  await expect.poll(() => calls.secrets.length).toBe(1);
-  expect(calls.secrets[0]).toMatchObject({ name: "project.密码", value: "only-in-memory" });
+  await expect.poll(() => workerRequests).toBe(1);
+  expect(platformRequests).toEqual([]);
   await expect.poll(() => page.url()).toContain("/project/secret-ui/runs");
   await expect.poll(() => page.evaluate(() => JSON.stringify(localStorage))).not.toContain("only-in-memory");
 

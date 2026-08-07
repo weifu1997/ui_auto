@@ -5,6 +5,7 @@ import type { PlatformSession } from "../platform-api";
 import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
+import { useWorkspaceStore } from "../workspace-store";
 import { PageHeading, emptyRuns, isTerminalStatus, isWorkerRunId, platformRunAsRun, reportRetryError, statusMeta, statusTag, watchWorkerRun, workerTaskAsRun } from "./shared";
 import { cancelRun, getRun, retryRun } from "../worker-api";
 import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
@@ -15,8 +16,13 @@ import { useEffect, useState } from "react";
 export function RunsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
   const [platformSession] = useState<PlatformSession | undefined>(readStoredPlatformSession);
-  const [platformProjectMap] = useState<Record<string, string>>(readPlatformProjectMap);
-  const platformProjectId = platformProjectMap[project.id];
+  const legacyPlatformProjectId = readPlatformProjectMap()[project.id];
+  const enablePlatformProject = useWorkspaceStore((state) => state.enablePlatformProject);
+  const platformProjectId = useWorkspaceStore((state) =>
+    state.projectModesById?.[project.id] === "platform-enabled"
+      ? state.platformProjectIdsById?.[project.id]
+      : undefined,
+  );
   const storedApiRuns = useRunStore((state) => state.apiRuns[project.id]);
   const apiRuns = storedApiRuns ?? emptyRuns;
   const upsertRun = useRunStore((state) => state.upsertRun);
@@ -24,7 +30,12 @@ export function RunsPage({ project }: { project: Project }) {
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
-    if (!platformSession || !platformProjectId) return;
+    if (platformSession && legacyPlatformProjectId && !platformProjectId) {
+      enablePlatformProject(project.id, legacyPlatformProjectId);
+    }
+  }, [enablePlatformProject, legacyPlatformProjectId, platformProjectId, platformSession, project.id]);
+  useEffect(() => {
+    if (!platformSession || !platformProjectId || !window.location.pathname.endsWith("/platform")) return;
     let active = true;
     const refreshPlatformRuns = async () => {
       try {

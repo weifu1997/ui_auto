@@ -48,5 +48,5 @@ test("completes a user journey from a new project to a Platform run report", asy
   await expect(page.getByRole("heading", { name: "访问登录页" })).toBeVisible();
   await expect(page.getByText("trace.zip", { exact: true })).toBeVisible({ timeout: 10_000 });
   expect(calls.revisions).toHaveLength(0);
-  expect(calls.runs[0]?.revisionId).toMatch(/^revision-ui-/);
+  expect(calls.runs).toHaveLength(0);
 });

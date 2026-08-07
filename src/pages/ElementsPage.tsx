@@ -1,7 +1,5 @@
 import { message } from "../antd-feedback";
 import type { ElementAsset, Environment, Project } from "../mock-data";
-import { createPlatformElementValidation, getPlatformElementValidation } from "../platform-api";
-import { platformProjectContext } from "../platform-context";
 import { PageHeading, durationFromMilliseconds, emptyElements, emptyEnvironments } from "./shared";
 import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
@@ -57,6 +55,47 @@ export function ElementsPage({ project }: { project: Project }) {
     setValidationTarget(null);
     setValidating(target);
     try {
+      const { validationId } = await createValidation(project.id, environment, target);
+      const unsubscribe = subscribeToTask(
+        project.id,
+        "validations",
+        validationId,
+        (event) => {
+          if (event.kind !== "result") return;
+          const count = Number(event.data.count ?? 0);
+          const screenshotId = event.data.screenshotId;
+          const validationStatus =
+            count === 1 ? "valid" : count > 1 ? "multiple" : "unverified";
+          updateItems((list) =>
+            list.map((item) =>
+              item.id === target.id
+                ? { ...item, validation: validationStatus, updatedAt: "刚刚" }
+                : item,
+            ),
+          );
+          setValidating(null);
+          setValidation({
+            element: target,
+            count,
+            environment: environment.name,
+            screenshotUrl:
+              typeof screenshotId === "string"
+                ? artifactUrl(project.id, screenshotId)
+                : undefined,
+            elapsedMs: Number(event.data.elapsedMs ?? 0),
+            firstMatch:
+              typeof event.data.firstMatch === "string" ? event.data.firstMatch : undefined,
+            reason: typeof event.data.reason === "string" ? event.data.reason : undefined,
+          });
+          unsubscribe();
+        },
+        () => {
+          setValidating(null);
+          message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
+        },
+      );
+      return;
+      /* Platform validation is exposed only from the Platform page.
       const platformContext = platformProjectContext(project.id);
       if (platformContext) {
         const created = await createPlatformElementValidation(
@@ -131,6 +170,7 @@ export function ElementsPage({ project }: { project: Project }) {
           message.error("无法连接 Playwright Worker，元素验证未执行。");
         },
       );
+      */
     } catch {
       setValidating(null);
       message.error("创建元素验证任务失败，请检查 Playwright Worker。");

@@ -9,6 +9,7 @@ import { useWorkspaceStore } from "../workspace-store";
 const lazySection = (loader: () => Promise<{ default: ComponentType<{ project: Project }> }>) => lazy(loader);
 
 const sectionPages: Record<ProjectSection, ComponentType<{ project: Project }>> = {
+  platform: lazySection(() => import("./PlatformPage").then((m) => ({ default: m.PlatformPage }))),
   overview: lazySection(() => import("./OverviewPage").then((m) => ({ default: m.OverviewPage }))),
   flows: lazySection(() => import("./FlowsPage").then((m) => ({ default: m.FlowsPage }))),
   elements: lazySection(() => import("./ElementsPage").then((m) => ({ default: m.ElementsPage }))),
@@ -26,11 +27,18 @@ const sectionPages: Record<ProjectSection, ComponentType<{ project: Project }>> 
 export function ProjectShell() {
   const { projectId, section } = useParams();
   const projects = useWorkspaceStore((state) => state.projects);
+  const projectMode = useWorkspaceStore((state) =>
+    projectId ? state.projectModesById?.[projectId] : undefined,
+  );
   const project = projectById(projects, projectId);
   const activeSection = (
     section && section in sectionMeta ? section : "overview"
   ) as ProjectSection;
   if (!project) return <Navigate to="/projects" replace />;
+  if (
+    projectMode !== "platform-enabled"
+    && ["data", "agents", "debug", "automations", "governance"].includes(activeSection)
+  ) return <Navigate to={`/project/${project.id}/platform`} replace />;
   const SectionPage = sectionPages[activeSection];
   return (
     <ProjectLayout project={project} section={activeSection}>

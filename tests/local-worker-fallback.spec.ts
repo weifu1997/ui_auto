@@ -2,6 +2,12 @@ import { expect, test } from "@playwright/test";
 
 test("runs the seeded flow through the local Worker when Platform is not configured", async ({ page }) => {
   let workerRequest: Record<string, unknown> | undefined;
+  const platformRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/platform/") || request.url().includes("/api/workspaces/")) {
+      platformRequests.push(request.url());
+    }
+  });
   await page.goto("/projects");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
@@ -20,11 +26,11 @@ test("runs the seeded flow through the local Worker when Platform is not configu
   await page.getByRole("button", { name: "运行流程 Sauce Demo 下单回归" }).click();
 
   await expect(page).toHaveURL(/\/project\/sauce-demo\/runs$/);
-  await expect(page.getByText("平台没有可用的已绑定在线 Agent，已改用本机 Playwright Worker")).toBeVisible();
   expect(workerRequest).toMatchObject({
     flow: { id: "sauce-demo-checkout" },
     environment: { id: "sauce-demo-web" },
   });
+  expect(platformRequests).toEqual([]);
 });
 
 test("runs from the editor through the local Worker when Platform is not configured", async ({ page }) => {
@@ -43,7 +49,6 @@ test("runs from the editor through the local Worker when Platform is not configu
   await page.getByRole("button", { name: "运行整个流程" }).click();
 
   await expect(page).toHaveURL(/\/project\/sauce-demo\/runs\/run_local_editor_fallback$/);
-  await expect(page.getByText("平台没有可用的已绑定在线 Agent，已改用本机 Playwright Worker")).toBeVisible();
 });
 
 test("falls back to the local Worker when Platform has no bound online Agent", async ({ page }) => {

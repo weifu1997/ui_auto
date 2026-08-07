@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { configurePlatformRunUiMocks } from "./platform-ui-fixtures";
 
 test.setTimeout(120_000);
 
@@ -65,7 +64,7 @@ async function addStep(
   await page.locator(".step-form .form-row label").first().locator("input").fill("30");
 }
 
-test("assembles a Sauce Demo login, cart, and checkout Platform run request", async ({ page }) => {
+test("assembles a Sauce Demo login, cart, and checkout local Worker run request", async ({ page }) => {
   await page.goto("/projects");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
@@ -115,13 +114,27 @@ test("assembles a Sauce Demo login, cart, and checkout Platform run request", as
   await page.getByRole("button", { name: "保存" }).click();
   await page.locator(".editor-topbar").getByRole("button").first().click();
   const projectId = new URL(page.url()).pathname.split("/")[2];
-  await configurePlatformRunUiMocks(page, projectId);
+  let workerRequest: Record<string, unknown> | undefined;
+  const platformRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/platform/") || request.url().includes("/api/workspaces/")) {
+      platformRequests.push(request.url());
+    }
+  });
+  await page.route(`**/api/projects/${projectId}/runs`, async (route) => {
+    workerRequest = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ runId: "run_saucedemo_local" }),
+    });
+  });
   await page.getByRole("button", { name: "运行流程 Sauce Demo 下单回归" }).click();
 
   await expect(page).toHaveURL(/\/project\/[^/]+\/runs$/);
-  await expect(page.getByText("通过", { exact: true })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText("13/13", { exact: true })).toBeVisible();
-  await page.locator(".run-link").click();
-  await expect(page.getByRole("heading", { name: "Sauce Demo 下单回归" })).toBeVisible();
-  await expect(page.getByText("trace.zip", { exact: true })).toBeVisible({ timeout: 30_000 });
+  expect(workerRequest).toMatchObject({
+    flow: { name: "Sauce Demo 下单回归" },
+    environment: { baseUrl: "https://www.saucedemo.com/" },
+  });
+  expect(platformRequests).toEqual([]);
 });

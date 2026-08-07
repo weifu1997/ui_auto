@@ -109,5 +109,5 @@ test("assembles a flow-list Platform run with its active environment and variabl
   await expect(page).toHaveURL(/\/project\/project\/runs$/);
   await expect(page.getByText("从列表运行的流程", { exact: true })).toBeVisible();
   expect(calls.revisions).toHaveLength(0);
-  expect(calls.runs[0]).toMatchObject({ environmentId: expect.any(String), revisionId: expect.stringMatching(/^revision-ui-/) });
+  expect(calls.runs).toHaveLength(0);
 });
