@@ -53,6 +53,7 @@ type WorkspaceStore = {
   setPlatformSyncStatus: (projectId: string, status: PlatformSyncStatus) => void;
   setPlatformSyncError: (projectId: string, error?: string) => void;
   hydratePlatformProjects: (projects: PlatformWorkspaceProject[]) => void;
+  replaceServerWorkspace: (projects: PlatformWorkspaceProject[]) => void;
   hydratePlatformProjectMetadata: (
     projects: Array<Pick<PlatformWorkspaceProject, "sourceProjectId" | "name" | "description">>,
   ) => void;
@@ -359,6 +360,24 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             platformSyncErrorById: state.platformSyncErrorById,
           };
         }),
+      replaceServerWorkspace: (platformProjects) =>
+        set(() => ({
+          projects: platformProjects.map((item) => ({ id: item.sourceProjectId, name: item.name, description: item.description })),
+          flowsByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, documentArray<Flow>(item.document, "flows", [])])),
+          elementsByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, documentArray<ElementAsset>(item.document, "elements", [])])),
+          variablesByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, documentArray<Variable>(item.document, "variables", [])])),
+          environmentsByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, documentArray<Environment>(item.document, "environments", [])])),
+          activeEnvironmentByProject: Object.fromEntries(platformProjects.map((item) => {
+            const environments = documentArray<Environment>(item.document, "environments", []);
+            const selected = typeof item.document.activeEnvironmentId === "string" ? item.document.activeEnvironmentId : "";
+            return [item.sourceProjectId, environments.some((environment) => environment.id === selected) ? selected : environments[0]?.id ?? ""];
+          })),
+          membersByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, []])),
+          projectModesById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "platform-enabled" as const])),
+          platformProjectIdsById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, item.platformProjectId])),
+          platformSyncStatusById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "synced" as const])),
+          platformSyncErrorById: {},
+        })),
       hydratePlatformProjectMetadata: (platformProjects) =>
         set((state) => {
           if (platformProjects.length === 0) return state;
@@ -388,7 +407,9 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       onRehydrateStorage: () => (state) => {
         state?.persistWorkspace();
       },
-      partialize: (state) => ({
+      partialize: (state) => import.meta.env.PROD ? ({
+        activeEnvironmentByProject: state.activeEnvironmentByProject,
+      }) : ({
         projects: state.projects,
         flowsByProject: state.flowsByProject,
         elementsByProject: state.elementsByProject,

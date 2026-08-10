@@ -1,11 +1,11 @@
 import { message } from "../antd-feedback";
 import type { Project } from "../mock-data";
-import { getPlatformDatasetVersion, getPlatformDatasets, importPlatformDataset, importPlatformDatasetVersion } from "../platform-api";
+import { archivePlatformDataset, getPlatformDatasetVersion, getPlatformDatasets, importPlatformDataset, importPlatformDatasetVersion } from "../platform-api";
 import type { PlatformDataset, PlatformDatasetVersion, PlatformSession } from "../platform-api";
 import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
 import { PageHeading, PlatformProjectRequired, readFileAsBase64 } from "./shared";
-import { FileSearchOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Empty, Form, Input, Modal, Space, Table, Tooltip } from "antd";
+import { DeleteOutlined, FileSearchOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Alert, Button, Empty, Form, Input, Modal, Popconfirm, Space, Table, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -91,10 +91,11 @@ export function DatasetsPage({ project }: { project: Project }) {
     { title: "更新于", dataIndex: "updatedAt", width: 180, render: (value: string) => new Date(value).toLocaleString() },
     {
       title: "",
-      width: 110,
+      width: 150,
       render: (_, item) => <Space size={2}>
         <Tooltip title="预览冻结版本"><Button icon={<FileSearchOutlined />} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
         <Tooltip title="导入新版本"><Button icon={<ReloadOutlined />} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
+        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button danger icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
       </Space>,
     },
   ];

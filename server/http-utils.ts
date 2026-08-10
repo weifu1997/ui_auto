@@ -16,7 +16,7 @@ export function parseJson<T>(value: string | null, fallback: T): T {
 }
 
 export function sendJson(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, jsonContentType);
+  response.writeHead(status, { ...jsonContentType });
   response.end(json(body));
 }
 
@@ -129,8 +129,9 @@ export function applyCors(
     || (allowLoopback && allowedOrigins.length === 0 && /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin));
   if (!allowed) return false;
   response.setHeader("access-control-allow-origin", origin);
+  response.setHeader("access-control-allow-credentials", "true");
   response.setHeader("vary", "origin");
-  response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, OPTIONS");
+  response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   response.setHeader("access-control-allow-headers", "content-type, authorization");
   return true;
 }

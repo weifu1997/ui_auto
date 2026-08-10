@@ -1,7 +1,7 @@
-const apiBase = (import.meta.env.VITE_WORKER_API_URL ?? "http://127.0.0.1:8787/api").replace(/\/$/, "");
+const apiBase = (import.meta.env.VITE_WORKER_API_URL ?? (import.meta.env.PROD ? "/api" : "http://127.0.0.1:8787/api")).replace(/\/$/, "");
 
 export function platformApiOrigin() {
-  return new URL(apiBase).origin;
+  return new URL(apiBase, window.location.origin).origin;
 }
 
 export type PlatformAgent = {
@@ -41,12 +41,23 @@ export type PlatformProjectDocument = {
   updatedAt?: string;
 };
 
+export type PlatformResourceType = "flows" | "elements" | "variables" | "environments";
+export type PlatformResource<T = Record<string, unknown>> = {
+  id: string;
+  data: T;
+  version: number;
+  archivedAt: string | null;
+  updatedAt: string;
+  updatedBy: string;
+};
+export type PlatformTemplate = { id: string; name: string; description: string; category: string; sourceProjectId?: string; sourceRevisionId?: string; createdBy?: string; createdAt: string; updatedAt: string; favorite: boolean; snapshot?: Record<string, unknown> };
+
 export type PlatformRevision = {
   id: string;
   flowId?: string;
   flowName?: string;
   revisionNumber: number;
-  status: "draft" | "published" | "superseded";
+  status: "draft" | "pending_review" | "published" | "rejected" | "deprecated" | "superseded";
   checksum: string;
   createdBy: string;
   createdAt: string;
@@ -61,6 +72,7 @@ export type PlatformRun = {
   revisionId: string;
   environmentId: string;
   agentId: string;
+  executorType?: "managed" | "agent";
   status: "queued" | "dispatched" | "running" | "success" | "failed" | "canceled";
   snapshot: Record<string, unknown>;
   result?: Record<string, unknown>;
@@ -99,7 +111,7 @@ export type PlatformElementValidation = {
   agentId: string;
   status: "queued" | "running" | "success" | "failed" | "canceled";
   element: Record<string, unknown>;
-  result?: { count: number; firstMatch?: string; elapsedMs: number };
+  result?: { count: number; firstMatch?: string; elapsedMs: number; screenshotId?: string };
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -218,7 +230,8 @@ export type PlatformAnalytics = {
   elementImpact: Array<{ elementId: string; name: string; runCount: number; flowCount: number; failedRuns: number; lastUsedAt: string }>;
 };
 
-export type PlatformMember = { id: string; email: string; name: string; role: "owner" | "admin" | "editor" | "viewer" };
+export type PlatformMemberRole = "owner" | "admin" | "publisher" | "product" | "tester" | "operations" | "editor" | "viewer";
+export type PlatformMember = { id: string; email: string; name: string; role: PlatformMemberRole; enabled: boolean; credentialConfigured: boolean };
 export type PlatformAuditEvent = { id: string; actorType: string; actorId: string; action: string; targetType: string; targetId: string; detail: Record<string, unknown>; createdAt: string };
 
 export class PlatformApiError extends Error {
@@ -236,6 +249,7 @@ export class PlatformApiError extends Error {
 async function request<T>(path: string, init: RequestInit = {}, token?: string) {
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
+    credentials: "include",
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -243,26 +257,38 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string) 
     },
   });
   const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new PlatformApiError(response.status, body.error ?? "PLATFORM_REQUEST_FAILED");
+  if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("autoflow-auth-expired"));
+    throw new PlatformApiError(response.status, body.error ?? "PLATFORM_REQUEST_FAILED");
+  }
   return body;
 }
 
 export async function loginPlatform(input: { email: string; password: string; name?: string }) {
-  const login = await request<{ token: string; user: PlatformSession["user"] }>("/auth/login", {
+  await request<{ token: string; user: PlatformSession["user"] }>("/auth/login", {
     method: "POST",
     body: JSON.stringify(input),
   });
-  const session = await request<Omit<PlatformSession, "token">>("/auth/session", {}, login.token);
-  return { ...session, token: login.token } satisfies PlatformSession;
+  const session = await request<Omit<PlatformSession, "token">>("/auth/session");
+  return { ...session, token: "cookie" } satisfies PlatformSession;
 }
 
 export async function registerPlatform(input: { email: string; password: string; name?: string; invitationToken?: string }) {
-  const registration = await request<{ token: string; user: PlatformSession["user"] }>("/auth/register", {
+  await request<{ token: string; user: PlatformSession["user"] }>("/auth/register", {
     method: "POST",
     body: JSON.stringify(input),
   });
-  const session = await request<Omit<PlatformSession, "token">>("/auth/session", {}, registration.token);
-  return { ...session, token: registration.token } satisfies PlatformSession;
+  const session = await request<Omit<PlatformSession, "token">>("/auth/session");
+  return { ...session, token: "cookie" } satisfies PlatformSession;
+}
+
+export function logoutPlatform() {
+  return request<{ loggedOut: true }>("/auth/logout", { method: "POST" }, "cookie");
+}
+
+export async function restorePlatformSession() {
+  const session = await request<Omit<PlatformSession, "token">>("/auth/session");
+  return { ...session, token: "cookie" } satisfies PlatformSession;
 }
 
 export function getPlatformAgents(token: string, workspaceId: string) {
@@ -307,12 +333,94 @@ export function importLocalWorkspace(
   );
 }
 
-export function getWorkspaceProjects(token: string, workspaceId: string) {
+export function getWorkspaceProjects(token: string, workspaceId: string, archived = false) {
   return request<{ projects: PlatformProject[] }>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/projects`,
+    `/workspaces/${encodeURIComponent(workspaceId)}/projects${archived ? "?archived=1" : ""}`,
     {},
     token,
   );
+}
+
+export function createWorkspaceProject(token: string, workspaceId: string, input: { name: string; description?: string }) {
+  return request<{ project: PlatformProject }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/projects`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function getPlatformResources<T>(token: string, projectId: string, type: PlatformResourceType) {
+  return request<{ resources: Array<PlatformResource<T>> }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/resources/${type}`,
+    {},
+    token,
+  );
+}
+
+export function createPlatformResource<T extends Record<string, unknown>>(token: string, projectId: string, type: PlatformResourceType, data: T) {
+  return request<{ resource: PlatformResource<T> }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/resources/${type}`,
+    { method: "POST", body: JSON.stringify({ id: data.id, data }) },
+    token,
+  );
+}
+
+export function updatePlatformResource<T extends Record<string, unknown>>(token: string, projectId: string, type: PlatformResourceType, id: string, data: T, expectedVersion: number) {
+  return request<{ resource: PlatformResource<T> }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/resources/${type}/${encodeURIComponent(id)}`,
+    { method: "PUT", body: JSON.stringify({ data, expectedVersion }) },
+    token,
+  );
+}
+
+export function archivePlatformResource(token: string, projectId: string, type: PlatformResourceType, id: string, expectedVersion: number) {
+  return request<{ id: string; archived: true; version: number }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/resources/${type}/${encodeURIComponent(id)}?expectedVersion=${expectedVersion}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export function getPlatformSettings(token: string, projectId: string) {
+  return request<{ settings: { data: Record<string, unknown>; version: number; updatedAt?: string; updatedBy?: string } }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/settings`, {}, token,
+  );
+}
+
+export function updatePlatformSettings(token: string, projectId: string, data: Record<string, unknown>, expectedVersion: number) {
+  return request<{ settings: { data: Record<string, unknown>; version: number; updatedAt: string; updatedBy: string } }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/settings`,
+    { method: "PUT", body: JSON.stringify({ data, expectedVersion }) },
+    token,
+  );
+}
+
+export function getPlatformTemplates(token: string, workspaceId: string, query = "") {
+  return request<{ templates: PlatformTemplate[] }>(`/platform/templates?workspaceId=${encodeURIComponent(workspaceId)}&q=${encodeURIComponent(query)}`, {}, token);
+}
+
+export function getPlatformTemplate(token: string, templateId: string) {
+  return request<{ template: PlatformTemplate }>(`/platform/templates/${encodeURIComponent(templateId)}`, {}, token);
+}
+
+export function createPlatformTemplate(token: string, workspaceId: string, input: { projectId: string; revisionId: string; name: string; description?: string; category?: string }) {
+  return request<{ template: PlatformTemplate }>(`/platform/templates?workspaceId=${encodeURIComponent(workspaceId)}`, { method: "POST", body: JSON.stringify(input) }, token);
+}
+
+export function updatePlatformTemplate(token: string, templateId: string, input: { name: string; description?: string; category?: string }) {
+  return request<{ template: PlatformTemplate }>(`/platform/templates/${encodeURIComponent(templateId)}`, { method: "PATCH", body: JSON.stringify(input) }, token);
+}
+
+export function deletePlatformTemplate(token: string, templateId: string) {
+  return request<{ templateId: string; deleted: boolean }>(`/platform/templates/${encodeURIComponent(templateId)}`, { method: "DELETE" }, token);
+}
+
+export function favoritePlatformTemplate(token: string, templateId: string, favorite: boolean) {
+  return request<{ templateId: string; favorite: boolean }>(`/platform/templates/${encodeURIComponent(templateId)}/favorite`, { method: favorite ? "POST" : "DELETE" }, token);
+}
+
+export function applyPlatformTemplate(token: string, templateId: string, projectId: string) {
+  return request<{ templateId: string; projectId: string; created: Record<string, string[]> }>(`/platform/templates/${encodeURIComponent(templateId)}/apply`, { method: "POST", body: JSON.stringify({ projectId }) }, token);
 }
 
 export function getPlatformProjectDocument(token: string, projectId: string) {
@@ -376,6 +484,27 @@ export function publishPlatformRevision(token: string, projectId: string, revisi
   );
 }
 
+export function submitPlatformRevision(token: string, projectId: string, revisionId: string, note?: string) {
+  return request<{ revisionId: string; status: "pending_review" }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/submit`,
+    { method: "POST", body: JSON.stringify({ note }) }, token,
+  );
+}
+
+export function rejectPlatformRevision(token: string, projectId: string, revisionId: string, note: string) {
+  return request<{ revisionId: string; status: "rejected" }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/reject`,
+    { method: "POST", body: JSON.stringify({ note }) }, token,
+  );
+}
+
+export function rollbackPlatformRevision(token: string, projectId: string, revisionId: string, note?: string) {
+  return request<{ revisionId: string; sourceRevisionId: string; status: "published" }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/rollback`,
+    { method: "POST", body: JSON.stringify({ note }) }, token,
+  );
+}
+
 export function createPlatformRun(token: string, projectId: string, input: { revisionId: string; environmentId: string; datasetVersionId?: string; upToStepId?: string }) {
   return request<{ run?: PlatformRun; runs: PlatformRun[]; runIds: string[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs`,
@@ -428,8 +557,12 @@ export function platformArtifactUrl(artifactId: string) {
   return `${apiBase}/platform/artifacts/${encodeURIComponent(artifactId)}`;
 }
 
+export function platformValidationArtifactUrl(artifactId: string) {
+  return `${apiBase}/platform/validation-artifacts/${encodeURIComponent(artifactId)}`;
+}
+
 export async function fetchPlatformArtifact(token: string, artifactId: string) {
-  const response = await fetch(platformArtifactUrl(artifactId), { headers: { authorization: `Bearer ${token}` } });
+  const response = await fetch(platformArtifactUrl(artifactId), { credentials: "include", headers: { authorization: `Bearer ${token}` } });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw new PlatformApiError(response.status, body.error ?? "PLATFORM_ARTIFACT_FETCH_FAILED");
@@ -476,6 +609,7 @@ export function debugArtifactUrl(artifactId: string) {
 
 export async function fetchDebugArtifact(token: string, artifactId: string) {
   const response = await fetch(debugArtifactUrl(artifactId), {
+    credentials: "include",
     headers: { authorization: `Bearer ${token}` },
   });
   if (!response.ok) {
@@ -555,6 +689,10 @@ export function getPlatformDatasetVersion(token: string, projectId: string, vers
   );
 }
 
+export function archivePlatformDataset(token: string, projectId: string, datasetId: string) {
+  return request<{ datasetId: string; archived: boolean }>(`/platform/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(datasetId)}`, { method: "DELETE" }, token);
+}
+
 export function getPlatformSchedules(token: string, projectId: string) {
   return request<{ schedules: PlatformSchedule[] }>(`/platform/projects/${encodeURIComponent(projectId)}/schedules`, {}, token);
 }
@@ -573,6 +711,10 @@ export function scheduleAction(token: string, projectId: string, scheduleId: str
     { method: "POST" },
     token,
   );
+}
+
+export function archivePlatformSchedule(token: string, projectId: string, scheduleId: string) {
+  return request<{ scheduleId: string; archived: boolean }>(`/platform/projects/${encodeURIComponent(projectId)}/schedules/${encodeURIComponent(scheduleId)}`, { method: "DELETE" }, token);
 }
 
 export function getPlatformWebhookTriggers(token: string, projectId: string) {
@@ -595,6 +737,10 @@ export function webhookTriggerAction(token: string, projectId: string, triggerId
   );
 }
 
+export function archivePlatformWebhookTrigger(token: string, projectId: string, triggerId: string) {
+  return request<{ triggerId: string; archived: boolean }>(`/platform/projects/${encodeURIComponent(projectId)}/webhook-triggers/${encodeURIComponent(triggerId)}`, { method: "DELETE" }, token);
+}
+
 export function getPlatformNotificationChannels(token: string, workspaceId: string) {
   return request<{ channels: PlatformNotificationChannel[] }>(
     `/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels`,
@@ -609,6 +755,10 @@ export function createPlatformNotificationChannel(token: string, workspaceId: st
     { method: "POST", body: JSON.stringify({ name: input.name, type: input.type, config: { url: input.url } }) },
     token,
   );
+}
+
+export function archivePlatformNotificationChannel(token: string, workspaceId: string, channelId: string) {
+  return request<{ channelId: string; archived: boolean }>(`/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels/${encodeURIComponent(channelId)}`, { method: "DELETE" }, token);
 }
 
 export function getPlatformNotificationSubscriptions(token: string, projectId: string) {
@@ -649,4 +799,16 @@ export function addWorkspaceMember(token: string, workspaceId: string, input: { 
 
 export function updateWorkspaceMember(token: string, workspaceId: string, memberId: string, role: PlatformMember["role"]) {
   return request<{ memberId: string; role: PlatformMember["role"] }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`, { method: "PATCH", body: JSON.stringify({ role }) }, token);
+}
+
+export function removeWorkspaceMember(token: string, workspaceId: string, memberId: string) {
+  return request<{ memberId: string; removed: boolean }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }, token);
+}
+
+export function setWorkspaceMemberEnabled(token: string, workspaceId: string, memberId: string, enabled: boolean) {
+  return request<{ memberId: string; enabled: boolean }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}/account`, { method: "PATCH", body: JSON.stringify({ enabled }) }, token);
+}
+
+export function resetWorkspaceMemberPassword(token: string, workspaceId: string, memberId: string, password: string) {
+  return request<{ memberId: string; passwordReset: boolean }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}/reset-password`, { method: "POST", body: JSON.stringify({ password }) }, token);
 }

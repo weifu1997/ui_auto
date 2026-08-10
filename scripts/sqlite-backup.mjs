@@ -1,0 +1,13 @@
+import { DatabaseSync } from "node:sqlite";
+import { copyFileSync, existsSync } from "node:fs";
+const [source, destination] = process.argv.slice(2);
+if (!existsSync(source)) process.exit(0);
+const database = new DatabaseSync(source);
+const result = database.prepare("PRAGMA integrity_check").get();
+if (result.integrity_check !== "ok") throw new Error(`Integrity check failed: ${result.integrity_check}`);
+database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+database.close();
+copyFileSync(source, destination);
+const copy = new DatabaseSync(destination, { readOnly: true });
+if (copy.prepare("PRAGMA integrity_check").get().integrity_check !== "ok") throw new Error("Backup verification failed");
+copy.close();

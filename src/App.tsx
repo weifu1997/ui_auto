@@ -10,6 +10,7 @@ import {
   getWorkspaceProjects,
   savePlatformProjectDocument,
   updatePlatformProject,
+  restorePlatformSession,
 } from "./platform-api";
 import {
   platformContextChangedEvent,
@@ -19,7 +20,12 @@ import {
   readStoredPlatformWorkspaceId,
   storePlatformDocumentVersion,
   storePlatformProjectMap,
+  storePlatformSession,
 } from "./platform-context";
+import type { PlatformSession } from "./platform-api";
+import { LoginPage } from "./LoginPage";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ServerWorkspaceSynchronizer } from "./ServerWorkspaceSynchronizer";
 import "./App.css";
 import "./responsive.css";
 import { AntdFeedbackBridge, modal } from "./antd-feedback";
@@ -45,6 +51,7 @@ const LazyProjectShell = lazy(() =>
 const routeFallback = (
   <div className="route-loading"><Spin size="large" /></div>
 );
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } } });
 
 const syncMessage = { warning: (_value: unknown) => undefined, error: (_value: unknown) => undefined };
 
@@ -65,9 +72,11 @@ function App() {
       }}
     >
       <AntdApp>
+        <QueryClientProvider client={queryClient}>
         <AntdFeedbackBridge />
-        <PlatformWorkspaceSynchronizer />
-        <Routes>
+        <ApplicationSessionGate>
+          {authenticationRequired ? <ServerWorkspaceSynchronizer /> : <PlatformWorkspaceSynchronizer />}
+          <Routes>
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route
             path="/projects"
@@ -103,10 +112,56 @@ function App() {
             }
           />
           <Route path="*" element={<Navigate to="/projects" replace />} />
-        </Routes>
+          </Routes>
+        </ApplicationSessionGate>
+        </QueryClientProvider>
       </AntdApp>
     </ConfigProvider>
   );
+}
+
+const authenticationRequired = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
+
+function ApplicationSessionGate({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<"checking" | "authenticated" | "anonymous">(
+    authenticationRequired ? "checking" : "authenticated",
+  );
+
+  useEffect(() => {
+    if (!authenticationRequired) return;
+    let active = true;
+    const restore = () => {
+      setState("checking");
+      void restorePlatformSession()
+        .then((session) => {
+          if (!active) return;
+          storePlatformSession(session);
+          setState("authenticated");
+        })
+        .catch(() => {
+          if (!active) return;
+          storePlatformSession();
+          setState("anonymous");
+        });
+    };
+    const expire = () => {
+      storePlatformSession();
+      setState("anonymous");
+    };
+    restore();
+    window.addEventListener("autoflow-auth-expired", expire);
+    return () => {
+      active = false;
+      window.removeEventListener("autoflow-auth-expired", expire);
+    };
+  }, []);
+
+  if (state === "checking") return <div className="route-loading"><Spin size="large" /></div>;
+  if (state === "anonymous") return <LoginPage onAuthenticated={(session: PlatformSession) => {
+    storePlatformSession(session);
+    setState("authenticated");
+  }} />;
+  return children;
 }
 
 type WorkspaceSnapshot = ReturnType<typeof useWorkspaceStore.getState>;

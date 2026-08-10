@@ -18,6 +18,12 @@ export function readStoredPlatformSession() {
   }
 }
 
+export function storePlatformSession(session?: PlatformSession) {
+  if (session) localStorage.setItem(platformSessionStorageKey, JSON.stringify(session));
+  else localStorage.removeItem(platformSessionStorageKey);
+  notifyPlatformContextChanged();
+}
+
 export function readStoredPlatformWorkspaceId(session = readStoredPlatformSession()) {
   const stored = localStorage.getItem(platformWorkspaceStorageKey) ?? "";
   if (session?.workspaces.some((workspace) => workspace.id === stored)) return stored;

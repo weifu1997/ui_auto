@@ -39,6 +39,7 @@ export async function startWorker(input: {
       PORT: String(input.port),
       WORKER_DATA_DIRECTORY: join(root, "data"),
       WORKER_ARTIFACT_DIRECTORY: join(root, "artifacts"),
+      PLATFORM_ARTIFACT_DIRECTORY: join(root, "platform-artifacts"),
     },
     stdio: "ignore",
     windowsHide: true,

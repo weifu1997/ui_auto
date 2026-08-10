@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
 import { chromium } from "playwright";
@@ -16,6 +16,7 @@ const port = Number(process.env.PORT ?? 8787);
 const listenHost = process.env.AUTOFLOW_LISTEN_HOST ?? "127.0.0.1";
 const artifactDirectory = resolve(process.env.WORKER_ARTIFACT_DIRECTORY ?? join("server", ".artifacts"));
 const dataDirectory = resolve(process.env.WORKER_DATA_DIRECTORY ?? join("server", ".data"));
+const staticDirectory = resolve(process.env.AUTOFLOW_STATIC_DIRECTORY ?? "dist");
 const localListenHosts = new Set(["127.0.0.1", "::1", "localhost"]);
 if (!localListenHosts.has(listenHost) && !process.env.PLATFORM_SECRET_KEY) {
   throw new Error("PLATFORM_SECRET_KEY is required when AUTOFLOW_LISTEN_HOST is not loopback");
@@ -941,6 +942,11 @@ const server = createServer(routeHandler(async (request, response, url) => {
     sendJson(response, 200, { ok: true, queue: "online" });
     return;
   }
+  if (url.pathname === "/ready") {
+    const integrity = database.prepare("PRAGMA quick_check").get() as { quick_check: string };
+    sendJson(response, integrity.quick_check === "ok" ? 200 : 503, { ok: integrity.quick_check === "ok", database: integrity.quick_check, dataDirectory, artifactDirectory });
+    return;
+  }
   if (await platform.handle(request, response, url)) return;
   if (!legacyWorkerApiEnabled && url.pathname.startsWith("/api/projects/")) {
     sendJson(response, 404, { error: "LEGACY_WORKER_API_DISABLED" });
@@ -1038,6 +1044,18 @@ const server = createServer(routeHandler(async (request, response, url) => {
       }
       if (!action && request.method === "GET") {
         sendJson(response, 200, taskResponse(task));
+        return;
+      }
+    }
+    if (request.method === "GET" && process.env.NODE_ENV === "production") {
+      const requested = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
+      let path = resolve(staticDirectory, requested);
+      if (!path.startsWith(`${staticDirectory}\\`) && path !== staticDirectory) path = join(staticDirectory, "index.html");
+      if (!existsSync(path) || !statSync(path).isFile()) path = join(staticDirectory, "index.html");
+      if (existsSync(path)) {
+        const contentTypes: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
+        response.writeHead(200, { "content-type": contentTypes[extname(path)] ?? "application/octet-stream", "cache-control": path.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable" });
+        createReadStream(path).pipe(response);
         return;
       }
     }

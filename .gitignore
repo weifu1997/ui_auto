@@ -10,6 +10,11 @@ lerna-debug.log*
 node_modules
 agent/.identity.json
 server/.platform-artifacts
+server/.artifacts
+server/.data
+test-results
+playwright-report
+blob-report
 dist
 dist-ssr
 *.local

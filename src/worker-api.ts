@@ -1,6 +1,6 @@
 import type { ElementAsset, Environment, FlowStep } from "./mock-data";
 
-const apiBase = (import.meta.env.VITE_WORKER_API_URL ?? "http://127.0.0.1:8787/api").replace(/\/$/, "");
+const apiBase = (import.meta.env.VITE_WORKER_API_URL ?? (import.meta.env.PROD ? "/api" : "http://127.0.0.1:8787/api")).replace(/\/$/, "");
 
 export type WorkerHealth = {
   ok: boolean;

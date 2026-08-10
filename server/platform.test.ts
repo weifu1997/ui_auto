@@ -9,6 +9,7 @@ import {
   nextCronTime,
   normalizeDatasetRows,
   normalizeLocatorCandidates,
+  notificationHostAllowed,
   parseCsv,
   publicFlowOutputNames,
   publicIpAddress,
@@ -205,6 +206,16 @@ describe("publicIpAddress", () => {
     expect(publicIpAddress("2001:4860:4860::8888")).toBe(true);
     expect(publicIpAddress("::1")).toBe(false);
     expect(publicIpAddress("fe80::1")).toBe(false);
+  });
+});
+
+describe("notificationHostAllowed", () => {
+  it("supports exact hosts and explicit subdomain wildcards", () => {
+    const allowlist = ["hooks.corp.test", "*.notify.corp.test"];
+    expect(notificationHostAllowed("hooks.corp.test", allowlist)).toBe(true);
+    expect(notificationHostAllowed("team.notify.corp.test", allowlist)).toBe(true);
+    expect(notificationHostAllowed("notify.corp.test", allowlist)).toBe(false);
+    expect(notificationHostAllowed("hooks.corp.test.attacker.test", allowlist)).toBe(false);
   });
 });
 

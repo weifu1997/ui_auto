@@ -14,19 +14,24 @@ import {
   nextCronTime,
   normalizeDatasetRows,
   normalizeLocatorCandidates,
+  notificationHostAllowed,
+  notificationHostAllowlist,
   notificationMaxAttempts,
   notificationRetryBaseMs,
   now,
   parseCsv,
   parseJson,
+  platformArtifactDirectory,
   publicFlowOutputNames,
   publicIpAddress,
+  roleHasCapability,
   safeArtifactName,
   webhookRateLimitPerMinute,
 } from "./platform-core";
 import type {
   AgentRecord,
   AuthUser,
+  Capability,
   DatasetVersionRecord,
   DebugSession,
   DebugSessionStatus,
@@ -46,6 +51,10 @@ import type {
   ValidatedNotificationTarget,
 } from "./platform-core";
 import { createPlatformHandler } from "./platform-handler";
+import { migrateProjectDocumentResources, runPlatformMigrations } from "./platform-migrations";
+import { ManagedRunner } from "./managed-runner";
+import type { RunnerInput } from "./runner-core";
+import type { ElementAsset, Environment, FlowStep } from "../src/mock-data";
 import {
   createCipheriv,
   createDecipheriv,
@@ -64,13 +73,11 @@ import { URL } from "node:url";
 import type { WebSocket, RawData } from "ws";
 import { WebSocketServer } from "ws";
 import { readSheet } from "read-excel-file/node";
+import { createAuditWriter } from "./platform-audit";
 
 function createPlatformServices(dataDirectory: string) {
   const database = new DatabaseSync(join(dataDirectory, "platform.sqlite"));
-  database.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-    PRAGMA busy_timeout = 5000;
+  runPlatformMigrations(database, `
     CREATE TABLE IF NOT EXISTS platform_users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -435,43 +442,8 @@ function createPlatformServices(dataDirectory: string) {
     CREATE INDEX IF NOT EXISTS webhook_deliveries_received ON webhook_deliveries (received_at);
     CREATE INDEX IF NOT EXISTS deliveries_channel ON deliveries (channel_id, status, created_at DESC);
   `);
-
-  const ensureColumn = (table: string, column: string, definition: string) => {
-    const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-    if (!columns.some((item) => item.name === column)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  };
-  ensureColumn("webhook_triggers", "signing_secret_iv", "TEXT");
-  ensureColumn("webhook_triggers", "signing_secret_tag", "TEXT");
-  ensureColumn("webhook_triggers", "signing_secret_ciphertext", "TEXT");
-  ensureColumn("deliveries", "next_attempt_at", "TEXT");
-  ensureColumn("agent_bindings", "is_default", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn("platform_projects", "source_project_id", "TEXT");
-  ensureColumn("flow_revisions", "flow_id", "TEXT");
-  ensureColumn("flow_revisions", "flow_name", "TEXT");
-  ensureColumn("flow_revisions", "environment_id", "TEXT");
-  const unscopedRevisions = database
-    .prepare(`SELECT id, flow_snapshot, environment_snapshot FROM flow_revisions WHERE flow_id IS NULL OR environment_id IS NULL`)
-    .all() as Array<{ id: string; flow_snapshot: string; environment_snapshot: string }>;
-  for (const revision of unscopedRevisions) {
-    const flow = parseJson<Record<string, unknown>>(revision.flow_snapshot, {});
-    const environment = parseJson<Record<string, unknown>>(revision.environment_snapshot, {});
-    const flowId = typeof flow.id === "string" ? flow.id : null;
-    const flowName = typeof flow.name === "string" ? flow.name.slice(0, 240) : null;
-    const environmentId = typeof environment.id === "string" ? environment.id : null;
-    database.prepare(`UPDATE flow_revisions SET flow_id = ?, flow_name = ?, environment_id = ? WHERE id = ?`)
-      .run(flowId, flowName, environmentId, revision.id);
-  }
-  database.exec(`
-    UPDATE agent_bindings SET is_default = 0;
-    UPDATE agent_bindings SET is_default = 1
-    WHERE rowid IN (
-      SELECT MAX(rowid) FROM agent_bindings GROUP BY project_id, environment_id
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS agent_bindings_default
-      ON agent_bindings (project_id, environment_id) WHERE is_default = 1;
-    CREATE UNIQUE INDEX IF NOT EXISTS platform_projects_workspace_source
-      ON platform_projects (workspace_id, source_project_id) WHERE source_project_id IS NOT NULL;
-  `);
+  const managedExecutionEnabled = process.env.AUTOFLOW_EXECUTOR_TYPE !== "agent";
+  const managedRunner = new ManagedRunner(platformArtifactDirectory);
 
   const sockets = new Map<string, WebSocket>();
   const pendingDebugCommands = new Map<string, {
@@ -489,32 +461,7 @@ function createPlatformServices(dataDirectory: string) {
     .update(configuredPlatformSecret ?? "autoflow-development-key-change-before-production")
     .digest();
 
-  function audit(
-    workspaceId: string,
-    actor: { type: "user" | "agent" | "system"; id: string },
-    action: string,
-    target: { type: string; id: string },
-    detail: Record<string, unknown> = {},
-    projectId?: string,
-  ) {
-    database
-      .prepare(
-        `INSERT INTO audit_events (id, workspace_id, project_id, actor_type, actor_id, action, target_type, target_id, detail, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        randomUUID(),
-        workspaceId,
-        projectId ?? null,
-        actor.type,
-        actor.id,
-        action,
-        target.type,
-        target.id,
-        json(detail),
-        now(),
-      );
-  }
+  const audit = createAuditWriter(database);
 
   function encrypt(value: string) {
     const iv = randomBytes(12);
@@ -545,13 +492,17 @@ function createPlatformServices(dataDirectory: string) {
       throw new Error("NOTIFICATION_URL_PROTOCOL_FORBIDDEN");
     }
     const host = target.hostname.toLowerCase();
-    if (!allowPrivateNotificationTargets && (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local"))) {
+    const explicitlyAllowed = notificationHostAllowed(host);
+    if (notificationHostAllowlist.length > 0 && !explicitlyAllowed) {
+      throw new Error("NOTIFICATION_URL_HOST_NOT_ALLOWED");
+    }
+    if ((!allowPrivateNotificationTargets || !explicitlyAllowed) && (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local"))) {
       throw new Error("NOTIFICATION_URL_PRIVATE_HOST");
     }
     const addresses = isIP(host)
         ? [host]
         : (await lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
-    if (!allowPrivateNotificationTargets) {
+    if (!allowPrivateNotificationTargets || !explicitlyAllowed) {
       if (addresses.length === 0 || addresses.some((address) => !publicIpAddress(address))) {
         throw new Error("NOTIFICATION_URL_PRIVATE_HOST");
       }
@@ -677,6 +628,28 @@ function createPlatformServices(dataDirectory: string) {
     return row ? mapAgent(row) : undefined;
   }
 
+  function managedAgent(projectId: string) {
+    const project = projectFor(projectId);
+    const id = `managed-${project.workspace_id}`;
+    database.prepare(`
+      INSERT OR IGNORE INTO agents
+        (id, workspace_id, name, credential_hash, status, browser_version, os, max_concurrency, created_at)
+      VALUES (?, ?, 'ManagedRunner', ?, 'disabled', 'bundled', 'Windows', 1, ?)
+    `).run(id, project.workspace_id, digest(`managed:${project.workspace_id}`), now());
+    return {
+      id,
+      workspaceId: project.workspace_id,
+      name: "ManagedRunner",
+      status: "disabled" as const,
+      browserVersion: "bundled",
+      os: "Windows",
+      maxConcurrency: 1,
+      currentTask: null,
+      lastSeenAt: null,
+      createdAt: now(),
+    };
+  }
+
   function queuePublishedRuns(input: {
     projectId: string;
     revisionId?: string;
@@ -686,6 +659,7 @@ function createPlatformServices(dataDirectory: string) {
     source: "manual" | "schedule" | "webhook";
     maxRuns?: number;
     upToStepId?: string;
+    dispatchKey?: string;
   }) {
     const revision = publishedRevisionFor(input.projectId, input.revisionId);
     const environment = parseJson<Record<string, unknown>>(revision.environment_snapshot, {});
@@ -693,8 +667,9 @@ function createPlatformServices(dataDirectory: string) {
     if (!environmentId) throw new PlatformError(400, "ENVIRONMENT_REQUIRED");
     if (environment.id !== environmentId) throw new PlatformError(409, "REVISION_ENVIRONMENT_MISMATCH");
     requireChromiumEnvironment(environment);
-    const agent = boundOnlineAgent(input.projectId, environmentId);
+    const agent = managedExecutionEnabled ? managedAgent(input.projectId) : boundOnlineAgent(input.projectId, environmentId);
     if (!agent) throw new PlatformError(409, "AGENT_UNAVAILABLE");
+    const executorType = managedExecutionEnabled ? "managed" : "agent";
     const datasetVersionId = input.datasetVersionId ?? (asRecord(parseJson<unknown>(revision.dataset_snapshot, null)).versionId as string | undefined);
     const datasetVersion = datasetVersionId ? datasetVersionFor(input.projectId, datasetVersionId) : undefined;
     const rows = datasetVersion ? datasetRowsFor(datasetVersion.id) : [{ rowNumber: undefined, data: undefined }];
@@ -721,6 +696,14 @@ function createPlatformServices(dataDirectory: string) {
       );
     const runIds: string[] = [];
     for (const row of rows) {
+      const dispatchKey = input.dispatchKey ? `${input.dispatchKey}:${row.rowNumber ?? 0}` : null;
+      if (dispatchKey) {
+        const existing = database.prepare("SELECT id FROM platform_runs WHERE dispatch_key = ?").get(dispatchKey) as { id: string } | undefined;
+        if (existing) {
+          runIds.push(existing.id);
+          continue;
+        }
+      }
       const run = { id: randomUUID(), projectId: input.projectId, revisionId: revision.id, agentId: agent.id, environmentId, createdAt: now() };
       const snapshot = {
         flowRevisionId: revision.id,
@@ -733,15 +716,19 @@ function createPlatformServices(dataDirectory: string) {
         datasetRow: row.data ? { number: row.rowNumber, data: row.data } : null,
         secretNames: secretNames.filter((name) => requiredSecretNames.has(name)),
         upToStepId: input.upToStepId ?? null,
-        agent: { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency },
+        executor: { type: executorType, id: agent.id, name: agent.name, browserVersion: agent.browserVersion },
+        agent: executorType === "agent" ? { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency } : null,
         trigger: input.source,
       };
-      database.prepare(`INSERT INTO platform_runs (id, project_id, revision_id, environment_id, agent_id, status, snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
-        .run(run.id, run.projectId, run.revisionId, run.environmentId, run.agentId, json(snapshot), input.createdBy, run.createdAt, run.createdAt);
-      appendRunEvent(run.id, "run.queued", { revisionId: run.revisionId, environmentId, agentId: agent.id, source: input.source, datasetVersionId, datasetRow: row.rowNumber });
+      database.prepare(`INSERT INTO platform_runs (id, project_id, revision_id, environment_id, agent_id, executor_type, dispatch_key, status, snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
+        .run(run.id, run.projectId, run.revisionId, run.environmentId, run.agentId, executorType, dispatchKey, json(snapshot), input.createdBy, run.createdAt, run.createdAt);
+      appendRunEvent(run.id, "run.queued", { revisionId: run.revisionId, environmentId, executorType, source: input.source, datasetVersionId, datasetRow: row.rowNumber });
       runIds.push(run.id);
     }
-    for (const runId of runIds) dispatchQueuedRun(runId);
+    for (const runId of runIds) {
+      if (managedExecutionEnabled) enqueueManagedRun(runId);
+      else dispatchQueuedRun(runId);
+    }
     return { runIds, revision, environmentId, datasetVersionId };
   }
 
@@ -810,6 +797,117 @@ function createPlatformServices(dataDirectory: string) {
     }
   }
 
+  function managedRunnerInput(run: PlatformRun): RunnerInput {
+    const snapshot = run.snapshot;
+    const flow = asRecord(snapshot.flow);
+    const environment = asRecord(snapshot.environment) as unknown as Environment;
+    const variableRows = database.prepare(`SELECT data FROM project_resources WHERE project_id = ? AND resource_type = 'variables' AND archived_at IS NULL`)
+      .all(run.projectId) as Array<{ data: string }>;
+    const variables: Record<string, string> = {};
+    for (const row of variableRows) {
+      const variable = parseJson<Record<string, unknown>>(row.data, {});
+      if (variable.secret === true || typeof variable.name !== "string" || typeof variable.value !== "string") continue;
+      const scope = variable.scope === "环境" ? "env" : variable.scope === "项目" ? "project" : "";
+      variables[scope ? `${scope}.${variable.name}` : variable.name] = variable.value;
+    }
+    const secretNames = Array.isArray(snapshot.secretNames) ? snapshot.secretNames.filter((item): item is string => typeof item === "string") : [];
+    const datasetRow = asRecord(asRecord(snapshot.datasetRow).data);
+    return {
+      environment,
+      flow: {
+        id: typeof flow.id === "string" ? flow.id : run.revisionId,
+        name: typeof flow.name === "string" ? flow.name : "Published flow",
+        steps: Array.isArray(flow.steps) ? flow.steps as FlowStep[] : [],
+      },
+      elements: Array.isArray(snapshot.elements) ? snapshot.elements as ElementAsset[] : [],
+      variables,
+      data: Object.fromEntries(Object.entries(datasetRow).map(([key, value]) => [key, String(value ?? "")])),
+      secrets: secretValues(run.projectId, secretNames),
+      upToStepId: typeof snapshot.upToStepId === "string" ? snapshot.upToStepId : undefined,
+    };
+  }
+
+  function enqueueManagedRun(runId: string) {
+    const run = runById(runId);
+    if (run.status !== "queued") return;
+    managedRunner.enqueue(run.id, managedRunnerInput(run), {
+      started() {
+        database.prepare(`UPDATE platform_runs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'`).run(now(), run.id);
+        appendRunEvent(run.id, "run.started", { executorType: "managed" });
+      },
+      event(kind, data) {
+        appendRunEvent(run.id, kind, redactRunValue(run, data) as Record<string, unknown>);
+      },
+      artifact(input) {
+        const artifact = { id: randomUUID(), name: safeArtifactName(input.name), contentType: input.contentType.slice(0, 120) };
+        database.prepare(`INSERT INTO platform_artifacts (id, run_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .run(artifact.id, run.id, run.projectId, artifact.name, artifact.contentType, input.path, now());
+        appendRunEvent(run.id, "artifact.created", { artifactId: artifact.id, name: artifact.name, contentType: artifact.contentType });
+      },
+      completed(result) {
+        const safeResult = redactRunValue(run, result) as Record<string, unknown>;
+        const status = result.status as PlatformRunStatus;
+        database.prepare(`UPDATE platform_runs SET status = ?, result = ?, updated_at = ? WHERE id = ?`)
+          .run(status, json(safeResult), now(), run.id);
+        persistFlowOutputs(run, safeResult);
+        appendRunEvent(run.id, "run.complete", { status, result: safeResult, executorType: "managed" });
+        queueRunDeliveries(runById(run.id), status);
+      },
+    });
+  }
+
+  function enqueueManagedValidation(validation: ElementValidation, environment: Record<string, unknown>) {
+    const element = validation.element as unknown as ElementAsset;
+    managedRunner.enqueueValidation(validation.id, {
+      environment: environment as unknown as Environment,
+      element,
+    }, {
+      started() {
+        database.prepare("UPDATE element_validations SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'").run(now(), validation.id);
+      },
+      artifact(input) {
+        const artifact = { id: randomUUID(), name: safeArtifactName(input.name), contentType: input.contentType.slice(0, 120) };
+        database.prepare("INSERT INTO element_validation_artifacts (id, validation_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(artifact.id, validation.id, validation.projectId, artifact.name, artifact.contentType, input.path, now());
+      },
+      completed(result) {
+        const artifact = database.prepare("SELECT id FROM element_validation_artifacts WHERE validation_id = ? ORDER BY created_at DESC LIMIT 1").get(validation.id) as { id: string } | undefined;
+        const status = result.status;
+        const payload = { count: result.count, firstMatch: result.firstMatch, elapsedMs: result.elapsedMs, screenshotId: artifact?.id };
+        database.prepare("UPDATE element_validations SET status = ?, result = ?, error = ?, updated_at = ? WHERE id = ?")
+          .run(status, json(payload), result.error ?? null, now(), validation.id);
+      },
+    });
+  }
+
+  function createElementValidation(projectId: string, environmentId: string, element: Record<string, unknown>, createdBy: string) {
+    const resource = database.prepare("SELECT data FROM project_resources WHERE project_id = ? AND resource_type = 'environments' AND resource_id = ? AND archived_at IS NULL")
+      .get(projectId, environmentId) as { data: string } | undefined;
+    const document = resource ? undefined : documentFor(projectId);
+    const environments = Array.isArray(document?.data.environments) ? document.data.environments.map(asRecord) : [];
+    const environment = resource ? parseJson<Record<string, unknown>>(resource.data, {}) : environments.find((item) => item.id === environmentId);
+    if (!environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
+    requireChromiumEnvironment(environment);
+    requireSameOriginElementPath(environment, element);
+    const agent = managedExecutionEnabled ? managedAgent(projectId) : candidateAgent(projectId, environmentId);
+    if (!agent || (!managedExecutionEnabled && !sockets.has(agent.id))) throw new PlatformError(409, "AGENT_UNAVAILABLE");
+    const createdAt = now();
+    const id = randomUUID();
+    database.prepare("INSERT INTO element_validations (id, project_id, environment_id, agent_id, status, element_snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)")
+      .run(id, projectId, environmentId, agent.id, json(element), createdBy, createdAt, createdAt);
+    const validation = elementValidationById(id);
+    if (managedExecutionEnabled) enqueueManagedValidation(validation, environment);
+    else if (!sendAgent(agent.id, agentValidationPayload(validation))) {
+      database.prepare("UPDATE element_validations SET status = 'failed', error = 'AGENT_UNAVAILABLE', updated_at = ? WHERE id = ?").run(now(), id);
+      throw new PlatformError(409, "AGENT_UNAVAILABLE");
+    }
+    return elementValidationById(id);
+  }
+
+  function cancelManagedRun(runId: string) {
+    return managedRunner.cancel(runId);
+  }
+
   function notificationPayload(run: PlatformRun, status: PlatformRunStatus) {
     const latestFailure = database
       .prepare(`SELECT kind, data FROM platform_run_events WHERE run_id = ? AND (kind LIKE '%failed%' OR kind LIKE '%error%') ORDER BY id DESC LIMIT 1`)
@@ -839,6 +937,7 @@ function createPlatformServices(dataDirectory: string) {
         `SELECT c.id FROM notification_subscriptions s
          JOIN notification_channels c ON c.id = s.channel_id
          WHERE s.project_id = ? AND c.workspace_id = ? AND c.enabled = 1
+           AND c.archived_at IS NULL
            AND ((? = 'success' AND s.on_success = 1) OR (? != 'success' AND s.on_failure = 1))`,
       )
       .all(run.projectId, project.workspace_id, status, status) as Array<{ id: string }>;
@@ -911,12 +1010,12 @@ function createPlatformServices(dataDirectory: string) {
 
   function processDueSchedules() {
     const rows = database
-      .prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, cron_expression, timezone FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT 20`)
-      .all(now()) as Array<{ id: string; project_id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; cron_expression: string; timezone: string }>;
+      .prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, cron_expression, timezone, next_run_at FROM schedules WHERE enabled = 1 AND archived_at IS NULL AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT 20`)
+      .all(now()) as Array<{ id: string; project_id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; cron_expression: string; timezone: string; next_run_at: string }>;
     for (const schedule of rows) {
       const attemptedAt = now();
       try {
-        const queued = queuePublishedRuns({ projectId: schedule.project_id, revisionId: schedule.revision_id, environmentId: schedule.environment_id, datasetVersionId: schedule.dataset_version_id ?? undefined, createdBy: `schedule:${schedule.id}`, source: "schedule" });
+        const queued = queuePublishedRuns({ projectId: schedule.project_id, revisionId: schedule.revision_id, environmentId: schedule.environment_id, datasetVersionId: schedule.dataset_version_id ?? undefined, createdBy: `schedule:${schedule.id}`, source: "schedule", dispatchKey: `schedule:${schedule.id}:${schedule.next_run_at}` });
         database.prepare(`UPDATE schedules SET last_run_at = ?, next_run_at = ?, updated_at = ? WHERE id = ?`).run(attemptedAt, nextCronTime(schedule.cron_expression, schedule.timezone), now(), schedule.id);
         const project = projectFor(schedule.project_id);
         audit(project.workspace_id, { type: "system", id: `schedule:${schedule.id}` }, "schedule.triggered", { type: "schedule", id: schedule.id }, { runIds: queued.runIds }, schedule.project_id);
@@ -1010,7 +1109,7 @@ function createPlatformServices(dataDirectory: string) {
       .prepare(
         `SELECT u.id, u.email, u.name FROM platform_sessions s
          JOIN platform_users u ON u.id = s.user_id
-         WHERE s.token_hash = ? AND s.expires_at > ?`,
+         WHERE s.token_hash = ? AND s.expires_at > ? AND u.enabled = 1`,
       )
       .get(digest(token), now()) as AuthUser | undefined;
     if (!row) throw new PlatformError(401, "SESSION_INVALID");
@@ -1048,14 +1147,26 @@ function createPlatformServices(dataDirectory: string) {
     return { project, role };
   }
 
+  function requireProjectCapability(projectId: string, userId: string, capability: Capability) {
+    const { project, role } = requireProjectRole(projectId, userId);
+    if (!roleHasCapability(role, capability)) throw new PlatformError(403, "CAPABILITY_REQUIRED");
+    return { project, role };
+  }
+
   function normalizeRole(value: unknown): Role {
-    if (value === "owner" || value === "admin" || value === "editor" || value === "viewer") return value;
+    if (value === "owner" || value === "admin" || value === "publisher" || value === "product" || value === "tester" || value === "operations" || value === "editor" || value === "viewer") return value;
     throw new PlatformError(400, "WORKSPACE_ROLE_INVALID");
   }
 
   function requireWorkspaceRole(workspaceId: string, userId: string, admin = false) {
     const role = memberRole(workspaceId, userId);
     if (admin && role !== "owner" && role !== "admin") throw new PlatformError(403, "WORKSPACE_ADMIN_REQUIRED");
+    return role;
+  }
+
+  function requireWorkspaceCapability(workspaceId: string, userId: string, capability: Capability) {
+    const role = memberRole(workspaceId, userId);
+    if (!roleHasCapability(role, capability)) throw new PlatformError(403, "CAPABILITY_REQUIRED");
     return role;
   }
 
@@ -1080,6 +1191,7 @@ function createPlatformServices(dataDirectory: string) {
          ON CONFLICT(project_id) DO UPDATE SET data = excluded.data, version = excluded.version, updated_at = excluded.updated_at`,
       )
       .run(projectId, json(data), version, now());
+    migrateProjectDocumentResources(database, projectId, data);
     return { version, data };
   }
 
@@ -1125,11 +1237,11 @@ function createPlatformServices(dataDirectory: string) {
   function runById(runId: string) {
     const row = database
       .prepare(
-        `SELECT id, project_id, revision_id, environment_id, agent_id, status, snapshot, cancellation_requested, result, created_at, updated_at
+        `SELECT id, project_id, revision_id, environment_id, agent_id, executor_type, status, snapshot, cancellation_requested, result, created_at, updated_at
          FROM platform_runs WHERE id = ?`,
       )
       .get(runId) as
-      | { id: string; project_id: string; revision_id: string; environment_id: string; agent_id: string; status: PlatformRunStatus; snapshot: string; cancellation_requested: number; result: string | null; created_at: string; updated_at: string }
+      | { id: string; project_id: string; revision_id: string; environment_id: string; agent_id: string; executor_type: "managed" | "agent"; status: PlatformRunStatus; snapshot: string; cancellation_requested: number; result: string | null; created_at: string; updated_at: string }
       | undefined;
     if (!row) throw new PlatformError(404, "RUN_NOT_FOUND");
     return {
@@ -1138,6 +1250,7 @@ function createPlatformServices(dataDirectory: string) {
       revisionId: row.revision_id,
       environmentId: row.environment_id,
       agentId: row.agent_id,
+      executorType: row.executor_type,
       status: row.status,
       snapshot: parseJson<Record<string, unknown>>(row.snapshot, {}),
       result: parseJson<Record<string, unknown> | undefined>(row.result, undefined),
@@ -1196,7 +1309,7 @@ function createPlatformServices(dataDirectory: string) {
     return {
       ...run,
       lease: lease ? { ...lease, expired: new Date(lease.expiresAt).getTime() <= Date.now() } : undefined,
-      agent: agent
+      agent: run.executorType === "agent" && agent
         ? {
             id: agent.id,
             name: agent.name,
@@ -1395,6 +1508,7 @@ function createPlatformServices(dataDirectory: string) {
         `SELECT v.id FROM element_validations v
          JOIN agents a ON a.id = v.agent_id
          WHERE v.status IN ('queued', 'running')
+           AND v.agent_id NOT LIKE 'managed-%'
            AND (a.status != 'online' OR a.last_seen_at IS NULL OR a.last_seen_at <= ?)`,
       )
       .all(cutoff) as Array<{ id: string }>;
@@ -1836,6 +1950,16 @@ function createPlatformServices(dataDirectory: string) {
     });
   });
 
+  if (managedExecutionEnabled) {
+    const interrupted = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'running'`).all() as Array<{ id: string }>;
+    for (const item of interrupted) {
+      database.prepare(`UPDATE platform_runs SET status = 'failed', interruption_reason = 'SERVICE_RESTARTED', result = ?, updated_at = ? WHERE id = ?`)
+        .run(json({ error: "SERVICE_RESTARTED", interrupted: true }), now(), item.id);
+      appendRunEvent(item.id, "run.interrupted", { reason: "SERVICE_RESTARTED" });
+    }
+    const recoverable = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'queued' ORDER BY created_at`).all() as Array<{ id: string }>;
+    for (const item of recoverable) enqueueManagedRun(item.id);
+  }
 
   const maintenanceTimer = setInterval(() => {
     try {
@@ -1861,6 +1985,8 @@ function createPlatformServices(dataDirectory: string) {
     appendRunEvent,
     audit,
     candidateAgent,
+    cancelManagedRun,
+    createElementValidation,
     createAuthSession,
     createWorkspace,
     createWorkspaceInvitation,
@@ -1891,10 +2017,12 @@ function createPlatformServices(dataDirectory: string) {
     recoverStaleElementValidations,
     requireChromiumEnvironment,
     requireProjectAdmin,
+    requireProjectCapability,
     requireProjectRole,
     requireRevisionEnvironment,
     requireSameOriginElementPath,
     requireWorkspaceRole,
+    requireWorkspaceCapability,
     runById,
     runResponse,
     sendAgent,

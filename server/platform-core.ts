@@ -1,8 +1,6 @@
 import {
   createHash,
   createHmac,
-  randomBytes,
-  scryptSync,
   timingSafeEqual,
 } from "node:crypto";
 import { basename, join, resolve } from "node:path";
@@ -11,11 +9,19 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { PlatformError } from "./http-utils";
+import { notificationHostAllowed as hostAllowed } from "./platform-automations";
+import { asRecord } from "./platform-resources";
+
+export { passwordHash, passwordMatches } from "./platform-auth";
+export { cleanProjectSlug } from "./platform-projects";
+export { asRecord } from "./platform-resources";
+export { revisionNumber } from "./platform-revisions";
+export { roleHasCapability } from "./platform-workspaces";
+export type { Capability, Role } from "./platform-workspaces";
 
 export { PlatformError, readBody, readJson, sendError, sendJson } from "./http-utils";
 
-export type Role = "owner" | "admin" | "editor" | "viewer";
-export type RevisionStatus = "draft" | "published" | "superseded";
+export type RevisionStatus = "draft" | "pending_review" | "published" | "rejected" | "deprecated" | "superseded";
 export type PlatformRunStatus = "queued" | "dispatched" | "running" | "success" | "failed" | "canceled";
 export type LeaseStatus = "offered" | "leased" | "expired" | "completed" | "canceled";
 export type DebugSessionStatus = "requested" | "active" | "paused" | "ending" | "ended" | "failed" | "expired";
@@ -55,6 +61,7 @@ export type PlatformRun = {
   projectId: string;
   revisionId: string;
   agentId: string;
+  executorType: "managed" | "agent";
   environmentId: string;
   status: PlatformRunStatus;
   snapshot: Record<string, unknown>;
@@ -142,6 +149,14 @@ export const notificationMaxAttempts = Math.max(1, Number(process.env.NOTIFICATI
 export const notificationRetryBaseMs = Math.max(1_000, Number(process.env.NOTIFICATION_RETRY_BASE_MS ?? 30_000));
 export const allowPrivateNotificationTargets = process.env.PLATFORM_ALLOW_PRIVATE_NOTIFICATION_URLS === "1";
 export const allowInsecureNotificationTargets = process.env.PLATFORM_ALLOW_INSECURE_NOTIFICATION_URLS === "1";
+export const notificationHostAllowlist = (process.env.PLATFORM_NOTIFICATION_HOST_ALLOWLIST ?? "")
+  .split(",")
+  .map((host) => host.trim().toLowerCase())
+  .filter(Boolean);
+
+export function notificationHostAllowed(host: string, allowlist = notificationHostAllowlist) {
+  return hostAllowed(host, allowlist);
+}
 
 export function now() {
   return new Date().toISOString();
@@ -149,24 +164,6 @@ export function now() {
 
 export function digest(value: string) {
   return createHash("sha256").update(value).digest("hex");
-}
-
-export function passwordHash(password: string) {
-  const salt = randomBytes(16);
-  const derived = scryptSync(password, salt, 64);
-  return `${salt.toString("base64url")}:${derived.toString("base64url")}`;
-}
-
-export function passwordMatches(password: string, encoded: string) {
-  const [saltText, hashText] = encoded.split(":");
-  if (!saltText || !hashText) return false;
-  try {
-    const expected = Buffer.from(hashText, "base64url");
-    const actual = scryptSync(password, Buffer.from(saltText, "base64url"), expected.length);
-    return actual.length === expected.length && timingSafeEqual(actual, expected);
-  } catch {
-    return false;
-  }
 }
 
 export function json(value: unknown) {
@@ -184,31 +181,18 @@ export function parseJson<T>(value: string | null, fallback: T): T {
 
 export function authorization(request: IncomingMessage) {
   const value = request.headers.authorization;
-  if (!value?.startsWith("Bearer ")) return undefined;
-  return value.slice("Bearer ".length).trim();
+  if (value?.startsWith("Bearer ")) {
+    const bearer = value.slice("Bearer ".length).trim();
+    if (bearer && bearer !== "cookie") return bearer;
+  }
+  const cookie = request.headers.cookie?.split(";")
+    .map((item) => item.trim().split("="))
+    .find(([name]) => name === "autoflow_session");
+  return cookie?.[1] ? decodeURIComponent(cookie[1]) : undefined;
 }
 
 export function leaseExpiresAt() {
   return new Date(Date.now() + agentLeaseDurationMs).toISOString();
-}
-
-export function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-export function cleanProjectSlug(value: string) {
-  const cleaned = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned || "project";
-}
-
-export function revisionNumber(rows: Array<{ revision_number: number }>) {
-  return Math.max(0, ...rows.map((row) => row.revision_number)) + 1;
 }
 
 export function safeArtifactName(value: string) {
@@ -400,4 +384,3 @@ export function webhookSignatureMatches(secret: string, timestamp: string, body:
   const expectedBuffer = Buffer.from(expected);
   return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
 }
-

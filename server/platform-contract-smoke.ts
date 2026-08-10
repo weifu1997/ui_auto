@@ -46,6 +46,7 @@ try {
       AUTOFLOW_LISTEN_HOST: "0.0.0.0",
       AUTOFLOW_CORS_ORIGINS: "http://console.example.test",
       PLATFORM_SECRET_KEY: "platform-contract-smoke-secret",
+      AUTOFLOW_EXECUTOR_TYPE: "agent",
     },
   });
   root = worker.root;
@@ -75,6 +76,10 @@ try {
     body: JSON.stringify({ email: "owner@example.test", name: "Owner", password: "development-password" }),
   });
   if (!registration.response.ok || !registration.body.token) throw new Error("Platform registration failed");
+  const sessionCookie = registration.response.headers.get("set-cookie")?.split(";", 1)[0];
+  if (!sessionCookie?.startsWith("autoflow_session=")) throw new Error("Platform registration did not issue an HttpOnly session cookie");
+  const cookieSession = await api<{ workspaces: Array<{ id: string }> }>("/api/auth/session", { headers: { cookie: sessionCookie } });
+  if (!cookieSession.response.ok || !cookieSession.body.workspaces[0]?.id) throw new Error("Cookie session could not be restored");
   const rejectedLogin = await api<{ error?: string }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email: "owner@example.test", password: "wrong-password" }),
@@ -108,6 +113,30 @@ try {
     body: JSON.stringify({ data: { environments: [internalEnvironment] }, expectedVersion: currentDocument.body.version }),
   });
   if (!document.response.ok) throw new Error(`Project document setup failed: ${JSON.stringify(document.body)}`);
+  const migratedEnvironments = await api<{ resources: Array<{ id: string }> }>(`/api/platform/projects/${projectId}/resources/environments`, { headers: headers(token) });
+  if (!migratedEnvironments.response.ok || migratedEnvironments.body.resources[0]?.id !== internalEnvironment.id) {
+    throw new Error("Project document resources were not migrated idempotently");
+  }
+  const secretVariable = await api<{ resource: { id: string; data: { value?: string }; version: number } }>(`/api/platform/projects/${projectId}/resources/variables`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ id: "login-password", data: { id: "login-password", name: "login_password", value: "must-not-persist", secret: true } }),
+  });
+  if (!secretVariable.response.ok || secretVariable.body.resource.data.value !== "") throw new Error("Secret variable plaintext entered the resource model");
+  const variableUpdate = await api<{ resource: { version: number } }>(`/api/platform/projects/${projectId}/resources/variables/login-password`, {
+    method: "PATCH",
+    headers: headers(token),
+    body: JSON.stringify({ data: { description: "rotated" }, expectedVersion: 1 }),
+  });
+  if (!variableUpdate.response.ok || variableUpdate.body.resource.version !== 2) throw new Error("Resource optimistic update failed");
+  const variableConflict = await api<{ error?: string }>(`/api/platform/projects/${projectId}/resources/variables/login-password`, {
+    method: "PATCH",
+    headers: headers(token),
+    body: JSON.stringify({ data: { description: "stale" }, expectedVersion: 1 }),
+  });
+  if (variableConflict.response.status !== 409 || variableConflict.body.error !== "RESOURCE_VERSION_CONFLICT") {
+    throw new Error("A stale resource update was not rejected");
+  }
   const unsupportedRevision = await api<{ error?: string }>(`/api/platform/projects/${projectId}/revisions`, {
     method: "POST",
     headers: headers(token),
@@ -162,6 +191,25 @@ try {
   ) {
     throw new Error(`Published revisions were not isolated by flow and environment: ${JSON.stringify(publishedRevisions.body)}`);
   }
+
+  const reviewDraft = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: headers(token), body: JSON.stringify({ flow: { id: "review-flow", name: "Review flow", steps: [] }, environment: internalEnvironment, elements: [] }) });
+  const reviewId = reviewDraft.body.revision.id;
+  const submitted = await api<{ status: string }>(`/api/platform/projects/${projectId}/revisions/${reviewId}/submit`, { method: "POST", headers: headers(token), body: JSON.stringify({ note: "Ready" }) });
+  const rejected = await api<{ status: string }>(`/api/platform/projects/${projectId}/revisions/${reviewId}/reject`, { method: "POST", headers: headers(token), body: JSON.stringify({ note: "Add an assertion" }) });
+  const resubmitted = await api<{ status: string }>(`/api/platform/projects/${projectId}/revisions/${reviewId}/submit`, { method: "POST", headers: headers(token), body: JSON.stringify({ note: "Assertion added" }) });
+  if (submitted.body.status !== "pending_review" || rejected.body.status !== "rejected" || resubmitted.body.status !== "pending_review") throw new Error("Revision review state machine failed");
+
+  const templatePublished = await api<{ template: { id: string } }>(`/api/platform/templates?workspaceId=${workspaceId}`, { method: "POST", headers: headers(token), body: JSON.stringify({ projectId, revisionId: secondaryRevisionId, name: "Contract template", category: "Smoke" }) });
+  const templateId = templatePublished.body.template?.id;
+  if (!templatePublished.response.ok || !templateId) throw new Error("Template publication failed");
+  const templateUpdated = await api<{ template: { name: string; category: string } }>(`/api/platform/templates/${templateId}`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ name: "Updated contract template", description: "updated metadata", category: "Regression" }) });
+  if (!templateUpdated.response.ok || templateUpdated.body.template.name !== "Updated contract template" || templateUpdated.body.template.category !== "Regression") throw new Error("Template creator update failed");
+  const templateDetail = await api<{ template: { snapshot: { variables: Array<{ secret?: boolean; value?: string }> } } }>(`/api/platform/templates/${templateId}`, { headers: headers(token) });
+  if (templateDetail.body.template.snapshot.variables.some((variable) => variable.secret && variable.value)) throw new Error("Template snapshot leaked a secret value");
+  await api(`/api/platform/templates/${templateId}/favorite`, { method: "POST", headers: headers(token) });
+  const targetProject = await api<{ project: { id: string } }>(`/api/workspaces/${workspaceId}/projects`, { method: "POST", headers: headers(token), body: JSON.stringify({ name: "Template target" }) });
+  const applied = await api<{ created: { flows: string[] } }>(`/api/platform/templates/${templateId}/apply`, { method: "POST", headers: headers(token), body: JSON.stringify({ projectId: targetProject.body.project.id }) });
+  if (!applied.response.ok || applied.body.created.flows[0] === "secondary-flow") throw new Error("Template assets were not cloned with new IDs");
 
   const agentRegistration = await api<{ registrationToken: string }>("/api/agent-tokens", {
     method: "POST",
@@ -464,13 +512,16 @@ try {
   const viewerRead = await api(`/api/platform/projects/${projectId}/revisions`, { headers: headers(viewerRegistration.body.token) });
   if (!viewerRead.response.ok) throw new Error("Viewer should retain project read access");
   const viewerPublish = await api<{ error?: string }>(`/api/platform/projects/${projectId}/revisions/${dataRevisionId}/publish`, { method: "POST", headers: headers(viewerRegistration.body.token) });
-  if (viewerPublish.response.status !== 403 || viewerPublish.body.error !== "WORKSPACE_WRITE_DENIED") throw new Error("Viewer was allowed to publish a release");
+  if (viewerPublish.response.status !== 403 || viewerPublish.body.error !== "CAPABILITY_REQUIRED") throw new Error("Viewer was allowed to publish a release");
   const viewerDraft = await api(`/api/platform/projects/${projectId}/revisions`, {
     method: "POST",
     headers: headers(viewerRegistration.body.token),
     body: JSON.stringify({ flow: { id: "viewer-flow", steps: [] }, environment: { id: "internal" }, elements: [] }),
   });
   if (viewerDraft.response.status !== 403) throw new Error("Viewer was allowed to create a draft");
+  const ownerId = registration.body.token ? (await api<{ members: Array<{ id: string; role: string }> }>(`/api/workspaces/${workspaceId}/members`, { headers: headers(token) })).body.members.find((member) => member.role === "owner")?.id : undefined;
+  const disableLastOwner = await api<{ error?: string }>(`/api/workspaces/${workspaceId}/members/${ownerId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: false }) });
+  if (disableLastOwner.response.status !== 409 || disableLastOwner.body.error !== "LAST_WORKSPACE_OWNER_REQUIRED") throw new Error("Last workspace owner could be disabled");
 
   const invitedMember = await api<{ member?: { id: string }; invitationToken?: string }>(`/api/workspaces/${workspaceId}/members`, {
     method: "POST",
@@ -492,6 +543,34 @@ try {
     body: JSON.stringify({ email: "invited@example.test", name: "Invited", password: "invited-password", invitationToken: invitedMember.body.invitationToken }),
   });
   if (!acceptedInvitation.response.ok || !acceptedInvitation.body.token) throw new Error("Valid invitation token was not accepted");
+  const invitedId = invitedMember.body.member.id;
+  const disabledInvited = await api<{ enabled: boolean }>(`/api/workspaces/${workspaceId}/members/${invitedId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: false }) });
+  if (!disabledInvited.response.ok || disabledInvited.body.enabled !== false) throw new Error("Account disable failed");
+  const disabledSession = await api<{ error?: string }>("/api/auth/session", { headers: headers(acceptedInvitation.body.token) });
+  if (disabledSession.response.status !== 401) throw new Error("Disabled account retained an active session");
+  await api(`/api/workspaces/${workspaceId}/members/${invitedId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: true }) });
+  const resetPassword = await api(`/api/workspaces/${workspaceId}/members/${invitedId}/reset-password`, { method: "POST", headers: headers(token), body: JSON.stringify({ password: "invited-new-password" }) });
+  if (!resetPassword.response.ok) throw new Error("Administrator password reset failed");
+  const resetLogin = await api<{ token?: string }>("/api/auth/login", { method: "POST", body: JSON.stringify({ email: "invited@example.test", password: "invited-new-password" }) });
+  if (!resetLogin.response.ok || !resetLogin.body.token) throw new Error("Reset password could not be used");
+  const archivedDataset = await api(`/api/platform/projects/${projectId}/datasets/${importedDataset.body.dataset.id}`, { method: "DELETE", headers: headers(token) });
+  const archivedSchedule = await api(`/api/platform/projects/${projectId}/schedules/${schedule.body.schedule.id}`, { method: "DELETE", headers: headers(token) });
+  const archivedWebhook = await api(`/api/platform/projects/${projectId}/webhook-triggers/${webhook.body.trigger.id}`, { method: "DELETE", headers: headers(token) });
+  const archivedChannel = await api(`/api/platform/workspaces/${workspaceId}/notification-channels/${channelId}`, { method: "DELETE", headers: headers(token) });
+  if (![archivedDataset, archivedSchedule, archivedWebhook, archivedChannel].every((item) => item.response.ok)) throw new Error("Governance resources could not be archived");
+  const archivedLists = await Promise.all([
+    api<{ datasets: unknown[] }>(`/api/platform/projects/${projectId}/datasets`, { headers: headers(token) }),
+    api<{ schedules: unknown[] }>(`/api/platform/projects/${projectId}/schedules`, { headers: headers(token) }),
+    api<{ triggers: unknown[] }>(`/api/platform/projects/${projectId}/webhook-triggers`, { headers: headers(token) }),
+    api<{ channels: unknown[] }>(`/api/platform/workspaces/${workspaceId}/notification-channels`, { headers: headers(token) }),
+  ]);
+  if (archivedLists.some((item) => !item.response.ok) || archivedLists.some((item) => Object.values(item.body)[0]?.length !== 0)) throw new Error("Archived governance resources remained visible");
+  const projectArchived = await api(`/api/platform/projects/${projectId}`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ archived: true }) });
+  const archivedProjects = await api<{ projects: Array<{ id: string }> }>(`/api/workspaces/${workspaceId}/projects?archived=1`, { headers: headers(token) });
+  if (!projectArchived.response.ok || !archivedProjects.body.projects.some((project) => project.id === projectId)) throw new Error("Archived project was not listed for recovery");
+  const projectRestored = await api(`/api/platform/projects/${projectId}`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ archived: false }) });
+  const activeProjects = await api<{ projects: Array<{ id: string }> }>(`/api/workspaces/${workspaceId}/projects`, { headers: headers(token) });
+  if (!projectRestored.response.ok || !activeProjects.body.projects.some((project) => project.id === projectId)) throw new Error("Archived project could not be restored");
   socket.close();
   console.log("Platform contract smoke test passed");
 } finally {

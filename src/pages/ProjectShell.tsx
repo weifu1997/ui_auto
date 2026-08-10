@@ -34,7 +34,9 @@ export function ProjectShell() {
   const activeSection = (
     section && section in sectionMeta ? section : "overview"
   ) as ProjectSection;
+  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
   if (!project) return <Navigate to="/projects" replace />;
+  if (production && ["agents", "debug"].includes(activeSection)) return <Navigate to={`/project/${project.id}/overview`} replace />;
   if (
     projectMode !== "platform-enabled"
     && ["data", "agents", "debug", "automations", "governance"].includes(activeSection)

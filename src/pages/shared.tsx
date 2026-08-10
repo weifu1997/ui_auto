@@ -3,14 +3,16 @@
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
 import type { PlatformRun, PlatformSession } from "../platform-api";
-import { readStoredPlatformSession } from "../platform-context";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession } from "../platform-context";
+import { logoutPlatform } from "../platform-api";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { WorkerApiError, getWorkerHealth, subscribeToTask } from "../worker-api";
 import type { WorkerTask } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
-import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, ExperimentOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
-import { Alert, Avatar, Badge, Input, Select, Tag, Tooltip } from "antd";
+import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
+import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, ExperimentOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import "../App.css";
 import "../responsive.css";
@@ -43,10 +45,10 @@ export const sectionMeta: Record<
   agents: { label: "执行节点", icon: <CloudServerOutlined /> },
   debug: { label: "调试", icon: <ExperimentOutlined /> },
   automations: { label: "持续回归", icon: <ClockCircleOutlined /> },
-  governance: { label: "治理分析", icon: <SafetyCertificateOutlined /> },
+  governance: { label: "系统管理", icon: <SafetyCertificateOutlined /> },
   runs: { label: "运行中心", icon: <PlayCircleFilled /> },
   settings: { label: "项目设置", icon: <SettingOutlined /> },
-  platform: { label: "发布与远程执行", icon: <CloudServerOutlined /> },
+  platform: { label: "发布管理", icon: <CloudServerOutlined /> },
 };
 
 export const statusMeta = {
@@ -77,6 +79,10 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   const location = useLocation();
   const isProjects = location.pathname === "/projects";
   const isTemplates = location.pathname === "/templates";
+  const session = readStoredPlatformSession();
+  const workspaceId = readStoredPlatformWorkspaceId(session);
+  const role = session?.workspaces.find((workspace) => workspace.id === workspaceId)?.role ?? "viewer";
+  const roleLabels: Record<string, string> = { owner: "工作空间所有者", admin: "管理员", publisher: "发布者", product: "产品", tester: "测试", operations: "运营", editor: "编辑者", viewer: "只读成员" };
   return (
     <aside className={`workspace-side ${compact ? "compact" : ""}`}>
       <Link className="brand" to="/projects" aria-label="AutoFlow 工作空间">
@@ -109,14 +115,15 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
           size={28}
           style={{ background: "#ddeeea", color: "#147a73", fontWeight: 700 }}
         >
-          R
+          {session?.user.name.slice(0, 1).toUpperCase() ?? "A"}
         </Avatar>
         {!compact && (
           <div>
-            <strong>Rui Chen</strong>
-            <span>工作空间管理员</span>
+            <strong>{session?.user.name ?? "AutoFlow 用户"}</strong>
+            <span>{roleLabels[role] ?? role}</span>
           </div>
         )}
+        {!compact && session && <Tooltip title="退出登录"><Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logoutPlatform().finally(() => { storePlatformSession(); window.location.assign("/"); })} /></Tooltip>}
       </div>
     </aside>
   );
@@ -132,6 +139,19 @@ export function ProjectLayout({
   children: React.ReactNode;
 }) {
   const navigate = useNavigate();
+  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
+  const platformSession = readStoredPlatformSession();
+  const workspaceRole = platformSession?.workspaces.find((workspace) => workspace.id === readStoredPlatformWorkspaceId(platformSession))?.role ?? "viewer";
+  const sectionsByRole: Record<string, ProjectSection[]> = {
+    product: ["overview", "flows", "variables", "platform"],
+    tester: ["overview", "flows", "elements", "variables", "environments", "data", "runs", "platform"],
+    operations: ["overview", "data", "automations", "runs", "governance"],
+    publisher: ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance"],
+    viewer: ["overview", "runs"],
+  };
+  const visibleSections = production
+    ? (sectionsByRole[workspaceRole] ?? (workspaceRole === "owner" || workspaceRole === "admin" ? ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] : sectionsByRole.viewer))
+    : (Object.keys(sectionMeta) as ProjectSection[]).filter((key) => !["data", "agents", "debug", "automations", "governance"].includes(key));
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],
   );
@@ -144,6 +164,7 @@ export function ProjectLayout({
   const setActiveEnvironment = useWorkspaceStore(
     (state) => state.setActiveEnvironment,
   );
+  const syncError = useWorkspaceStore((state) => state.platformSyncErrorById[project.id]);
   const environments = storedEnvironments ?? emptyEnvironments;
   const environment =
     environments.find((item) => item.id === activeEnvironmentId) ?? environments[0];
@@ -175,10 +196,10 @@ export function ProjectLayout({
   }, []);
 
   const workerLabel = workerStatus === "online"
-    ? "Worker 在线"
+    ? (production ? "执行服务在线" : "Worker 在线")
     : workerStatus === "offline"
-      ? "Worker 离线"
-      : "正在检查 Worker";
+      ? (production ? "执行服务离线" : "Worker 离线")
+      : (production ? "正在检查执行服务" : "正在检查 Worker");
   const agentLabel = agentStatus === "online"
     ? `Agent ${agentName ?? ""} 在线`
     : agentStatus === "offline"
@@ -207,8 +228,7 @@ export function ProjectLayout({
           <DownOutlined />
         </button>
         <nav className="project-nav" aria-label="项目导航">
-          {(Object.keys(sectionMeta) as ProjectSection[])
-            .filter((key) => !["data", "agents", "debug", "automations", "governance"].includes(key))
+          {visibleSections
             .map((key) => (
             <Link
               key={key}
@@ -254,7 +274,17 @@ export function ProjectLayout({
             />
           </div>
         </header>
-        <div className="page-content">{children}</div>
+        <div className="page-content">
+          {syncError === "RESOURCE_VERSION_CONFLICT" && <Alert
+            className="sync-conflict-alert"
+            type="warning"
+            showIcon
+            title="检测到其他成员已更新同一资源"
+            description="本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。"
+            action={<span className="sync-conflict-actions"><Button size="small" onClick={() => { const draft = sessionStorage.getItem(`autoflow-conflict-${project.id}`) ?? ""; void navigator.clipboard.writeText(draft).then(() => message.success("本地草稿已复制")); }}>复制本地修改</Button><Button size="small" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "refresh" } }))}>刷新远端</Button><Button size="small" type="primary" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "resubmit" } }))}>重新提交</Button></span>}
+          />}
+          {children}
+        </div>
       </main>
     </div>
   );
@@ -473,10 +503,11 @@ export function readFileAsBase64(file: File) {
 
 export function PlatformProjectRequired({ project, title, description }: { project: Project; title: string; description: string }) {
   const [session] = useState<PlatformSession | undefined>(readStoredPlatformSession);
+  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
   return (
     <>
       <PageHeading title={title} description={description} />
-      <Alert type="info" showIcon title={session ? "当前项目尚未导入平台" : "请先连接平台账户"} action={<Link to={`/project/${project.id}/agents`}>{session ? "导入并绑定节点" : "前往执行节点"}</Link>} />
+      <Alert type="info" showIcon title={production ? "项目数据尚未就绪" : session ? "当前项目尚未导入平台" : "请先连接平台账户"} action={<Link to={production ? "/projects" : `/project/${project.id}/agents`}>{production ? "返回项目列表" : session ? "导入并绑定节点" : "前往执行节点"}</Link>} />
     </>
   );
 }

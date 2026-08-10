@@ -1,0 +1,22 @@
+<service>
+  <id>AutoFlow</id>
+  <name>AutoFlow Workbench</name>
+  <description>AutoFlow internal web automation platform and ManagedRunner</description>
+  <executable>%BASE%\runtime\node.exe</executable>
+  <arguments>%BASE%\app\node_modules\tsx\dist\cli.mjs %BASE%\app\server\index.ts</arguments>
+  <workingdirectory>%BASE%\app</workingdirectory>
+  <env name="NODE_ENV" value="production" />
+  <env name="AUTOFLOW_LISTEN_HOST" value="0.0.0.0" />
+  <env name="WORKER_DATA_DIRECTORY" value="%BASE%\data" />
+  <env name="WORKER_ARTIFACT_DIRECTORY" value="%BASE%\artifacts" />
+  <env name="PLATFORM_ARTIFACT_DIRECTORY" value="%BASE%\artifacts\platform" />
+  <env name="AUTOFLOW_STATIC_DIRECTORY" value="%BASE%\app\dist" />
+  <env name="PLAYWRIGHT_BROWSERS_PATH" value="%BASE%\browsers" />
+  <env name="PLATFORM_SECRET_KEY" value="__PLATFORM_SECRET_KEY__" />
+  <env name="PLATFORM_NOTIFICATION_HOST_ALLOWLIST" value="__NOTIFICATION_HOST_ALLOWLIST__" />
+  <env name="PLATFORM_ALLOW_PRIVATE_NOTIFICATION_URLS" value="__ALLOW_PRIVATE_NOTIFICATION_URLS__" />
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll-by-size-time"><sizeThreshold>10485760</sizeThreshold><pattern>yyyyMMdd</pattern><autoRollAtTime>00:00:00</autoRollAtTime><zipOlderThanNumDays>7</zipOlderThanNumDays><keepFiles>30</keepFiles></log>
+  <onfailure action="restart" delay="10 sec" />
+  <stoptimeout>30 sec</stoptimeout>
+</service>

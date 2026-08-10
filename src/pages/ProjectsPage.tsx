@@ -3,11 +3,17 @@ import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { WorkspaceSide, emptyRuns, isTerminalStatus } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
-import { MoreOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
-import { Button, Dropdown, Empty, Form, Input, Modal, Progress, Table } from "antd";
+import { InboxOutlined, MoreOutlined, PlusOutlined, SearchOutlined, UndoOutlined } from "@ant-design/icons";
+import { Button, Dropdown, Empty, Form, Input, List, Modal, Progress, Space, Table } from "antd";
 import type { TableColumnsType } from "antd";
 import { useState } from "react";
 import type { Project } from "../mock-data";
+import { useQueryClient } from "@tanstack/react-query";
+import { createWorkspaceProject, getWorkspaceProjects, updatePlatformProject } from "../platform-api";
+import type { PlatformProject } from "../platform-api";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
+
+const serverWorkspaceEnabled = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
 
 type ProjectListRow = Project & {
   environmentCount: number;
@@ -20,6 +26,9 @@ export function ProjectsPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archivedProjects, setArchivedProjects] = useState<PlatformProject[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
   const projectList = useWorkspaceStore((state) => state.projects);
   const flowsByProject = useWorkspaceStore((state) => state.flowsByProject);
   const environmentsByProject = useWorkspaceStore((state) => state.environmentsByProject);
@@ -27,6 +36,7 @@ export function ProjectsPage() {
   const createProject = useWorkspaceStore((state) => state.createProject);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const [form] = Form.useForm();
+  const queryClient = useQueryClient();
   const projectRows: ProjectListRow[] = projectList.map((project) => {
     const projectRuns = runRecords[project.id] ?? emptyRuns;
     const completedProjectRuns = projectRuns.filter((run) => isTerminalStatus(run.status));
@@ -52,6 +62,27 @@ export function ProjectsPage() {
   const successRate = completedRuns.length
     ? `${Math.round((completedRuns.filter((run) => run.status === "success").length / completedRuns.length) * 100)}%`
     : "-";
+  const openArchive = async () => {
+    const session = readStoredPlatformSession();
+    const workspaceId = readStoredPlatformWorkspaceId(session);
+    if (!session || !workspaceId) return;
+    setArchiveOpen(true);
+    setArchiveLoading(true);
+    try { setArchivedProjects((await getWorkspaceProjects(session.token, workspaceId, true)).projects); }
+    catch { message.error("归档项目加载失败"); }
+    finally { setArchiveLoading(false); }
+  };
+  const restoreProject = async (project: PlatformProject) => {
+    const session = readStoredPlatformSession();
+    const workspaceId = readStoredPlatformWorkspaceId(session);
+    if (!session || !workspaceId) return;
+    try {
+      await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: false });
+      setArchivedProjects((items) => items.filter((item) => item.id !== project.id));
+      await queryClient.invalidateQueries({ queryKey: ["server-workspace", workspaceId] });
+      message.success(`“${project.name}”已恢复`);
+    } catch { message.error("项目恢复失败"); }
+  };
 
   const columns: TableColumnsType<ProjectListRow> = [
     {
@@ -82,11 +113,12 @@ export function ProjectsPage() {
       width: 104,
       render: (value) => `${value} 条`,
     },
-    { title: "最近运行", dataIndex: "lastRun", width: 176 },
+    { title: "最近运行", dataIndex: "lastRun", width: 176, responsive: ["sm"] },
     {
       title: "健康度",
       dataIndex: "health",
       width: 130,
+      responsive: ["sm"],
       render: (value) => (
         value === undefined ? (
           <span>-</span>
@@ -128,7 +160,13 @@ export function ProjectsPage() {
                     okText: "归档项目",
                     cancelText: "取消",
                     okButtonProps: { danger: true },
-                    onOk: () => {
+                    onOk: async () => {
+                      if (serverWorkspaceEnabled) {
+                        const session = readStoredPlatformSession();
+                        if (!session) throw new Error("AUTH_REQUIRED");
+                        await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: true });
+                        await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
+                      }
                       archiveProject(project.id);
                       message.info(`“${project.name}”已归档`);
                     },
@@ -156,13 +194,7 @@ export function ProjectsPage() {
             <span className="eyebrow">工作空间</span>
             <h1>测试项目</h1>
           </div>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setCreateOpen(true)}
-          >
-            新建项目
-          </Button>
+          <Space><Button icon={<InboxOutlined />} onClick={() => void openArchive()}>归档</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建项目</Button></Space>
         </header>
         <section className="workspace-summary">
           <div>
@@ -208,8 +240,17 @@ export function ProjectsPage() {
         onCancel={() => setCreateOpen(false)}
         okText="创建项目"
         onOk={() =>
-          form.validateFields().then((values) => {
-            const project = createProject(values);
+          form.validateFields().then(async (values) => {
+            let project: Project;
+            if (serverWorkspaceEnabled) {
+              const session = readStoredPlatformSession();
+              const workspaceId = readStoredPlatformWorkspaceId(session);
+              if (!session || !workspaceId) throw new Error("AUTH_REQUIRED");
+              project = (await createWorkspaceProject(session.token, workspaceId, values)).project;
+              await queryClient.invalidateQueries({ queryKey: ["server-workspace", workspaceId] });
+            } else {
+              project = createProject(values);
+            }
             setCreateOpen(false);
             form.resetFields();
             message.success("项目已创建");
@@ -229,6 +270,9 @@ export function ProjectsPage() {
             <Input.TextArea rows={3} placeholder="简要说明被测系统和范围" />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal title="归档项目" open={archiveOpen} footer={<Button onClick={() => setArchiveOpen(false)}>关闭</Button>} onCancel={() => setArchiveOpen(false)}>
+        <List loading={archiveLoading} dataSource={archivedProjects} locale={{ emptyText: "暂无归档项目" }} renderItem={(project) => <List.Item actions={[<Button key="restore" icon={<UndoOutlined />} onClick={() => void restoreProject(project)}>恢复</Button>]}><List.Item.Meta title={project.name} description={project.description || "无说明"} /></List.Item>} />
       </Modal>
     </div>
   );

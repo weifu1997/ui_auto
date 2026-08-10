@@ -2,6 +2,8 @@ import { message } from "../antd-feedback";
 import type { ElementAsset, Environment, Project } from "../mock-data";
 import { PageHeading, durationFromMilliseconds, emptyElements, emptyEnvironments } from "./shared";
 import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
+import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
+import { platformProjectContext } from "../platform-context";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
@@ -28,6 +30,7 @@ export function ElementsPage({ project }: { project: Project }) {
     elapsedMs?: number;
     firstMatch?: string;
     reason?: string;
+    source?: "platform" | "worker";
   } | null>(null);
   const [validationTarget, setValidationTarget] =
     useState<ElementAsset | null>(null);
@@ -55,47 +58,6 @@ export function ElementsPage({ project }: { project: Project }) {
     setValidationTarget(null);
     setValidating(target);
     try {
-      const { validationId } = await createValidation(project.id, environment, target);
-      const unsubscribe = subscribeToTask(
-        project.id,
-        "validations",
-        validationId,
-        (event) => {
-          if (event.kind !== "result") return;
-          const count = Number(event.data.count ?? 0);
-          const screenshotId = event.data.screenshotId;
-          const validationStatus =
-            count === 1 ? "valid" : count > 1 ? "multiple" : "unverified";
-          updateItems((list) =>
-            list.map((item) =>
-              item.id === target.id
-                ? { ...item, validation: validationStatus, updatedAt: "刚刚" }
-                : item,
-            ),
-          );
-          setValidating(null);
-          setValidation({
-            element: target,
-            count,
-            environment: environment.name,
-            screenshotUrl:
-              typeof screenshotId === "string"
-                ? artifactUrl(project.id, screenshotId)
-                : undefined,
-            elapsedMs: Number(event.data.elapsedMs ?? 0),
-            firstMatch:
-              typeof event.data.firstMatch === "string" ? event.data.firstMatch : undefined,
-            reason: typeof event.data.reason === "string" ? event.data.reason : undefined,
-          });
-          unsubscribe();
-        },
-        () => {
-          setValidating(null);
-          message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
-        },
-      );
-      return;
-      /* Platform validation is exposed only from the Platform page.
       const platformContext = platformProjectContext(project.id);
       if (platformContext) {
         const created = await createPlatformElementValidation(
@@ -103,31 +65,28 @@ export function ElementsPage({ project }: { project: Project }) {
           platformContext.projectId,
           { environmentId: environment.id, element: target },
         );
-        const validationId = created.validation.id;
         let task = created.validation;
         for (let attempt = 0; attempt < 80 && (task.status === "queued" || task.status === "running"); attempt += 1) {
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 750));
-          const response = await getPlatformElementValidation(
-            platformContext.session.token,
-            platformContext.projectId,
-            validationId,
-          );
-          task = response.validation;
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+          task = (await getPlatformElementValidation(platformContext.session.token, platformContext.projectId, task.id)).validation;
         }
         if (task.status === "queued" || task.status === "running") throw new Error("VALIDATION_TIMEOUT");
         const count = Number(task.result?.count ?? 0);
-        const validationStatus = count === 1 ? "valid" : count > 1 ? "multiple" : "unverified";
-        updateItems((list) => list.map((item) => (
-          item.id === target.id ? { ...item, validation: validationStatus, updatedAt: "刚刚" } : item
-        )));
+        updateItems((list) => list.map((item) => item.id === target.id ? {
+          ...item,
+          validation: count === 1 ? "valid" : count > 1 ? "multiple" : "unverified",
+          updatedAt: "刚刚",
+        } : item));
         setValidating(null);
         setValidation({
           element: target,
           count,
           environment: environment.name,
+          screenshotUrl: task.result?.screenshotId ? platformValidationArtifactUrl(task.result.screenshotId) : undefined,
           elapsedMs: task.result?.elapsedMs,
           firstMatch: task.result?.firstMatch,
           reason: task.error,
+          source: "platform",
         });
         return;
       }
@@ -162,18 +121,20 @@ export function ElementsPage({ project }: { project: Project }) {
             firstMatch:
               typeof event.data.firstMatch === "string" ? event.data.firstMatch : undefined,
             reason: typeof event.data.reason === "string" ? event.data.reason : undefined,
+            source: "worker",
           });
           unsubscribe();
         },
         () => {
           setValidating(null);
-          message.error("无法连接 Playwright Worker，元素验证未执行。");
+          message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
         },
       );
-      */
     } catch {
       setValidating(null);
-      message.error("创建元素验证任务失败，请检查 Playwright Worker。");
+      message.error(platformProjectContext(project.id)
+        ? "元素验证失败，请检查执行服务和目标环境。"
+        : "创建元素验证任务失败，请检查 Playwright Worker。");
     }
   };
   const columns: TableColumnsType<ElementAsset> = [
@@ -348,7 +309,7 @@ export function ElementsPage({ project }: { project: Project }) {
         <div className="validation-progress">
           <Spin size="large" />
           <h3>正在验证元素</h3>
-          <p>Playwright Worker 正在打开目标页面并检查定位器唯一性。</p>
+          <p>执行服务正在打开目标页面并检查定位器唯一性。</p>
         </div>
       </Modal>
       <ValidationModal
@@ -494,6 +455,7 @@ function ValidationModal({
     elapsedMs?: number;
     firstMatch?: string;
     reason?: string;
+    source?: "platform" | "worker";
   } | null;
   onClose: () => void;
 }) {
@@ -533,7 +495,7 @@ function ValidationModal({
       </div>
       {result.screenshotUrl && (
         <div className="browser-shot worker-shot">
-          <img src={result.screenshotUrl} alt="Worker 验证截图" />
+          <img src={result.screenshotUrl} alt={result.source === "worker" ? "Worker 验证截图" : "元素验证截图"} />
         </div>
       )}
       {result.firstMatch && (
