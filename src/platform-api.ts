@@ -247,21 +247,31 @@ export class PlatformApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, token?: string) {
-  const response = await fetch(`${apiBase}${path}`, {
-    ...init,
-    credentials: "include",
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  });
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) {
-    if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("autoflow-auth-expired"));
-    throw new PlatformApiError(response.status, body.error ?? "PLATFORM_REQUEST_FAILED");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(`${apiBase}${path}`, {
+      ...init,
+      signal: controller.signal,
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...init.headers,
+      },
+    });
+    const body = (await response.json().catch(() => ({}))) as T & { error?: string };
+    if (!response.ok) {
+      if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("autoflow-auth-expired"));
+      throw new PlatformApiError(response.status, body.error ?? "PLATFORM_REQUEST_FAILED");
+    }
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted) throw new PlatformApiError(0, "TIMEOUT");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return body;
 }
 
 export async function loginPlatform(input: { email: string; password: string; name?: string }) {
@@ -562,12 +572,21 @@ export function platformValidationArtifactUrl(artifactId: string) {
 }
 
 export async function fetchPlatformArtifact(token: string, artifactId: string) {
-  const response = await fetch(platformArtifactUrl(artifactId), { credentials: "include", headers: { authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new PlatformApiError(response.status, body.error ?? "PLATFORM_ARTIFACT_FETCH_FAILED");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(platformArtifactUrl(artifactId), { credentials: "include", headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new PlatformApiError(response.status, body.error ?? "PLATFORM_ARTIFACT_FETCH_FAILED");
+    }
+    return response.blob();
+  } catch (error) {
+    if (controller.signal.aborted) throw new PlatformApiError(0, "TIMEOUT");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return response.blob();
 }
 
 export function getDebugSessions(token: string, projectId: string) {

@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { ServerResponse } from "node:http";
 
 export function passwordHash(password: string) {
+  if (password.length > 1024) throw new Error("PASSWORD_TOO_LONG");
   const salt = randomBytes(16);
   const derived = scryptSync(password, salt, 64);
   return `${salt.toString("base64url")}:${derived.toString("base64url")}`;

@@ -6,15 +6,21 @@ import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-c
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useWorkspaceStore } from "../workspace-store";
-import { PageHeading, emptyRuns, isTerminalStatus, isWorkerRunId, platformRunAsRun, reportRetryError, statusMeta, statusTag, watchWorkerRun, workerTaskAsRun } from "./shared";
+import { PageHeading, canUseCapability, emptyRuns, isTerminalStatus, isWorkerRunId, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling, watchWorkerRun, workerTaskAsRun } from "./shared";
 import { cancelRun, getRun, retryRun } from "../worker-api";
 import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Progress, Select, Space, Table, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function RunsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
+  const canExecuteRun = canUseCapability("run.execute");
+  const watchCleanups = useRef<Array<() => void>>([]);
+  useEffect(() => () => {
+    for (const cleanup of watchCleanups.current) cleanup();
+    watchCleanups.current = [];
+  }, []);
   const [platformSession] = useState<PlatformSession | undefined>(readStoredPlatformSession);
   const legacyPlatformProjectId = readPlatformProjectMap()[project.id];
   const enablePlatformProject = useWorkspaceStore((state) => state.enablePlatformProject);
@@ -26,6 +32,24 @@ export function RunsPage({ project }: { project: Project }) {
   const storedApiRuns = useRunStore((state) => state.apiRuns[project.id]);
   const apiRuns = storedApiRuns ?? emptyRuns;
   const upsertRun = useRunStore((state) => state.upsertRun);
+  useEffect(() => {
+    const cleanups = new Map<string, () => void>();
+    const subscribe = (runs: Run[]) => {
+      for (const run of runs) {
+        if (!isWorkerRunId(run.id) || isTerminalStatus(run.status)) continue;
+        if (cleanups.has(run.id)) continue;
+        cleanups.set(run.id, watchWorkerRun(project.id, run, upsertRun));
+      }
+    };
+    const unsubscribeStore = useRunStore.subscribe((state) => {
+      subscribe(state.apiRuns[project.id] ?? []);
+    });
+    subscribe(useRunStore.getState().apiRuns[project.id] ?? []);
+    return () => {
+      unsubscribeStore();
+      for (const cleanup of cleanups.values()) cleanup();
+    };
+  }, [project.id, upsertRun]);
   const [filter, setFilter] = useState("all");
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -34,25 +58,19 @@ export function RunsPage({ project }: { project: Project }) {
       enablePlatformProject(project.id, legacyPlatformProjectId);
     }
   }, [enablePlatformProject, legacyPlatformProjectId, platformProjectId, platformSession, project.id]);
-  useEffect(() => {
+  const refreshPlatformRuns = useCallback(async () => {
     if (!platformSession || !platformProjectId || !window.location.pathname.endsWith("/platform")) return;
-    let active = true;
-    const refreshPlatformRuns = async () => {
-      try {
-        const response = await getPlatformRuns(platformSession.token, platformProjectId);
-        if (!active) return;
-        response.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
-      } catch {
-        // The legacy Worker run center remains usable when Platform is offline.
-      }
-    };
-    void refreshPlatformRuns();
-    const timer = window.setInterval(() => void refreshPlatformRuns(), 3_000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
+    try {
+      const response = await getPlatformRuns(platformSession.token, platformProjectId);
+      response.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+    } catch {
+      // The legacy Worker run center remains usable when Platform is offline.
+    }
   }, [platformProjectId, platformSession, project.id, upsertRun]);
+  useEffect(() => {
+    void refreshPlatformRuns();
+  }, [refreshPlatformRuns]);
+  usePolling(refreshPlatformRuns, 3_000);
   const filtered =
     filter === "all" ? apiRuns : apiRuns.filter((run) => run.status === filter);
   const cancel = async (run: Run) => {
@@ -103,7 +121,7 @@ export function RunsPage({ project }: { project: Project }) {
         retries: run.retries + 1,
       };
       upsertRun(project.id, retriedRun);
-      watchWorkerRun(project.id, retriedRun, upsertRun);
+      watchCleanups.current.push(watchWorkerRun(project.id, retriedRun, upsertRun));
       message.success("已重新提交给 Playwright Worker");
       navigate(`/project/${project.id}/runs/${runId}`);
     } catch (error) {
@@ -185,28 +203,32 @@ export function RunsPage({ project }: { project: Project }) {
       key: "actions",
       width: 96,
       render: (_, run) =>
-        !isTerminalStatus(run.status) ? (
-          <Tooltip title="取消运行">
-            <Button
-              type="text"
-              danger
-              icon={<StopOutlined />}
-              aria-label={`取消运行 ${run.flowName}`}
-              loading={updatingRunId === run.id}
-              onClick={() => void cancel(run)}
-            />
-          </Tooltip>
-        ) : (
-          <Tooltip title="重新运行">
-            <Button
-              type="text"
-              icon={<ReloadOutlined />}
-              aria-label={`重新运行 ${run.flowName}`}
-              loading={updatingRunId === run.id}
-              onClick={() => void retry(run)}
-            />
-          </Tooltip>
-        ),
+        canExecuteRun
+          ? (
+            !isTerminalStatus(run.status) ? (
+              <Tooltip title="取消运行">
+                <Button
+                  type="text"
+                  danger
+                  icon={<StopOutlined />}
+                  aria-label={`取消运行 ${run.flowName}`}
+                  loading={updatingRunId === run.id}
+                  onClick={() => void cancel(run)}
+                />
+              </Tooltip>
+            ) : (
+              <Tooltip title="重新运行">
+                <Button
+                  type="text"
+                  icon={<ReloadOutlined />}
+                  aria-label={`重新运行 ${run.flowName}`}
+                  loading={updatingRunId === run.id}
+                  onClick={() => void retry(run)}
+                />
+              </Tooltip>
+            )
+          )
+          : null,
     },
   ];
   return (

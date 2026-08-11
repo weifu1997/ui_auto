@@ -63,22 +63,30 @@ export class ManagedRunner {
     const item = this.queue.shift();
     if (!item) return;
     this.active = item;
-    item.callbacks.started();
-    await mkdir(this.artifactDirectory, { recursive: true });
-    const hooks: RunnerHooks = {
-      signal: item.controller.signal,
-      artifactPath: (_name, extension) => join(this.artifactDirectory, `artifact_${randomUUID()}.${extension}`),
-      artifact: item.callbacks.artifact,
-      event: item.kind === "run" ? item.callbacks.event : () => undefined,
-      browser: (browser, context) => {
-        if (!this.active || this.active.id !== item.id) return;
-        this.active.browser = browser;
-        this.active.context = context;
-      },
-    };
-    if (item.kind === "run") item.callbacks.completed(await executeBrowserRun(item.input, hooks));
-    else item.callbacks.completed(await executeElementValidation(item.input, hooks));
-    this.active = undefined;
-    void this.drain();
+    try {
+      item.callbacks.started();
+      await mkdir(this.artifactDirectory, { recursive: true });
+      const hooks: RunnerHooks = {
+        signal: item.controller.signal,
+        artifactPath: (_name, extension) => join(this.artifactDirectory, `artifact_${randomUUID()}.${extension}`),
+        artifact: item.callbacks.artifact,
+        event: item.kind === "run" ? item.callbacks.event : () => undefined,
+        browser: (browser, context) => {
+          if (!this.active || this.active.id !== item.id) return;
+          this.active.browser = browser;
+          this.active.context = context;
+        },
+      };
+      if (item.kind === "run") item.callbacks.completed(await executeBrowserRun(item.input, hooks));
+      else item.callbacks.completed(await executeElementValidation(item.input, hooks));
+    } catch (error) {
+      console.error("ManagedRunner item failed", error);
+      const message = error instanceof Error ? error.message : "MANAGED_RUNNER_FAILED";
+      if (item.kind === "run") item.callbacks.completed({ status: "failed", completedSteps: 0, totalSteps: item.input.flow.steps.length, elapsedMs: 0, error: message, flowOutputs: {} });
+      else item.callbacks.completed({ status: "failed", count: 0, elapsedMs: 0, error: message });
+    } finally {
+      this.active = undefined;
+      void this.drain();
+    }
   }
 }

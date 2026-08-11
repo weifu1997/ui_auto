@@ -229,11 +229,37 @@ export function failureCategory(message: unknown) {
   return "other";
 }
 
+const cronFieldBounds: Array<[number, number]> = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+
+export function assertValidCronExpression(expression: string) {
+  const fields = expression.trim().split(/\s+/);
+  if (fields.length !== 5) throw new PlatformError(400, "SCHEDULE_CRON_INVALID");
+  for (let index = 0; index < fields.length; index += 1) {
+    const [minimum, maximum] = cronFieldBounds[index];
+    for (const part of fields[index].split(",")) {
+      if (!part) throw new PlatformError(400, "SCHEDULE_CRON_INVALID");
+      const [range, intervalText] = part.split("/");
+      if (intervalText !== undefined) {
+        const interval = Number(intervalText);
+        if (!Number.isInteger(interval) || interval < 1 || interval > maximum - minimum) throw new PlatformError(400, "SCHEDULE_CRON_INVALID");
+      }
+      if (range === "*") continue;
+      const [startText, endText] = range.split("-");
+      const start = Number(startText);
+      const end = endText === undefined ? start : Number(endText);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < minimum || start > maximum || end < minimum || end > maximum || end < start) {
+        throw new PlatformError(400, "SCHEDULE_CRON_INVALID");
+      }
+    }
+  }
+}
+
 export function nextCronTime(expression: string, timeZone: string, from = new Date()) {
+  assertValidCronExpression(expression);
   const cursor = new Date(from.getTime());
   cursor.setUTCSeconds(0, 0);
   cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
-  for (let minute = 0; minute < 527_040; minute += 1) {
+  for (let minute = 0; minute < 5_000; minute += 1) {
     if (cronMatches(expression, cursor, timeZone)) return cursor.toISOString();
     cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
   }
@@ -323,6 +349,7 @@ export function parseCsv(content: string): string[][] {
     } else if (character === "\n") {
       row.push(cell);
       rows.push(row);
+      if (rows.length > 10_001) throw new PlatformError(413, "DATASET_ROW_LIMIT_EXCEEDED");
       row = [];
       cell = "";
     } else if (character !== "\r") {
@@ -333,6 +360,7 @@ export function parseCsv(content: string): string[][] {
   if (cell.length > 0 || row.length > 0) {
     row.push(cell);
     rows.push(row);
+    if (rows.length > 10_001) throw new PlatformError(413, "DATASET_ROW_LIMIT_EXCEEDED");
   }
   return rows;
 }

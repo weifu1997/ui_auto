@@ -5,7 +5,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $backupPath "backup.json"))) { throw
 $service = Join-Path $Root "AutoFlow.exe"
 if (Test-Path -LiteralPath $service) { & $service stop }
 $data = Join-Path $Root "data"; New-Item -ItemType Directory -Force -Path $data | Out-Null
-foreach ($name in @("platform.sqlite", "autoflow.sqlite")) { if (Test-Path -LiteralPath (Join-Path $backupPath $name)) { Copy-Item -LiteralPath (Join-Path $backupPath $name) -Destination (Join-Path $data $name) -Force } }
+foreach ($name in @("platform.sqlite", "autoflow.sqlite")) {
+  Remove-Item -LiteralPath (Join-Path $data ("$name-wal")) -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $data ("$name-shm")) -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath (Join-Path $backupPath $name)) { Copy-Item -LiteralPath (Join-Path $backupPath $name) -Destination (Join-Path $data $name) -Force }
+}
 if (Test-Path -LiteralPath (Join-Path $backupPath "artifacts")) {
   $artifactTarget = Join-Path $Root "artifacts"
   New-Item -ItemType Directory -Force -Path $artifactTarget | Out-Null

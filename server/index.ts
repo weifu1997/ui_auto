@@ -3,7 +3,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, extname, join, resolve } from "node:path";
+import { extname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
 import { chromium } from "playwright";
@@ -11,6 +11,8 @@ import type { Browser, BrowserContext, Locator, Page } from "playwright";
 import type { ElementAsset, Environment, FlowStep } from "../src/mock-data";
 import { createPlatformApi } from "./platform.ts";
 import { applyCors, readJson, routeHandler, sendJson } from "./http-utils";
+import { captureOutput, interpolate } from "./runner-core";
+import { safeArtifactName } from "./platform-core";
 
 const port = Number(process.env.PORT ?? 8787);
 const listenHost = process.env.AUTOFLOW_LISTEN_HOST ?? "127.0.0.1";
@@ -511,27 +513,6 @@ function scopedVariables(supplied?: Record<string, string>) {
   return supplied ?? {};
 }
 
-function interpolate(value: string, input: {
-  environment: Environment;
-  variables: Record<string, string>;
-  flow: FlowPayload;
-}) {
-  return value.replace(/{{\s*([^}]+)\s*}}/g, (_match, expression: string) => {
-    const [scope, key] = expression.trim().split(".");
-    if (scope === "env") {
-      return key === "baseUrl"
-        ? input.environment.baseUrl
-        : input.variables[`env.${key}`] ?? "";
-    }
-    if (scope === "project") {
-      return input.variables[`project.${key}`] ?? input.variables[key] ?? "";
-    }
-    if (scope === "run" && key === "timestamp") return now();
-    if (scope === "flow") return input.variables[`flow.${key}`] ?? "";
-    return "";
-  });
-}
-
 function environmentUrl(baseUrl: string, value: string) {
   let base: URL;
   let target: URL;
@@ -602,8 +583,17 @@ async function executeStep(
     elements: ElementAsset[];
   },
   task: Task,
+  outputs: Record<string, string>,
 ) {
-  const value = interpolate(step.value, input);
+  const secretKeys = task.executionRequest?.secretKeys ?? [];
+  const value = interpolate(step.value, {
+    environment: input.environment,
+    flow: { id: input.flow.id, name: input.flow.name, steps: input.flow.steps },
+    elements: input.elements,
+    variables: input.variables,
+    data: {},
+    secrets: Object.fromEntries(secretKeys.filter((key) => input.variables[key]).map((key) => [key, input.variables[key] as string])),
+  }, outputs);
   const element = step.element
     ? input.elements.find((item) => item.name === step.element)
     : undefined;
@@ -661,6 +651,8 @@ async function executeStep(
   } else {
     throw new Error(`UNSUPPORTED_ACTION: ${action}`);
   }
+  const output = await captureOutput(page, step, locator);
+  if (step.output && output !== undefined) outputs[step.output] = output;
 }
 
 async function executeRun(task: Task, request: RunRequest) {
@@ -689,6 +681,9 @@ async function executeRun(task: Task, request: RunRequest) {
   let completed = 0;
   let finalStatus: TaskStatus = "success";
   try {
+    if (request.upToStepId && !flow.steps.some((step) => step.id === request.upToStepId)) {
+      throw new Error("RUN_STEP_NOT_FOUND");
+    }
     task.browserState = "launching";
     persistTask(task);
     browser = await launchBrowser();
@@ -705,7 +700,11 @@ async function executeRun(task: Task, request: RunRequest) {
       await context.tracing.start({ screenshots: true, snapshots: true });
       tracingStarted = true;
     }
-    for (const [index, step] of flow.steps.entries()) {
+    const stepScope = request.upToStepId
+      ? flow.steps.slice(0, flow.steps.findIndex((step) => step.id === request.upToStepId) + 1)
+      : flow.steps;
+    const flowOutputs: Record<string, string> = {};
+    for (const [index, step] of stepScope.entries()) {
       if (task.controller.signal.aborted) throw new Error("RUN_CANCELED");
       publish(task, "step", { index, stepId: step.id, status: "running", title: step.title });
       const started = Date.now();
@@ -714,7 +713,7 @@ async function executeRun(task: Task, request: RunRequest) {
       let lastError: unknown;
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         try {
-          await executeStep(page!, step, input, task);
+          await executeStep(page!, step, input, task, flowOutputs);
           completed += 1;
           completedStep = true;
           publish(task, "step", {
@@ -760,7 +759,6 @@ async function executeRun(task: Task, request: RunRequest) {
         if (step.failurePolicy === "继续执行") continue;
         throw lastError;
       }
-      if (request.upToStepId === step.id) break;
     }
     task.result = { completedSteps: completed, totalSteps, elapsedMs: Date.now() - started };
     finalStatus = task.controller.signal.aborted ? "canceled" : "success";
@@ -963,7 +961,7 @@ const server = createServer(routeHandler(async (request, response, url) => {
     }
     response.writeHead(200, {
       "content-type": artifact.contentType,
-      "content-disposition": `inline; filename="${basename(artifact.name)}"`,
+      "content-disposition": `inline; filename="${safeArtifactName(artifact.name)}"`,
     });
     createReadStream(artifact.path).pipe(response);
     return;
@@ -1050,7 +1048,7 @@ const server = createServer(routeHandler(async (request, response, url) => {
     if (request.method === "GET" && process.env.NODE_ENV === "production") {
       const requested = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
       let path = resolve(staticDirectory, requested);
-      if (!path.startsWith(`${staticDirectory}\\`) && path !== staticDirectory) path = join(staticDirectory, "index.html");
+      if (!path.startsWith(staticDirectory + sep) && path !== staticDirectory) path = join(staticDirectory, "index.html");
       if (!existsSync(path) || !statSync(path).isFile()) path = join(staticDirectory, "index.html");
       if (existsSync(path)) {
         const contentTypes: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
@@ -1060,7 +1058,7 @@ const server = createServer(routeHandler(async (request, response, url) => {
       }
     }
     sendJson(response, 404, { error: "NOT_FOUND" });
-  }, { errorResponse: { exposeMessage: true } }));
+  }, { errorResponse: { exposeMessage: localListenHosts.has(listenHost), internalCode: "PLATFORM_INTERNAL_ERROR" } }));
 
 server.on("upgrade", (request, socket, head) => {
   if (!platform.handleUpgrade(request, socket, head)) socket.destroy();

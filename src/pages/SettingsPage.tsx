@@ -2,13 +2,19 @@ import { message } from "../antd-feedback";
 import type { Project } from "../mock-data";
 import { useNavigate } from "../router";
 import { PageHeading } from "./shared";
+import { updatePlatformProject } from "../platform-api";
+import { readStoredPlatformSession } from "../platform-context";
+import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceStore } from "../workspace-store";
 import { PauseCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Avatar, Button, Form, Input, Modal, Popconfirm, Select, Tag } from "antd";
 import { useEffect, useState } from "react";
 
+const serverWorkspaceEnabled = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
+
 export function SettingsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const updateProject = useWorkspaceStore((state) => state.updateProject);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const members = useWorkspaceStore(
@@ -106,7 +112,21 @@ export function SettingsPage({ project }: { project: Project }) {
             okText="归档项目"
             cancelText="取消"
             okButtonProps={{ danger: true }}
-            onConfirm={() => {
+            onConfirm={async () => {
+              if (serverWorkspaceEnabled) {
+                const session = readStoredPlatformSession();
+                if (!session) {
+                  message.error("归档失败：未登录平台");
+                  return;
+                }
+                try {
+                  await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: true });
+                  await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
+                } catch {
+                  message.error("归档失败，请稍后重试");
+                  return;
+                }
+              }
               archiveProject(project.id);
               message.info(`“${project.name}”已归档`);
               navigate("/projects");

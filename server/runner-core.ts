@@ -21,7 +21,7 @@ export type RunnerHooks = {
   browser?: (browser: Browser | undefined, context: BrowserContext | undefined) => void;
 };
 
-function interpolate(value: string, input: RunnerInput, outputs: Record<string, string>) {
+export function interpolate(value: string, input: RunnerInput, outputs: Record<string, string>) {
   return value.replace(/{{\s*([^}]+)\s*}}/g, (_match, expression: string) => {
     const normalized = expression.trim();
     const [scope, ...keyParts] = normalized.split(".");
@@ -49,7 +49,10 @@ function targetUrl(baseUrl: string, value: string) {
 
 function locatorFor(page: Page, element: ElementAsset, testIdAttribute = "data-testid"): Locator {
   const value = element.value;
-  if (element.method === "testid") return page.locator(`[${testIdAttribute}=${JSON.stringify(value)}]`);
+  if (element.method === "testid") {
+    if (!/^[a-zA-Z_][\w:-]*$/.test(testIdAttribute)) throw new Error("INVALID_TEST_ID_ATTRIBUTE");
+    return page.locator(`[${testIdAttribute}=${JSON.stringify(value)}]`);
+  }
   if (element.method === "label") return page.getByLabel(value);
   if (element.method === "text") return page.getByText(value, { exact: true });
   if (element.method === "role") {
@@ -103,7 +106,7 @@ export async function executeElementValidation(input: ElementValidationInput, ho
   }
 }
 
-async function captureOutput(page: Page, step: FlowStep, locator: Locator | undefined) {
+export async function captureOutput(page: Page, step: FlowStep, locator: Locator | undefined) {
   if (!step.output) return undefined;
   if (step.outputSource === "url") {
     const url = new URL(page.url());
@@ -144,7 +147,7 @@ function required(locator: Locator | undefined) {
 }
 
 export async function executeBrowserRun(input: RunnerInput, hooks: RunnerHooks) {
-  const sensitive = Object.values(input.secrets).some(Boolean);
+  const sensitive = Object.keys(input.secrets).length > 0;
   const outputs: Record<string, string> = {};
   const steps = input.upToStepId
     ? input.flow.steps.slice(0, input.flow.steps.findIndex((step) => step.id === input.upToStepId) + 1)

@@ -24,7 +24,6 @@ import {
 } from "./platform-context";
 import type { PlatformSession } from "./platform-api";
 import { LoginPage } from "./LoginPage";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ServerWorkspaceSynchronizer } from "./ServerWorkspaceSynchronizer";
 import "./App.css";
 import "./responsive.css";
@@ -51,8 +50,6 @@ const LazyProjectShell = lazy(() =>
 const routeFallback = (
   <div className="route-loading"><Spin size="large" /></div>
 );
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } } });
-
 const syncMessage = { warning: (_value: unknown) => undefined, error: (_value: unknown) => undefined };
 
 function App() {
@@ -72,7 +69,6 @@ function App() {
       }}
     >
       <AntdApp>
-        <QueryClientProvider client={queryClient}>
         <AntdFeedbackBridge />
         <ApplicationSessionGate>
           {authenticationRequired ? <ServerWorkspaceSynchronizer /> : <PlatformWorkspaceSynchronizer />}
@@ -114,7 +110,6 @@ function App() {
           <Route path="*" element={<Navigate to="/projects" replace />} />
           </Routes>
         </ApplicationSessionGate>
-        </QueryClientProvider>
       </AntdApp>
     </ConfigProvider>
   );
@@ -504,7 +499,7 @@ function PlatformWorkspaceSynchronizer() {
         hydrating = false;
       } catch (error) {
         // A platform outage must not erase local data. Mapped edits can still retry with their stored version.
-        const detail = error instanceof Error ? error.message : "Unable to read Platform projects.";
+        const detail = error instanceof PlatformApiError ? error.code : "PLATFORM_READ_FAILED";
         for (const localId of Object.keys(currentContext.projectMap)) {
           useWorkspaceStore.getState().setPlatformSyncStatus(localId, "failed");
           useWorkspaceStore.getState().setPlatformSyncError(localId, detail);

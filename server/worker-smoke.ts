@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 
 const port = 8790;
-const server = spawn("cmd.exe", ["/d", "/s", "/c", "npm run server"], {
+const server = spawn(process.platform === "win32" ? "cmd.exe" : "sh", process.platform === "win32" ? ["/d", "/s", "/c", "npm run server"] : ["-c", "npm run server"], {
   cwd: process.cwd(),
   env: { ...process.env, PORT: String(port) },
   stdio: "ignore",
@@ -196,6 +196,52 @@ try {
   );
   if (interpolationRun.status !== "success" || interpolationRun.result?.completedSteps !== 5) {
     throw new Error(`Variable interpolation failed: ${JSON.stringify(interpolationRun)}`);
+  }
+
+  const upToStepFlow = {
+    id: "fixture-up-to-step",
+    name: "Fixture upToStepId",
+    steps: [
+      { id: "open", title: "打开", action: "打开页面", value: "/__fixture/login", timeout: 10, failurePolicy: "立即失败", status: "pending" as const },
+      { id: "missing", title: "点击缺失元素", action: "点击", element: "缺失元素", value: "", timeout: 1, failurePolicy: "继续执行", status: "pending" as const },
+      { id: "must-not-run", title: "不应执行", action: "点击", element: "缺失元素", value: "", timeout: 1, failurePolicy: "立即失败", status: "pending" as const },
+    ],
+  };
+  const upToStepResponse = await fetch(
+    `http://127.0.0.1:${port}/api/projects/fixture-project/runs`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        environment,
+        flow: upToStepFlow,
+        upToStepId: "missing",
+        elements: [{ ...element, id: "missing", name: "缺失元素", path: "/__fixture/login", method: "testid", value: "does-not-exist" }],
+      }),
+    },
+  );
+  const { runId: upToStepRunId } = (await upToStepResponse.json()) as { runId: string };
+  const upToStepRun = await waitForTask(`/api/projects/fixture-project/runs/${upToStepRunId}`);
+  if (upToStepRun.status !== "success" || upToStepRun.result?.completedSteps !== 1) {
+    throw new Error(`upToStepId did not stop at the failing target step: ${JSON.stringify(upToStepRun)}`);
+  }
+  const upToStep404Response = await fetch(
+    `http://127.0.0.1:${port}/api/projects/fixture-project/runs`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        environment,
+        flow: upToStepFlow,
+        upToStepId: "no-such-step",
+        elements: [{ ...element, id: "missing", name: "缺失元素", path: "/__fixture/login", method: "testid", value: "does-not-exist" }],
+      }),
+    },
+  );
+  const { runId: upToStep404RunId } = (await upToStep404Response.json()) as { runId: string };
+  const upToStep404Run = await waitForTask(`/api/projects/fixture-project/runs/${upToStep404RunId}`);
+  if (upToStep404Run.status !== "failed" || upToStep404Run.result?.error !== "RUN_STEP_NOT_FOUND") {
+    throw new Error(`Unknown upToStepId did not fail with RUN_STEP_NOT_FOUND: ${JSON.stringify(upToStep404Run)}`);
   }
 
   const cancelFlow = {

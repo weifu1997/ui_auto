@@ -13,6 +13,7 @@ import {
   updatePlatformSettings,
 } from "./platform-api";
 import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformSession } from "./platform-api";
+import type { PlatformWorkspaceProject } from "./workspace-store";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "./platform-context";
 import { useWorkspaceStore } from "./workspace-store";
 import { message } from "./antd-feedback";
@@ -63,6 +64,36 @@ function stableResource(value: ResourceData) {
   return JSON.stringify(value);
 }
 
+function serverDocumentSerialized(item: LoadedProject): string {
+  return JSON.stringify({
+    name: item.project.name,
+    description: item.project.description,
+    flows: item.resources.flows.map((resource) => resource.data),
+    elements: item.resources.elements.map((resource) => resource.data),
+    variables: item.resources.variables.map((resource) => resource.data),
+    environments: item.resources.environments.map((resource) => resource.data),
+    activeEnvironmentId: typeof item.settings.data.activeEnvironmentId === "string" ? item.settings.data.activeEnvironmentId : "",
+  });
+}
+
+function localDocumentSerialized(projectId: string): string {
+  const state = useWorkspaceStore.getState();
+  const project = state.projects.find((candidate) => candidate.id === projectId);
+  return JSON.stringify({
+    name: project?.name ?? "",
+    description: project?.description ?? "",
+    flows: state.flowsByProject[projectId] ?? [],
+    elements: state.elementsByProject[projectId] ?? [],
+    variables: state.variablesByProject[projectId] ?? [],
+    environments: state.environmentsByProject[projectId] ?? [],
+    activeEnvironmentId: state.activeEnvironmentByProject[projectId] ?? "",
+  });
+}
+
+function replaceProject(projectId: string, name: string, description: string, document: Record<string, unknown>): PlatformWorkspaceProject {
+  return { platformProjectId: projectId, sourceProjectId: projectId, name, description, document };
+}
+
 async function loadWorkspace(session: PlatformSession, workspaceId: string) {
   const projects = await getWorkspaceProjects(session.token, workspaceId);
   return Promise.all(projects.projects.map(async (project): Promise<LoadedProject> => {
@@ -85,6 +116,9 @@ export function ServerWorkspaceSynchronizer() {
   const session = readStoredPlatformSession();
   const workspaceId = readStoredPlatformWorkspaceId(session);
   const versions = useRef(new Map<string, { version: number; serialized: string }>());
+  const lastApplied = useRef(new Map<string, string>());
+  const inFlightSyncs = useRef(new Set<string>());
+  const pendingSyncs = useRef(new Set<string>());
   const settingVersions = useRef(new Map<string, { version: number; activeEnvironmentId: string }>());
   const projectMetadata = useRef(new Map<string, string>());
   const hydrated = useRef(false);
@@ -116,19 +150,42 @@ export function ServerWorkspaceSynchronizer() {
         }
       }
     }
-    useWorkspaceStore.getState().replaceServerWorkspace(query.data.map((item) => ({
-      platformProjectId: item.project.id,
-      sourceProjectId: item.project.id,
-      name: item.project.name,
-      description: item.project.description,
-      document: {
-        flows: item.resources.flows.map((resource) => resource.data),
-        elements: item.resources.elements.map((resource) => resource.data),
-        variables: item.resources.variables.map((resource) => resource.data),
-        environments: item.resources.environments.map((resource) => resource.data),
-        activeEnvironmentId: item.settings.data.activeEnvironmentId,
-      },
-    })));
+    const replaceItems: PlatformWorkspaceProject[] = [];
+    const keepLocalProjectIds: string[] = [];
+    for (const item of query.data) {
+      const projectId = item.project.id;
+      const serverSerialized = serverDocumentSerialized(item);
+      const localSerialized = localDocumentSerialized(projectId);
+      const baseline = lastApplied.current.get(projectId);
+      const serverWins = baseline === undefined || localSerialized === serverSerialized || localSerialized === baseline;
+      if (serverWins) {
+        replaceItems.push(replaceProject(projectId, item.project.name, item.project.description, {
+          flows: item.resources.flows.map((resource) => resource.data),
+          elements: item.resources.elements.map((resource) => resource.data),
+          variables: item.resources.variables.map((resource) => resource.data),
+          environments: item.resources.environments.map((resource) => resource.data),
+          activeEnvironmentId: item.settings.data.activeEnvironmentId,
+        }));
+        lastApplied.current.set(projectId, serverSerialized);
+      } else {
+        const state = useWorkspaceStore.getState();
+        const project = state.projects.find((candidate) => candidate.id === projectId);
+        replaceItems.push(replaceProject(projectId, project?.name ?? item.project.name, project?.description ?? item.project.description, {
+          flows: state.flowsByProject[projectId] ?? [],
+          elements: state.elementsByProject[projectId] ?? [],
+          variables: state.variablesByProject[projectId] ?? [],
+          environments: state.environmentsByProject[projectId] ?? [],
+          activeEnvironmentId: state.activeEnvironmentByProject[projectId] ?? "",
+        }));
+        keepLocalProjectIds.push(projectId);
+      }
+    }
+    useWorkspaceStore.getState().replaceServerWorkspace(replaceItems);
+    queueMicrotask(() => {
+      for (const projectId of keepLocalProjectIds) {
+        useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "syncing");
+      }
+    });
     queueMicrotask(() => {
       hydrated.current = true;
       for (const [projectId, draft] of retryDrafts.current) {
@@ -171,33 +228,46 @@ export function ServerWorkspaceSynchronizer() {
     };
 
     const syncResources = async (projectId: string, type: PlatformResourceType) => {
-      const current = resourcesFromState(useWorkspaceStore.getState(), projectId, type);
-      const currentIds = new Set(current.map((resource) => resource.id));
-      useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "syncing");
+      const syncKey = `${projectId}:${type}`;
+      if (inFlightSyncs.current.has(syncKey)) {
+        pendingSyncs.current.add(syncKey);
+        return;
+      }
+      inFlightSyncs.current.add(syncKey);
       try {
-        for (const resource of current) {
-          const key = `${projectId}:${type}:${resource.id}`;
-          const known = versions.current.get(key);
-          const serialized = stableResource(resource);
-          if (!known) {
-            const created = await createPlatformResource(session.token, projectId, type, resource as ResourceData & Record<string, unknown>);
-            versions.current.set(key, { version: created.resource.version, serialized: stableResource(created.resource.data) });
-          } else if (known.serialized !== serialized) {
-            const updated = await updatePlatformResource(session.token, projectId, type, resource.id, resource as ResourceData & Record<string, unknown>, known.version);
-            versions.current.set(key, { version: updated.resource.version, serialized: stableResource(updated.resource.data) });
+        const current = resourcesFromState(useWorkspaceStore.getState(), projectId, type);
+        const currentIds = new Set(current.map((resource) => resource.id));
+        useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "syncing");
+        try {
+          for (const resource of current) {
+            const key = `${projectId}:${type}:${resource.id}`;
+            const known = versions.current.get(key);
+            const serialized = stableResource(resource);
+            if (!known) {
+              const created = await createPlatformResource(session.token, projectId, type, resource as ResourceData & Record<string, unknown>);
+              versions.current.set(key, { version: created.resource.version, serialized: stableResource(created.resource.data) });
+            } else if (known.serialized !== serialized) {
+              const updated = await updatePlatformResource(session.token, projectId, type, resource.id, resource as ResourceData & Record<string, unknown>, known.version);
+              versions.current.set(key, { version: updated.resource.version, serialized: stableResource(updated.resource.data) });
+            }
           }
+          for (const [key, known] of [...versions.current]) {
+            const [knownProject, knownType, ...idParts] = key.split(":");
+            const id = idParts.join(":");
+            if (knownProject !== projectId || knownType !== type || currentIds.has(id)) continue;
+            await archivePlatformResource(session.token, projectId, type, id, known.version);
+            versions.current.delete(key);
+          }
+          useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "synced");
+          useWorkspaceStore.getState().setPlatformSyncError(projectId);
+        } catch (error) {
+          failSync(projectId, error);
         }
-        for (const [key, known] of [...versions.current]) {
-          const [knownProject, knownType, ...idParts] = key.split(":");
-          const id = idParts.join(":");
-          if (knownProject !== projectId || knownType !== type || currentIds.has(id)) continue;
-          await archivePlatformResource(session.token, projectId, type, id, known.version);
-          versions.current.delete(key);
+      } finally {
+        inFlightSyncs.current.delete(syncKey);
+        if (pendingSyncs.current.delete(syncKey)) {
+          schedule(syncKey, () => syncResources(projectId, type));
         }
-        useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "synced");
-        useWorkspaceStore.getState().setPlatformSyncError(projectId);
-      } catch (error) {
-        failSync(projectId, error);
       }
     };
 

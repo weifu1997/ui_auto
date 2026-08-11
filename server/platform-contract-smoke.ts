@@ -463,6 +463,10 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 100));
   const deliveries = await api<{ deliveries: Array<{ channel: { name: string } }> }>(`/api/platform/projects/${projectId}/deliveries`, { headers: headers(token) });
   if (!deliveries.response.ok || deliveries.body.deliveries[0]?.channel.name !== "Contract webhook") throw new Error("Run notification delivery was not queued");
+  if (JSON.stringify(deliveries.body).includes("never-log-this")) throw new Error("Delivery listing leaked a secret value");
+  const auditEvents = await api(`/api/platform/projects/${projectId}/audit-events`, { headers: headers(token) });
+  if (!auditEvents.response.ok) throw new Error("Audit events listing failed");
+  if (JSON.stringify(auditEvents.body).includes("never-log-this")) throw new Error("Audit events leaked a secret value");
 
   const schedule = await api<{ schedule: { id: string } }>(`/api/platform/projects/${projectId}/schedules`, {
     method: "POST",
@@ -519,6 +523,23 @@ try {
     body: JSON.stringify({ flow: { id: "viewer-flow", steps: [] }, environment: { id: "internal" }, elements: [] }),
   });
   if (viewerDraft.response.status !== 403) throw new Error("Viewer was allowed to create a draft");
+  const productRegistration = await api<{ token?: string }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email: "product@example.test", name: "Product", password: "product-password" }),
+  });
+  if (!productRegistration.response.ok || !productRegistration.body.token) throw new Error("Product registration failed");
+  const productMember = await api<{ member: { id: string } }>(`/api/workspaces/${workspaceId}/members`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ email: "product@example.test", name: "Product", role: "product" }),
+  });
+  if (!productMember.response.ok) throw new Error("Product member creation failed");
+  const productRun = await api<{ error?: string }>(`/api/platform/projects/${projectId}/runs`, {
+    method: "POST",
+    headers: headers(productRegistration.body.token),
+    body: JSON.stringify({ revisionId: dataRevisionId }),
+  });
+  if (productRun.response.status !== 403 || productRun.body.error !== "CAPABILITY_REQUIRED") throw new Error("Product was allowed to create a run without run.execute");
   const ownerId = registration.body.token ? (await api<{ members: Array<{ id: string; role: string }> }>(`/api/workspaces/${workspaceId}/members`, { headers: headers(token) })).body.members.find((member) => member.role === "owner")?.id : undefined;
   const disableLastOwner = await api<{ error?: string }>(`/api/workspaces/${workspaceId}/members/${ownerId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: false }) });
   if (disableLastOwner.response.status !== 409 || disableLastOwner.body.error !== "LAST_WORKSPACE_OWNER_REQUIRED") throw new Error("Last workspace owner could be disabled");

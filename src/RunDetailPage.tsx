@@ -28,6 +28,7 @@ import type { PlatformRun } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
 import { message } from "./antd-feedback";
 import type { Project, Run } from "./mock-data";
+import { canUseCapability } from "./pages/shared";
 
 type ProjectLayoutProps = {
   project: Project;
@@ -215,6 +216,7 @@ function taskEventAsLog(
 export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, statusMeta }: RunDetailPageProps) {
   const { projectId, runId } = useParams();
   const navigate = useNavigate();
+  const canExecuteRun = canUseCapability("run.execute");
   const projects = useWorkspaceStore((state) => state.projects);
   const project = projectById(projects, projectId);
   const activeProjectId = project?.id;
@@ -468,13 +470,17 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
         description={`${run.id} · ${run.environment} · ${run.startedAt}`}
         actions={
           <>
-            <Button icon={<ReloadOutlined />} loading={retrying} onClick={() => void retry()}>
-              重新运行
-            </Button>
-            {!isTerminalStatus(run.status) && (
-              <Button danger icon={<StopOutlined />} loading={canceling} onClick={() => void cancel()}>
-                停止运行
-              </Button>
+            {canExecuteRun && (
+              <>
+                <Button icon={<ReloadOutlined />} loading={retrying} onClick={() => void retry()}>
+                  重新运行
+                </Button>
+                {!isTerminalStatus(run.status) && (
+                  <Button danger icon={<StopOutlined />} loading={canceling} onClick={() => void cancel()}>
+                    停止运行
+                  </Button>
+                )}
+              </>
             )}
             {statusTag(run.status)}
           </>

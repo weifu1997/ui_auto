@@ -256,6 +256,10 @@ export function ProjectsPage() {
             message.success("项目已创建");
             navigate(`/project/${project.id}/overview`);
           })
+          .catch((error: unknown) => {
+            if (Array.isArray(error)) return; // 表单字段校验错误由 Form 展示
+            message.error("创建项目失败，请检查服务连接后重试");
+          })
         }
       >
         <Form form={form} layout="vertical">

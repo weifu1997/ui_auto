@@ -31,7 +31,9 @@ export async function startWorker(input: {
   env?: NodeJS.ProcessEnv;
 }) {
   const root = input.root ?? (await createWorkerRoot());
-  const childProcess = spawn("cmd.exe", ["/d", "/s", "/c", "npm run server"], {
+  const command = process.platform === "win32" ? "cmd.exe" : "sh";
+  const args = process.platform === "win32" ? ["/d", "/s", "/c", "npm run server"] : ["-c", "npm run server"];
+  const childProcess = spawn(command, args, {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -71,7 +73,10 @@ export async function waitForHealth(port: number) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`);
-      if (response.ok) return;
+      if (response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { ok?: boolean };
+        if (body.ok === true) return;
+      }
     } catch {
       // The Worker is still starting.
     }

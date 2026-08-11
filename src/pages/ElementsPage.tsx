@@ -1,6 +1,6 @@
 import { message } from "../antd-feedback";
 import type { ElementAsset, Environment, Project } from "../mock-data";
-import { PageHeading, durationFromMilliseconds, emptyElements, emptyEnvironments } from "./shared";
+import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements, emptyEnvironments } from "./shared";
 import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
@@ -8,9 +8,13 @@ import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function ElementsPage({ project }: { project: Project }) {
+  const canManageElement = canUseCapability("element.manage");
+  const canRunValidation = canUseCapability("run.execute");
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
   const storedElements = useWorkspaceStore((state) => state.elementsByProject[project.id]);
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],
@@ -66,8 +70,9 @@ export function ElementsPage({ project }: { project: Project }) {
           { environmentId: environment.id, element: target },
         );
         let task = created.validation;
-        for (let attempt = 0; attempt < 80 && (task.status === "queued" || task.status === "running"); attempt += 1) {
+        for (let attempt = 0; mounted.current && attempt < 80 && (task.status === "queued" || task.status === "running"); attempt += 1) {
           await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+          if (!mounted.current) return;
           task = (await getPlatformElementValidation(platformContext.session.token, platformContext.projectId, task.id)).validation;
         }
         if (task.status === "queued" || task.status === "running") throw new Error("VALIDATION_TIMEOUT");
@@ -200,22 +205,26 @@ export function ElementsPage({ project }: { project: Project }) {
       width: 105,
       render: (_, item) => (
         <Space size={0}>
-          <Tooltip title="验证元素">
-            <Button
-              type="text"
-              icon={<ExperimentOutlined />}
-              aria-label={`验证元素 ${item.name}`}
-              onClick={() => startValidation(item)}
-            />
-          </Tooltip>
-          <Tooltip title="编辑">
-            <Button
-              type="text"
-              icon={<EditOutlined />}
-              aria-label={`编辑元素 ${item.name}`}
-              onClick={() => setEditor(item)}
-            />
-          </Tooltip>
+          {canRunValidation && (
+            <Tooltip title="验证元素">
+              <Button
+                type="text"
+                icon={<ExperimentOutlined />}
+                aria-label={`验证元素 ${item.name}`}
+                onClick={() => startValidation(item)}
+              />
+            </Tooltip>
+          )}
+          {canManageElement && (
+            <Tooltip title="编辑">
+              <Button
+                type="text"
+                icon={<EditOutlined />}
+                aria-label={`编辑元素 ${item.name}`}
+                onClick={() => setEditor(item)}
+              />
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -226,13 +235,15 @@ export function ElementsPage({ project }: { project: Project }) {
         title="元素库"
         description="维护可复用的页面定位资产，并持续验证其稳定性。"
         actions={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setEditor("new")}
-          >
-            新建元素
-          </Button>
+          canManageElement ? (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setEditor("new")}
+            >
+              新建元素
+            </Button>
+          ) : undefined
         }
       />
       <div className="list-tools">

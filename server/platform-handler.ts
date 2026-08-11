@@ -4,7 +4,7 @@ import {routeHandler} from "./http-utils";
 import type {AgentRecord, AuthUser, Capability, DeliveryStatus, LocatorCandidate, NotificationChannelType, PlatformApi, RevisionStatus, Role, ValidatedNotificationTarget} from "./platform-core";
 import {randomBytes, randomUUID} from "node:crypto";
 import {createReadStream} from "node:fs";
-import {mkdir, writeFile} from "node:fs/promises";
+import {mkdir, rm, writeFile} from "node:fs/promises";
 import type {IncomingMessage} from "node:http";
 import {join} from "node:path";
 import type {Duplex} from "node:stream";
@@ -21,13 +21,30 @@ const resourceCapabilities: Record<string, Capability> = {
   environments: "environment.manage",
 };
 
+function assertSnapshotDepth(value: unknown, limit = 100, current = 0) {
+  if (current > limit) throw new PlatformError(400, "SNAPSHOT_TOO_DEEP");
+  if (Array.isArray(value)) {
+    for (const item of value) assertSnapshotDepth(item, limit, current + 1);
+  } else if (value && typeof value === "object") {
+    for (const item of Object.values(value)) assertSnapshotDepth(item, limit, current + 1);
+  }
+}
+
 export function createPlatformHandler(services: PlatformServices): PlatformApi {
-  const handle = routeHandler(async (request, response, url) => {
-    if (!url.pathname.startsWith("/api/")) return false;
+  let lastMaintenanceAt = 0;
+  const runMaintenance = () => {
+    // expireDebugSessions 轻量且对空闲恢复时序敏感，每个请求保持执行。
+    services.expireDebugSessions();
+    const nowMs = Date.now();
+    if (nowMs - lastMaintenanceAt < 2_000) return;
+    lastMaintenanceAt = nowMs;
     services.recoverExpiredLeases();
     services.recoverStaleElementValidations();
-    services.expireDebugSessions();
     services.processDueSchedules();
+  };
+  const handle = routeHandler(async (request, response, url) => {
+    if (!url.pathname.startsWith("/api/")) return false;
+    runMaintenance();
     if (url.pathname === "/api/platform/health" && request.method === "GET") {
       const agents = services.database.prepare(`SELECT COUNT(*) AS count FROM agents WHERE status = 'online'`).get() as { count: number };
       sendJson(response, 200, { ok: true, service: "platform", onlineAgents: agents.count });
@@ -77,7 +94,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         const body = await readJson<{ email?: string; name?: string; password?: string; invitationToken?: string }>(request);
         const email = body.email?.trim().toLowerCase();
         const password = body.password?.trim();
-        if (!email || !email.includes("@") || !password || password.length < 8) throw new PlatformError(400, "REGISTER_INPUT_INVALID");
+        if (!email || !email.includes("@") || !password || password.length < 8 || password.length > 1024) throw new PlatformError(400, "REGISTER_INPUT_INVALID");
         let user = services.database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ?`).get(email) as AuthUser | undefined;
         if (user) {
           const existingCredential = services.database.prepare(`SELECT user_id FROM platform_user_credentials WHERE user_id = ?`).get(user.id) as { user_id: string } | undefined;
@@ -95,11 +112,18 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           services.database.prepare(`UPDATE workspace_invitations SET accepted_at = ? WHERE id = ?`).run(created, invitation.id);
         } else {
           user = { id: randomUUID(), email, name: body.name?.trim().slice(0, 100) || email.split("@")[0] };
-          services.database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(user.id, user.email, user.name, now());
-          const created = now();
-          services.database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
-            .run(user.id, passwordHash(password), created, created);
-          services.createWorkspace(user, `${user.name}'s workspace`);
+          services.database.exec("BEGIN IMMEDIATE");
+          try {
+            services.database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(user.id, user.email, user.name, now());
+            const created = now();
+            services.database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+              .run(user.id, passwordHash(password), created, created);
+            services.createWorkspace(user, `${user.name}'s workspace`);
+            services.database.exec("COMMIT");
+          } catch (error) {
+            services.database.exec("ROLLBACK");
+            throw error;
+          }
         }
         const session = services.createAuthSession(user);
         setSessionCookie(response, session.token, session.expiresAt);
@@ -415,6 +439,9 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         if (request.method === "PUT") {
           const body = await readJson<{ data?: Record<string, unknown>; expectedVersion?: number }>(request, 5_000_000);
           if (!body.data) throw new PlatformError(400, "DOCUMENT_REQUIRED");
+          for (const [key, capability] of Object.entries(resourceCapabilities)) {
+            if (key in body.data) services.requireProjectCapability(projectId, user.id, capability);
+          }
           const result = services.putDocument(projectId, asRecord(body.data), body.expectedVersion);
           services.database.prepare(`UPDATE platform_projects SET updated_at = ? WHERE id = ?`).run(now(), projectId);
           services.audit(project.workspace_id, { type: "user", id: user.id }, "project.document_saved", { type: "project", id: projectId }, { version: result.version }, projectId);
@@ -696,6 +723,10 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           const dataset = datasetVersion
             ? { datasetId: datasetVersion.datasetId, versionId: datasetVersion.id, versionNumber: datasetVersion.versionNumber, checksum: datasetVersion.checksum, columns: datasetVersion.columns, rowCount: datasetVersion.rowCount }
             : body.dataset ?? null;
+          assertSnapshotDepth(flow);
+          assertSnapshotDepth(environment);
+          assertSnapshotDepth(elements);
+          assertSnapshotDepth(dataset);
           const flowSnapshot: Record<string, unknown> = { ...asRecord(flow), secretNames };
           const flowStepCount = Array.isArray(flowSnapshot.steps) ? flowSnapshot.steps.length : 0;
           const snapshot = {
@@ -705,10 +736,18 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
             dataset,
             secretNames,
           };
-          const rows = services.database.prepare(`SELECT revision_number FROM flow_revisions WHERE project_id = ?`).all(projectId) as Array<{ revision_number: number }>;
-          const revision = { id: randomUUID(), number: revisionNumber(rows), checksum: digest(json(snapshot)), createdAt: now() };
-          services.database.prepare(`INSERT INTO flow_revisions (id, project_id, flow_id, flow_name, environment_id, revision_number, status, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`)
-            .run(revision.id, projectId, flowId, flowName || null, environmentId, revision.number, json(snapshot.flow), json(snapshot.environment), json(snapshot.elements), json(snapshot.dataset), revision.checksum, user.id, revision.createdAt);
+          services.database.exec("BEGIN IMMEDIATE");
+          let revision: { id: string; number: number; checksum: string; createdAt: string };
+          try {
+            const rows = services.database.prepare(`SELECT revision_number FROM flow_revisions WHERE project_id = ?`).all(projectId) as Array<{ revision_number: number }>;
+            revision = { id: randomUUID(), number: revisionNumber(rows), checksum: digest(json(snapshot)), createdAt: now() };
+            services.database.prepare(`INSERT INTO flow_revisions (id, project_id, flow_id, flow_name, environment_id, revision_number, status, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`)
+              .run(revision.id, projectId, flowId, flowName || null, environmentId, revision.number, json(snapshot.flow), json(snapshot.environment), json(snapshot.elements), json(snapshot.dataset), revision.checksum, user.id, revision.createdAt);
+            services.database.exec("COMMIT");
+          } catch (error) {
+            services.database.exec("ROLLBACK");
+            throw error;
+          }
           services.audit(project.workspace_id, { type: "user", id: user.id }, "flow_revision.created", { type: "flow_revision", id: revision.id }, { revisionNumber: revision.number }, projectId);
           sendJson(response, 201, { revision: { id: revision.id, flowId, flowName: flowName || undefined, environmentId, stepCount: flowStepCount, revisionNumber: revision.number, status: "draft", checksum: revision.checksum, createdAt: revision.createdAt } });
           return true;
@@ -873,17 +912,22 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           if (!name || !body.fileName || !body.contentBase64) throw new PlatformError(400, "DATASET_IMPORT_INPUT_INVALID");
           const parsed = await services.parseDatasetUpload(body.fileName, body.contentBase64);
           const dataset = { id: randomUUID(), name, createdAt: now() };
+          services.database.exec("BEGIN IMMEDIATE");
+          let version: { id: string; number: number; checksum: string; createdAt: string };
           try {
             services.database.prepare(`INSERT INTO datasets (id, project_id, name, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
               .run(dataset.id, projectId, dataset.name, body.description?.trim().slice(0, 1_000) ?? "", user.id, dataset.createdAt, dataset.createdAt);
-          } catch {
+            version = { id: randomUUID(), number: 1, checksum: digest(json({ columns: parsed.columns, rows: parsed.rows })), createdAt: now() };
+            services.database.prepare(`INSERT INTO dataset_versions (id, dataset_id, version_number, columns_json, row_count, checksum, source_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(version.id, dataset.id, version.number, json(parsed.columns), parsed.rows.length, version.checksum, parsed.sourceName, user.id, version.createdAt);
+            const insert = services.database.prepare(`INSERT INTO dataset_rows (id, dataset_version_id, row_number, data_json) VALUES (?, ?, ?, ?)`);
+            for (const [index, row] of parsed.rows.entries()) insert.run(randomUUID(), version.id, index + 1, json(row));
+            services.database.exec("COMMIT");
+          } catch (error) {
+            services.database.exec("ROLLBACK");
+            if (error instanceof PlatformError) throw error;
             throw new PlatformError(409, "DATASET_NAME_EXISTS");
           }
-          const version = { id: randomUUID(), number: 1, checksum: digest(json({ columns: parsed.columns, rows: parsed.rows })), createdAt: now() };
-          services.database.prepare(`INSERT INTO dataset_versions (id, dataset_id, version_number, columns_json, row_count, checksum, source_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(version.id, dataset.id, version.number, json(parsed.columns), parsed.rows.length, version.checksum, parsed.sourceName, user.id, version.createdAt);
-          const insert = services.database.prepare(`INSERT INTO dataset_rows (id, dataset_version_id, row_number, data_json) VALUES (?, ?, ?, ?)`);
-          for (const [index, row] of parsed.rows.entries()) insert.run(randomUUID(), version.id, index + 1, json(row));
           services.audit(project.workspace_id, { type: "user", id: user.id }, "dataset.imported", { type: "dataset", id: dataset.id }, { versionId: version.id, rows: parsed.rows.length, sourceName: parsed.sourceName }, projectId);
           sendJson(response, 201, { dataset: { id: dataset.id, name: dataset.name, description: body.description?.trim() ?? "", createdAt: dataset.createdAt }, version: services.datasetVersionFor(projectId, version.id) });
           return true;
@@ -924,12 +968,20 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           const body = await readJson<{ fileName?: string; contentBase64?: string }>(request, 18_000_000);
           if (!body.fileName || !body.contentBase64) throw new PlatformError(400, "DATASET_IMPORT_INPUT_INVALID");
           const parsed = await services.parseDatasetUpload(body.fileName, body.contentBase64);
-          const latest = services.database.prepare(`SELECT MAX(version_number) AS number FROM dataset_versions WHERE dataset_id = ?`).get(datasetId) as { number: number | null };
-          const version = { id: randomUUID(), number: Number(latest.number ?? 0) + 1, checksum: digest(json({ columns: parsed.columns, rows: parsed.rows })), createdAt: now() };
-          services.database.prepare(`INSERT INTO dataset_versions (id, dataset_id, version_number, columns_json, row_count, checksum, source_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(version.id, datasetId, version.number, json(parsed.columns), parsed.rows.length, version.checksum, parsed.sourceName, user.id, version.createdAt);
-          const insert = services.database.prepare(`INSERT INTO dataset_rows (id, dataset_version_id, row_number, data_json) VALUES (?, ?, ?, ?)`);
-          for (const [index, row] of parsed.rows.entries()) insert.run(randomUUID(), version.id, index + 1, json(row));
+          services.database.exec("BEGIN IMMEDIATE");
+          let version: { id: string; number: number; checksum: string; createdAt: string };
+          try {
+            const latest = services.database.prepare(`SELECT MAX(version_number) AS number FROM dataset_versions WHERE dataset_id = ?`).get(datasetId) as { number: number | null };
+            version = { id: randomUUID(), number: Number(latest.number ?? 0) + 1, checksum: digest(json({ columns: parsed.columns, rows: parsed.rows })), createdAt: now() };
+            services.database.prepare(`INSERT INTO dataset_versions (id, dataset_id, version_number, columns_json, row_count, checksum, source_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(version.id, datasetId, version.number, json(parsed.columns), parsed.rows.length, version.checksum, parsed.sourceName, user.id, version.createdAt);
+            const insert = services.database.prepare(`INSERT INTO dataset_rows (id, dataset_version_id, row_number, data_json) VALUES (?, ?, ?, ?)`);
+            for (const [index, row] of parsed.rows.entries()) insert.run(randomUUID(), version.id, index + 1, json(row));
+            services.database.exec("COMMIT");
+          } catch (error) {
+            services.database.exec("ROLLBACK");
+            throw error;
+          }
           services.database.prepare(`UPDATE datasets SET updated_at = ? WHERE id = ?`).run(now(), datasetId);
           services.audit(project.workspace_id, { type: "user", id: user.id }, "dataset.version_imported", { type: "dataset_version", id: version.id }, { datasetId, version: version.number, rows: parsed.rows.length }, projectId);
           sendJson(response, 201, { version: services.datasetVersionFor(projectId, version.id) });
@@ -1278,7 +1330,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
       if (debugSessionRoot) {
         const user = services.sessionUser(request);
         const projectId = decodeURIComponent(debugSessionRoot[1]);
-        const { project } = services.requireProjectRole(projectId, user.id, request.method !== "GET");
+        const { project } = request.method === "GET" ? services.requireProjectRole(projectId, user.id) : services.requireProjectCapability(projectId, user.id, "run.execute");
         if (request.method === "GET") {
           const rows = services.database
             .prepare(`SELECT id FROM debug_sessions WHERE project_id = ? ORDER BY created_at DESC LIMIT 100`)
@@ -1522,10 +1574,15 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         const content = Buffer.from(body.contentBase64, "base64");
         if (content.length === 0 || content.length > 18_000_000) throw new PlatformError(413, "ARTIFACT_TOO_LARGE");
         await mkdir(platformArtifactDirectory, { recursive: true });
-        const artifact = { id: randomUUID(), name: safeArtifactName(body.name ?? "debug-artifact.bin"), contentType: body.contentType?.slice(0, 120) ?? "application/octet-stream" };
+        const artifact = { id: randomUUID(), name: safeArtifactName(body.name ?? "debug-artifact.bin"), contentType: body.contentType?.replace(/[^\x21-\x7e]/g, "").slice(0, 120) ?? "application/octet-stream" };
         const path = join(platformArtifactDirectory, `${artifact.id}-${artifact.name}`);
         await writeFile(path, content);
-        services.database.prepare(`INSERT INTO debug_artifacts (id, session_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, session.id, session.projectId, artifact.name, artifact.contentType, path, now());
+        try {
+          services.database.prepare(`INSERT INTO debug_artifacts (id, session_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, session.id, session.projectId, artifact.name, artifact.contentType, path, now());
+        } catch (error) {
+          await rm(path, { force: true }).catch(() => undefined);
+          throw error;
+        }
         services.appendDebugEvent(session.id, "artifact.uploaded", { artifactId: artifact.id, name: artifact.name });
         sendJson(response, 201, { artifact: { id: artifact.id, name: artifact.name, contentType: artifact.contentType } });
         return true;
@@ -1546,7 +1603,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
       if (platformRunRoot) {
         const user = services.sessionUser(request);
         const projectId = decodeURIComponent(platformRunRoot[1]);
-        const { project } = services.requireProjectRole(projectId, user.id, request.method !== "GET");
+        const { project } = request.method === "GET" ? services.requireProjectRole(projectId, user.id) : services.requireProjectCapability(projectId, user.id, "run.execute");
         if (request.method === "GET") {
           const rows = services.database.prepare(`SELECT id FROM platform_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 200`).all(projectId) as Array<{ id: string }>;
           sendJson(response, 200, { runs: rows.map((row) => services.runResponse(services.runById(row.id))) });
@@ -1566,7 +1623,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
       if (validationRoot) {
         const user = services.sessionUser(request);
         const projectId = decodeURIComponent(validationRoot[1]);
-        const { project } = services.requireProjectRole(projectId, user.id, request.method !== "GET");
+        const { project } = request.method === "GET" ? services.requireProjectRole(projectId, user.id) : services.requireProjectCapability(projectId, user.id, "run.execute");
         if (request.method === "POST") {
           const body = await readJson<{ environmentId?: string; element?: Record<string, unknown> }>(request);
           if (!body.environmentId || !body.element) throw new PlatformError(400, "ELEMENT_VALIDATION_INPUT_INVALID");
@@ -1649,10 +1706,15 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         if (content.length === 0 || content.length > 18_000_000) throw new PlatformError(413, "ARTIFACT_TOO_LARGE");
         const run = services.runById(lease.runId);
         await mkdir(platformArtifactDirectory, { recursive: true });
-        const artifact = { id: randomUUID(), name: safeArtifactName(body.name ?? "artifact.bin"), contentType: body.contentType?.slice(0, 120) ?? "application/octet-stream" };
+        const artifact = { id: randomUUID(), name: safeArtifactName(body.name ?? "artifact.bin"), contentType: body.contentType?.replace(/[^\x21-\x7e]/g, "").slice(0, 120) ?? "application/octet-stream" };
         const path = join(platformArtifactDirectory, `${artifact.id}-${artifact.name}`);
         await writeFile(path, content);
-        services.database.prepare(`INSERT INTO platform_artifacts (id, run_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, run.id, run.projectId, artifact.name, artifact.contentType, path, now());
+        try {
+          services.database.prepare(`INSERT INTO platform_artifacts (id, run_id, project_id, name, content_type, path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, run.id, run.projectId, artifact.name, artifact.contentType, path, now());
+        } catch (error) {
+          await rm(path, { force: true }).catch(() => undefined);
+          throw error;
+        }
         services.appendRunEvent(run.id, "artifact.uploaded", { artifactId: artifact.id, name: artifact.name });
         sendJson(response, 201, { artifact: { id: artifact.id, name: artifact.name, contentType: artifact.contentType } });
         return true;

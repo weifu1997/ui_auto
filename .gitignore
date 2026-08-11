@@ -12,6 +12,7 @@ agent/.identity.json
 server/.platform-artifacts
 server/.artifacts
 server/.data
+server/.tmp-platform-debug
 test-results
 playwright-report
 blob-report

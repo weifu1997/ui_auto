@@ -2,10 +2,15 @@ param(
   [string]$Root = "D:\AutoFlow",
   [Parameter(Mandatory=$true)][string]$NodeExe,
   [Parameter(Mandatory=$true)][string]$WinSWExe,
-  [Parameter(Mandatory=$true)][string]$PlatformSecretKey,
-  [string]$NotificationHostAllowlist = ""
+  [string]$PlatformSecretKey = "",
+  [string]$NotificationHostAllowlist = "",
+  [string]$CorsOrigins = ""
 )
 $ErrorActionPreference = "Stop"
+if (-not $PlatformSecretKey) {
+  $secureSecret = Read-Host -AsSecureString "请输入至少 32 字符的 PLATFORM_SECRET_KEY"
+  $PlatformSecretKey = [System.Net.NetworkCredential]::new("", $secureSecret).Password
+}
 if ($PlatformSecretKey.Length -lt 32) { throw "PlatformSecretKey must contain at least 32 characters" }
 $resolvedRoot = [IO.Path]::GetFullPath($Root)
 foreach ($folder in @("app","data","artifacts","logs","backups","browsers","runtime")) { New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot $folder) | Out-Null }
@@ -16,11 +21,12 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\deployment\AutoFlow.xml") -D
 $escapedSecret = [Security.SecurityElement]::Escape($PlatformSecretKey)
 $escapedAllowlist = [Security.SecurityElement]::Escape($NotificationHostAllowlist)
 $allowPrivate = if ($NotificationHostAllowlist) { "1" } else { "0" }
-$config = (Get-Content -Raw -LiteralPath $serviceConfig).Replace("__PLATFORM_SECRET_KEY__", $escapedSecret).Replace("__NOTIFICATION_HOST_ALLOWLIST__", $escapedAllowlist).Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", $allowPrivate)
+$escapedCors = [Security.SecurityElement]::Escape($CorsOrigins)
+$config = (Get-Content -Raw -LiteralPath $serviceConfig).Replace("__PLATFORM_SECRET_KEY__", $escapedSecret).Replace("__AUTOFLOW_CORS_ORIGINS__", $escapedCors).Replace("__NOTIFICATION_HOST_ALLOWLIST__", $escapedAllowlist).Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", $allowPrivate)
 Set-Content -LiteralPath $serviceConfig -Value $config -Encoding UTF8
 $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $appRoot = Join-Path $resolvedRoot "app"
-& robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "server\.data") (Join-Path $sourceRoot "server\.artifacts") (Join-Path $sourceRoot "server\.platform-artifacts") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null
+& robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "server\.data") (Join-Path $sourceRoot "server\.artifacts") (Join-Path $sourceRoot "server\.platform-artifacts") (Join-Path $sourceRoot "server\.tmp-platform-debug") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Application file copy failed with robocopy exit code $LASTEXITCODE" }
 $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $resolvedRoot "browsers"

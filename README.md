@@ -33,7 +33,7 @@ npm run test:unit
 npm run test:e2e
 npm run test:worker
 npm run test:platform
-npm run test:agent
+npm run test:agent  # 已知红：agent 原型 smoke，不纳入 test:all 门禁
 ```
 
 ## Platform milestone

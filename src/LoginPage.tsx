@@ -1,7 +1,7 @@
 import { LockOutlined, MailOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Typography } from "antd";
 import { useState } from "react";
-import { loginPlatform } from "./platform-api";
+import { loginPlatform, PlatformApiError } from "./platform-api";
 import type { PlatformSession } from "./platform-api";
 
 type LoginValues = { email: string; password: string };
@@ -15,8 +15,14 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (session: Plat
     setError(undefined);
     try {
       onAuthenticated(await loginPlatform(values));
-    } catch {
-      setError("邮箱或密码不正确，或账号已被停用");
+    } catch (error) {
+      if (error instanceof PlatformApiError) {
+        if (error.status === 401) setError("邮箱或密码不正确，或账号已被停用");
+        else if (error.status === 0) setError("连接平台服务超时，请稍后重试");
+        else setError(`登录失败（${error.code}）`);
+      } else {
+        setError("无法连接平台服务，请检查网络或服务状态");
+      }
     } finally {
       setSubmitting(false);
     }

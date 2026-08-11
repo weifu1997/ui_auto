@@ -13,7 +13,7 @@ import { useWorkspaceStore } from "../workspace-store";
 import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
 import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, ExperimentOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "../App.css";
 import "../responsive.css";
 
@@ -129,6 +129,41 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   );
 }
 
+export type Role = "owner" | "admin" | "publisher" | "product" | "tester" | "operations" | "editor" | "viewer";
+export type Capability =
+  | "project.view" | "project.edit" | "flow.edit" | "element.manage"
+  | "variable.manage" | "environment.manage" | "secret.manage"
+  | "release.submit" | "release.publish" | "run.execute"
+  | "dataset.manage" | "automation.manage" | "member.manage";
+
+const roleCapabilities: Record<Role, Capability[]> = {
+  owner: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage", "member.manage"],
+  admin: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage", "member.manage"],
+  publisher: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage"],
+  product: ["project.view", "project.edit", "flow.edit", "variable.manage", "release.submit"],
+  tester: ["project.view", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "run.execute", "dataset.manage"],
+  operations: ["project.view", "run.execute", "dataset.manage", "automation.manage"],
+  editor: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "release.submit", "run.execute", "dataset.manage"],
+  viewer: ["project.view"],
+};
+
+export function roleHasCapability(role: Role, capability: Capability) {
+  return roleCapabilities[role].includes(capability);
+}
+
+export function currentWorkspaceRole(): Role {
+  const session = readStoredPlatformSession();
+  const workspaceId = readStoredPlatformWorkspaceId(session);
+  return (session?.workspaces.find((workspace) => workspace.id === workspaceId)?.role ?? "viewer") as Role;
+}
+
+// 本地开发（无认证）保持全部按钮可见，与 ProjectLayout 的 production 判断一致。
+export function canUseCapability(capability: Capability) {
+  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
+  if (!production) return true;
+  return roleHasCapability(currentWorkspaceRole(), capability);
+}
+
 export function ProjectLayout({
   project,
   section,
@@ -147,6 +182,7 @@ export function ProjectLayout({
     tester: ["overview", "flows", "elements", "variables", "environments", "data", "runs", "platform"],
     operations: ["overview", "data", "automations", "runs", "governance"],
     publisher: ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance"],
+    editor: ["overview", "flows", "elements", "variables", "environments", "data", "runs", "platform"],
     viewer: ["overview", "runs"],
   };
   const visibleSections = production
@@ -450,8 +486,7 @@ export function watchWorkerRun(
   projectId: string,
   run: Run,
   upsertRun: (projectId: string, run: Run) => void,
-) {
-  let current = run;
+) {  let current = run;
   const unsubscribe = subscribeToTask(projectId, "runs", run.id, (event) => {
     if (event.kind === "status") {
       const status = event.data.status as Run["status"];
@@ -487,6 +522,35 @@ export function watchWorkerRun(
     if (isTerminalStatus(current.status)) unsubscribe();
   });
   return unsubscribe;
+}
+
+// 统一轮询 hook：页面隐藏时暂停定时器，恢复可见时重新调度。
+export function usePolling(callback: () => void | Promise<void>, intervalMs: number) {
+  const savedCallback = useRef(callback);
+  useEffect(() => {
+    savedCallback.current = callback;
+  });
+  useEffect(() => {
+    if (intervalMs <= 0) return;
+    let timer: number | undefined;
+    const schedule = () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      timer = window.setInterval(() => void savedCallback.current(), intervalMs);
+    };
+    schedule();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") schedule();
+      else if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [intervalMs]);
 }
 
 export function readFileAsBase64(file: File) {

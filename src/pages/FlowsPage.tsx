@@ -4,16 +4,24 @@ import type { Flow, Project, Run } from "../mock-data";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, requestRunSecrets, requiredSecretVariables, statusTag, watchWorkerRun } from "./shared";
+import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, requestRunSecrets, requiredSecretVariables, statusTag, watchWorkerRun } from "./shared";
 import { createRun } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function FlowsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
+  const canEditFlow = canUseCapability("flow.edit");
+  const canRunFlow = canUseCapability("run.execute");
+  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
+  const watchCleanups = useRef<Array<() => void>>([]);
+  useEffect(() => () => {
+    for (const cleanup of watchCleanups.current) cleanup();
+    watchCleanups.current = [];
+  }, []);
   const storedFlows = useWorkspaceStore((state) => state.flowsByProject[project.id]);
   const storedVariables = useWorkspaceStore(
     (state) => state.variablesByProject[project.id],
@@ -69,6 +77,10 @@ export function FlowsPage({ project }: { project: Project }) {
     if (!secretValues) return;
     try {
       const secretVariables = requiredSecretVariables(variables, steps);
+      if (secretVariables.length > 0 && production) {
+        message.error("生产环境已禁用本机 Worker 明文密钥路径，请通过平台运行");
+        return;
+      }
       const request = localWorkerRunRequest({
         environment: activeEnvironment,
         flow: { id: flow.id, name: flow.name },
@@ -93,7 +105,7 @@ export function FlowsPage({ project }: { project: Project }) {
         retries: 0,
       };
       upsertRun(project.id, run);
-      watchWorkerRun(project.id, run, upsertRun);
+      watchCleanups.current.push(watchWorkerRun(project.id, run, upsertRun));
       navigate(`/project/${project.id}/runs`);
     } catch {
       message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
@@ -134,6 +146,10 @@ export function FlowsPage({ project }: { project: Project }) {
     const secretVariables = requiredSecretVariables(variables, steps);
     if (!platformContext || !platformReady || !revision) {
       try {
+        if (secretVariables.length > 0 && production) {
+          message.error("生产环境已禁用本机 Worker 明文密钥路径，请通过平台运行");
+          return;
+        }
         const request = localWorkerRunRequest({
           environment: activeEnvironment,
           flow: { id: flow.id, name: flow.name },
@@ -158,7 +174,7 @@ export function FlowsPage({ project }: { project: Project }) {
           retries: 0,
         };
         upsertRun(project.id, run);
-        watchWorkerRun(project.id, run, upsertRun);
+        watchCleanups.current.push(watchWorkerRun(project.id, run, upsertRun));
         message.info("平台没有可用的已绑定在线 Agent，已改用本机 Playwright Worker");
         navigate(`/project/${project.id}/runs`);
       } catch {
@@ -250,50 +266,56 @@ export function FlowsPage({ project }: { project: Project }) {
       width: 142,
       render: (_, flow) => (
         <Space size={0}>
-          <Tooltip title="运行流程">
-            <Button
-              type="text"
-              icon={<PlayCircleFilled />}
-              aria-label={`运行流程 ${flow.name}`}
-              onClick={() => void runFlow(flow)}
-            />
-          </Tooltip>
-          <Tooltip title="复制流程">
-            <Button
-              type="text"
-              icon={<CopyOutlined />}
-              aria-label={`复制流程 ${flow.name}`}
-              onClick={() => {
-                updateItems((list) => [
-                  {
-                    ...flow,
-                    id: `${flow.id}-copy-${Date.now()}`,
-                    name: `${flow.name} - 副本`,
-                    updatedAt: "刚刚",
-                  },
-                  ...list,
-                ]);
-                message.success("已创建流程副本");
-              }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="删除此流程？"
-            okText="删除"
-            cancelText="取消"
-            onConfirm={() =>
-              updateItems((list) => list.filter((item) => item.id !== flow.id))
-            }
-          >
-            <Tooltip title="删除流程">
+          {canRunFlow && (
+            <Tooltip title="运行流程">
               <Button
                 type="text"
-                danger
-                icon={<DeleteOutlined />}
-                aria-label={`删除流程 ${flow.name}`}
+                icon={<PlayCircleFilled />}
+                aria-label={`运行流程 ${flow.name}`}
+                onClick={() => void runFlow(flow)}
               />
             </Tooltip>
-          </Popconfirm>
+          )}
+          {canEditFlow && (
+            <>
+              <Tooltip title="复制流程">
+                <Button
+                  type="text"
+                  icon={<CopyOutlined />}
+                  aria-label={`复制流程 ${flow.name}`}
+                  onClick={() => {
+                    updateItems((list) => [
+                      {
+                        ...flow,
+                        id: `${flow.id}-copy-${Date.now()}`,
+                        name: `${flow.name} - 副本`,
+                        updatedAt: "刚刚",
+                      },
+                      ...list,
+                    ]);
+                    message.success("已创建流程副本");
+                  }}
+                />
+              </Tooltip>
+              <Popconfirm
+                title="删除此流程？"
+                okText="删除"
+                cancelText="取消"
+                onConfirm={() =>
+                  updateItems((list) => list.filter((item) => item.id !== flow.id))
+                }
+              >
+                <Tooltip title="删除流程">
+                  <Button
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    aria-label={`删除流程 ${flow.name}`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            </>
+          )}
         </Space>
       ),
     },
@@ -304,13 +326,15 @@ export function FlowsPage({ project }: { project: Project }) {
         title="流程"
         description="由元素、动作和参数组合而成的可执行自动化流程。"
         actions={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setDraftOpen(true)}
-          >
-            新建流程
-          </Button>
+          canEditFlow ? (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setDraftOpen(true)}
+            >
+              新建流程
+            </Button>
+          ) : undefined
         }
       />
       <div className="list-tools">

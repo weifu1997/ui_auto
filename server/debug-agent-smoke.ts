@@ -204,7 +204,7 @@ try {
     method: "POST",
     headers: headers(token),
     body: JSON.stringify({
-      flow: { id: "sensitive-debug-flow", name: "Sensitive debug flow", steps: [{ id: "open", title: "Open login", action: "open", value: "/__fixture/login", timeout: 10 }] },
+      flow: { id: "sensitive-debug-flow", name: "Sensitive debug flow", steps: [{ id: "open", title: "Open login", action: "open", value: "/__fixture/login?token=not-for-artifacts", timeout: 10 }] },
        environment: fixtureEnvironment,
       elements: [],
       secretNames: ["login_password"],
@@ -231,10 +231,16 @@ try {
     body: JSON.stringify({ command: "runCurrent" }),
   });
   const sensitiveComplete = await waitFor(async () => {
-    const response = await api<{ session: { currentStep: number; artifacts: unknown[] } }>(`/api/platform/projects/${projectId}/debug-sessions/${sensitiveDebugId}`, { headers: headers(token) });
+    const response = await api<{ session: { currentStep: number; artifacts: unknown[]; currentUrl?: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${sensitiveDebugId}`, { headers: headers(token) });
     return response.body.session.currentStep === 1 ? response.body.session : undefined;
   }, "sensitive debug step");
   if (sensitiveComplete.artifacts.length !== 0) throw new Error("Sensitive debug session uploaded an artifact");
+  if ((sensitiveComplete.currentUrl ?? "").includes("not-for-artifacts")) {
+    throw new Error(`Sensitive debug session persisted a secret in currentUrl: ${sensitiveComplete.currentUrl}`);
+  }
+  if (!(sensitiveComplete.currentUrl ?? "").includes("***")) {
+    throw new Error("Sensitive debug session currentUrl was not redacted");
+  }
   await api(`/api/platform/projects/${projectId}/debug-sessions/${sensitiveDebugId}/commands`, {
     method: "POST",
     headers: headers(token),

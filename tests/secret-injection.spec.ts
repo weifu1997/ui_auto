@@ -73,9 +73,11 @@ test("injects a secret only for the current run and asks again after a refresh",
   await page.goto("/project/secret-ui/flows");
   let workerRequests = 0;
   const platformRequests: string[] = [];
+  const platformBodies: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/api/platform/") || request.url().includes("/api/workspaces/")) {
       platformRequests.push(request.url());
+      platformBodies.push(request.postData() ?? "");
     }
   });
   await page.route("**/api/projects/secret-ui/runs", async (route) => {
@@ -88,6 +90,7 @@ test("injects a secret only for the current run and asks again after a refresh",
   await page.getByRole("button", { name: "注入并运行" }).click();
   await expect.poll(() => workerRequests).toBe(1);
   expect(platformRequests).toEqual([]);
+  expect(platformBodies.every((body) => !body.includes("only-in-memory"))).toBe(true);
   await expect.poll(() => page.url()).toContain("/project/secret-ui/runs");
   await expect.poll(() => page.evaluate(() => JSON.stringify(localStorage))).not.toContain("only-in-memory");
 

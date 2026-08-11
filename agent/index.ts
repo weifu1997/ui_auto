@@ -176,9 +176,10 @@ async function register(): Promise<AgentIdentity> {
   if (!registrationToken) {
     throw new Error("AUTOFLOW_AGENT_REGISTRATION_TOKEN is required for first registration");
   }
-  const response = await fetch(`${platformUrl}/api/agents/register`, {
+  const response = await fetch(`${platformUrl.split("?")[0]}/api/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
       registrationToken,
       name: process.env.AUTOFLOW_AGENT_NAME ?? `agent-${process.env.COMPUTERNAME ?? "local"}`,
@@ -199,6 +200,7 @@ async function uploadArtifact(identity: AgentIdentity, leaseId: string, name: st
   const response = await fetch(`${identity.platformUrl}/api/agents/${encodeURIComponent(identity.agentId)}/leases/${encodeURIComponent(leaseId)}/artifacts`, {
     method: "POST",
     headers: agentHeaders(identity),
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({ name, contentType, contentBase64: content.toString("base64") }),
   });
   if (!response.ok) throw new Error("Artifact upload failed");
@@ -208,6 +210,7 @@ async function uploadDebugArtifact(identity: AgentIdentity, sessionId: string, n
   const response = await fetch(`${identity.platformUrl}/api/agents/${encodeURIComponent(identity.agentId)}/debug-sessions/${encodeURIComponent(sessionId)}/artifacts`, {
     method: "POST",
     headers: agentHeaders(identity),
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({ name, contentType, contentBase64: content.toString("base64") }),
   });
   if (!response.ok) throw new Error("Debug artifact upload failed");
@@ -1026,7 +1029,7 @@ async function runLease(socket: WebSocket, identity: AgentIdentity, payload: Run
 async function start() {
   requireSecurePlatformTransport(platformUrl);
   const identity = (await loadIdentity()) ?? (await register());
-  const wsUrl = agentWebSocketUrl(identity.platformUrl);
+  const wsUrl = agentWebSocketUrl(platformUrl);
   wsUrl.searchParams.set("agentId", identity.agentId);
   const socket = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${identity.credential}` } });
   let debugMessageQueue = Promise.resolve();

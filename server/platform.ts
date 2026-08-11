@@ -70,8 +70,8 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
-import type { WebSocket, RawData } from "ws";
-import { WebSocketServer } from "ws";
+import type { RawData } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { readSheet } from "read-excel-file/node";
 import { createAuditWriter } from "./platform-audit";
 
@@ -695,35 +695,42 @@ function createPlatformServices(dataDirectory: string) {
         }),
       );
     const runIds: string[] = [];
-    for (const row of rows) {
-      const dispatchKey = input.dispatchKey ? `${input.dispatchKey}:${row.rowNumber ?? 0}` : null;
-      if (dispatchKey) {
-        const existing = database.prepare("SELECT id FROM platform_runs WHERE dispatch_key = ?").get(dispatchKey) as { id: string } | undefined;
-        if (existing) {
-          runIds.push(existing.id);
-          continue;
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const row of rows) {
+        const dispatchKey = input.dispatchKey ? `${input.dispatchKey}:${row.rowNumber ?? 0}` : null;
+        if (dispatchKey) {
+          const existing = database.prepare("SELECT id FROM platform_runs WHERE dispatch_key = ?").get(dispatchKey) as { id: string } | undefined;
+          if (existing) {
+            runIds.push(existing.id);
+            continue;
+          }
         }
+        const run = { id: randomUUID(), projectId: input.projectId, revisionId: revision.id, agentId: agent.id, environmentId, createdAt: now() };
+        const snapshot = {
+          flowRevisionId: revision.id,
+          flowRevisionChecksum: revision.checksum,
+          environmentId,
+          flow,
+          environment,
+          elements: parseJson<unknown[]>(revision.element_snapshot, []),
+          dataset: datasetVersion ? { datasetId: datasetVersion.datasetId, versionId: datasetVersion.id, versionNumber: datasetVersion.versionNumber, checksum: datasetVersion.checksum, columns: datasetVersion.columns } : null,
+          datasetRow: row.data ? { number: row.rowNumber, data: row.data } : null,
+          secretNames: secretNames.filter((name) => requiredSecretNames.has(name)),
+          upToStepId: input.upToStepId ?? null,
+          executor: { type: executorType, id: agent.id, name: agent.name, browserVersion: agent.browserVersion },
+          agent: executorType === "agent" ? { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency } : null,
+          trigger: input.source,
+        };
+        database.prepare(`INSERT INTO platform_runs (id, project_id, revision_id, environment_id, agent_id, executor_type, dispatch_key, status, snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
+          .run(run.id, run.projectId, run.revisionId, run.environmentId, run.agentId, executorType, dispatchKey, json(snapshot), input.createdBy, run.createdAt, run.createdAt);
+        appendRunEvent(run.id, "run.queued", { revisionId: run.revisionId, environmentId, executorType, source: input.source, datasetVersionId, datasetRow: row.rowNumber });
+        runIds.push(run.id);
       }
-      const run = { id: randomUUID(), projectId: input.projectId, revisionId: revision.id, agentId: agent.id, environmentId, createdAt: now() };
-      const snapshot = {
-        flowRevisionId: revision.id,
-        flowRevisionChecksum: revision.checksum,
-        environmentId,
-        flow,
-        environment,
-        elements: parseJson<unknown[]>(revision.element_snapshot, []),
-        dataset: datasetVersion ? { datasetId: datasetVersion.datasetId, versionId: datasetVersion.id, versionNumber: datasetVersion.versionNumber, checksum: datasetVersion.checksum, columns: datasetVersion.columns } : null,
-        datasetRow: row.data ? { number: row.rowNumber, data: row.data } : null,
-        secretNames: secretNames.filter((name) => requiredSecretNames.has(name)),
-        upToStepId: input.upToStepId ?? null,
-        executor: { type: executorType, id: agent.id, name: agent.name, browserVersion: agent.browserVersion },
-        agent: executorType === "agent" ? { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency } : null,
-        trigger: input.source,
-      };
-      database.prepare(`INSERT INTO platform_runs (id, project_id, revision_id, environment_id, agent_id, executor_type, dispatch_key, status, snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
-        .run(run.id, run.projectId, run.revisionId, run.environmentId, run.agentId, executorType, dispatchKey, json(snapshot), input.createdBy, run.createdAt, run.createdAt);
-      appendRunEvent(run.id, "run.queued", { revisionId: run.revisionId, environmentId, executorType, source: input.source, datasetVersionId, datasetRow: row.rowNumber });
-      runIds.push(run.id);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
     }
     for (const runId of runIds) {
       if (managedExecutionEnabled) enqueueManagedRun(runId);
@@ -845,11 +852,13 @@ function createPlatformServices(dataDirectory: string) {
         appendRunEvent(run.id, "artifact.created", { artifactId: artifact.id, name: artifact.name, contentType: artifact.contentType });
       },
       completed(result) {
-        const safeResult = redactRunValue(run, result) as Record<string, unknown>;
-        const status = result.status as PlatformRunStatus;
+        const currentRun = runById(run.id);
+        const safeResult = redactRunValue(currentRun, result) as Record<string, unknown>;
+        const requestedStatus = result.status === "success" || result.status === "failed" ? result.status : "failed";
+        const status: PlatformRunStatus = currentRun.cancellationRequested ? "canceled" : requestedStatus;
         database.prepare(`UPDATE platform_runs SET status = ?, result = ?, updated_at = ? WHERE id = ?`)
           .run(status, json(safeResult), now(), run.id);
-        persistFlowOutputs(run, safeResult);
+        persistFlowOutputs(currentRun, safeResult);
         appendRunEvent(run.id, "run.complete", { status, result: safeResult, executorType: "managed" });
         queueRunDeliveries(runById(run.id), status);
       },
@@ -949,7 +958,7 @@ function createPlatformServices(dataDirectory: string) {
          WHERE NOT EXISTS (SELECT 1 FROM deliveries WHERE channel_id = ? AND run_id = ?)`,
       ).run(randomUUID(), subscription.id, run.id, payload, now(), now(), now(), subscription.id, run.id);
     }
-    void deliverPendingNotifications();
+    void deliverPendingNotifications().catch((error) => console.error("deliverPendingNotifications failed", error));
   }
 
   function formatNotificationBody(channelType: NotificationChannelType, payload: Record<string, unknown>) {
@@ -961,50 +970,54 @@ function createPlatformServices(dataDirectory: string) {
   }
 
   async function deliverPendingNotifications() {
-    const staleClaim = new Date(Date.now() - 30_000).toISOString();
-    database.prepare(`UPDATE deliveries SET status = 'retrying', next_attempt_at = ?, updated_at = ? WHERE status = 'delivering' AND updated_at <= ?`)
-      .run(now(), now(), staleClaim);
-    const rows = database
-      .prepare(
-        `SELECT d.id, d.channel_id, d.payload, d.attempt_count, c.channel_type, c.config_iv, c.config_tag, c.config_ciphertext
-         FROM deliveries d JOIN notification_channels c ON c.id = d.channel_id
-         WHERE d.status IN ('pending', 'retrying') AND c.enabled = 1
-           AND COALESCE(d.next_attempt_at, d.created_at) <= ?
-         ORDER BY d.created_at ASC LIMIT 20`,
-      )
-      .all(now()) as Array<{ id: string; channel_id: string; payload: string; attempt_count: number; channel_type: NotificationChannelType; config_iv: string; config_tag: string; config_ciphertext: string }>;
-    for (const delivery of rows) {
-      const claimed = database.prepare(`UPDATE deliveries SET status = 'delivering', attempt_count = attempt_count + 1, updated_at = ? WHERE id = ? AND status IN ('pending', 'retrying')`).run(now(), delivery.id);
-      if (claimed.changes !== 1) continue;
-      let status: DeliveryStatus = "failed";
-      let responseCode: number | null = null;
-      let error: string | null = null;
-      try {
-        const config = parseJson<Record<string, unknown>>(decrypt({ iv: delivery.config_iv, tag: delivery.config_tag, ciphertext: delivery.config_ciphertext }), {});
-        const endpoint = typeof config.url === "string" ? config.url : "";
-        const target = await notificationTarget(endpoint);
-        const headers = asRecord(config.headers);
-        const response = await postNotification(
-          target,
-          { "content-type": "application/json", ...Object.fromEntries(Object.entries(headers).filter(([, value]) => typeof value === "string").map(([key, value]) => [key, String(value)])) },
-          json(formatNotificationBody(delivery.channel_type, parseJson<Record<string, unknown>>(delivery.payload, {}))),
-        );
-        responseCode = response.status;
-        status = response.status >= 200 && response.status < 300 ? "delivered" : "failed";
-        error = status === "delivered" ? null : `HTTP_${response.status}`;
-      } catch (reason) {
-        error = reason instanceof Error ? reason.name === "TimeoutError" ? "NOTIFICATION_TIMEOUT" : reason.message.slice(0, 200) : "NOTIFICATION_DELIVERY_FAILED";
+    try {
+      const staleClaim = new Date(Date.now() - 30_000).toISOString();
+      database.prepare(`UPDATE deliveries SET status = 'retrying', next_attempt_at = ?, updated_at = ? WHERE status = 'delivering' AND updated_at <= ?`)
+        .run(now(), now(), staleClaim);
+      const rows = database
+        .prepare(
+          `SELECT d.id, d.channel_id, d.payload, d.attempt_count, c.channel_type, c.config_iv, c.config_tag, c.config_ciphertext
+           FROM deliveries d JOIN notification_channels c ON c.id = d.channel_id
+           WHERE d.status IN ('pending', 'retrying') AND c.enabled = 1
+             AND COALESCE(d.next_attempt_at, d.created_at) <= ?
+           ORDER BY d.created_at ASC LIMIT 20`,
+        )
+        .all(now()) as Array<{ id: string; channel_id: string; payload: string; attempt_count: number; channel_type: NotificationChannelType; config_iv: string; config_tag: string; config_ciphertext: string }>;
+      for (const delivery of rows) {
+        const claimed = database.prepare(`UPDATE deliveries SET status = 'delivering', attempt_count = attempt_count + 1, updated_at = ? WHERE id = ? AND status IN ('pending', 'retrying')`).run(now(), delivery.id);
+        if (claimed.changes !== 1) continue;
+        let status: DeliveryStatus = "failed";
+        let responseCode: number | null = null;
+        let error: string | null = null;
+        try {
+          const config = parseJson<Record<string, unknown>>(decrypt({ iv: delivery.config_iv, tag: delivery.config_tag, ciphertext: delivery.config_ciphertext }), {});
+          const endpoint = typeof config.url === "string" ? config.url : "";
+          const target = await notificationTarget(endpoint);
+          const headers = asRecord(config.headers);
+          const response = await postNotification(
+            target,
+            { "content-type": "application/json", ...Object.fromEntries(Object.entries(headers).filter(([, value]) => typeof value === "string").map(([key, value]) => [key, String(value)])) },
+            json(formatNotificationBody(delivery.channel_type, parseJson<Record<string, unknown>>(delivery.payload, {}))),
+          );
+          responseCode = response.status;
+          status = response.status >= 200 && response.status < 300 ? "delivered" : "failed";
+          error = status === "delivered" ? null : `HTTP_${response.status}`;
+        } catch (reason) {
+          error = reason instanceof Error ? reason.name === "TimeoutError" ? "NOTIFICATION_TIMEOUT" : reason.message.slice(0, 200) : "NOTIFICATION_DELIVERY_FAILED";
+        }
+        const attempts = Number(delivery.attempt_count) + 1;
+        const retry = status === "failed" && attempts < notificationMaxAttempts;
+        const nextAttemptAt = retry
+          ? new Date(Date.now() + notificationRetryBaseMs * 2 ** Math.max(0, attempts - 1)).toISOString()
+          : null;
+        database.prepare(`UPDATE deliveries
+          SET status = ?, attempt_count = ?, response_code = ?, error = ?, next_attempt_at = ?,
+              delivered_at = CASE WHEN ? = 'delivered' THEN ? ELSE delivered_at END, updated_at = ?
+          WHERE id = ? AND status = 'delivering'`)
+          .run(retry ? "retrying" : status, attempts, responseCode, error, nextAttemptAt, status, now(), now(), delivery.id);
       }
-      const attempts = Number(delivery.attempt_count) + 1;
-      const retry = status === "failed" && attempts < notificationMaxAttempts;
-      const nextAttemptAt = retry
-        ? new Date(Date.now() + notificationRetryBaseMs * 2 ** Math.max(0, attempts - 1)).toISOString()
-        : null;
-      database.prepare(`UPDATE deliveries
-        SET status = ?, attempt_count = ?, response_code = ?, error = ?, next_attempt_at = ?,
-            delivered_at = CASE WHEN ? = 'delivered' THEN ? ELSE delivered_at END, updated_at = ?
-        WHERE id = ? AND status = 'delivering'`)
-        .run(retry ? "retrying" : status, attempts, responseCode, error, nextAttemptAt, status, now(), now(), delivery.id);
+    } catch (error) {
+      console.error("deliverPendingNotifications failed", error);
     }
   }
 
@@ -1020,7 +1033,12 @@ function createPlatformServices(dataDirectory: string) {
         const project = projectFor(schedule.project_id);
         audit(project.workspace_id, { type: "system", id: `schedule:${schedule.id}` }, "schedule.triggered", { type: "schedule", id: schedule.id }, { runIds: queued.runIds }, schedule.project_id);
       } catch (error) {
-        const nextRunAt = nextCronTime(schedule.cron_expression, schedule.timezone);
+        let nextRunAt: string;
+        try {
+          nextRunAt = nextCronTime(schedule.cron_expression, schedule.timezone);
+        } catch {
+          nextRunAt = new Date(Date.now() + 60_000).toISOString();
+        }
         database.prepare(`UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?`).run(nextRunAt, now(), schedule.id);
         const project = projectFor(schedule.project_id);
         audit(project.workspace_id, { type: "system", id: `schedule:${schedule.id}` }, "schedule.skipped", { type: "schedule", id: schedule.id }, { error: error instanceof PlatformError ? error.code : "SCHEDULE_TRIGGER_FAILED" }, schedule.project_id);
@@ -1369,17 +1387,35 @@ function createPlatformServices(dataDirectory: string) {
     } satisfies DebugSession;
   }
 
+  function truncateDebugData(value: unknown): unknown {
+    if (typeof value === "string") return value.slice(0, 2048);
+    if (Array.isArray(value)) return value.map(truncateDebugData);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, truncateDebugData(item)]));
+    return value;
+  }
+
   function appendDebugEvent(sessionId: string, kind: string, data: Record<string, unknown>) {
     database
       .prepare(`INSERT INTO debug_session_events (session_id, kind, data, created_at) VALUES (?, ?, ?, ?)`)
-      .run(sessionId, kind.slice(0, 80), json(data), now());
+      .run(sessionId, kind.slice(0, 80), json(truncateDebugData(data)), now());
   }
 
   function nextDebugIdleExpiry(maxExpiresAt: string) {
     return new Date(Math.min(Date.now() + debugIdleTimeoutMs, new Date(maxExpiresAt).getTime())).toISOString();
   }
 
+  function redactDebugValue(projectId: string, value: string): string {
+    try {
+      const rows = database.prepare(`SELECT name, iv, tag, ciphertext FROM project_secrets WHERE project_id = ?`).all(projectId) as Array<{ name: string; iv: string; tag: string; ciphertext: string }>;
+      const secrets = Object.fromEntries(rows.map((row) => [row.name, decrypt(row)]));
+      return Object.values(secrets).reduce((result, secret) => secret ? result.replaceAll(secret, "***") : result, value);
+    } catch {
+      return "***";
+    }
+  }
+
   function touchDebugSession(session: DebugSession, patch: { status?: DebugSessionStatus; currentStep?: number; currentUrl?: string | null; browserContextId?: string | null } = {}) {
+    const currentUrl = patch.currentUrl === undefined ? session.currentUrl : patch.currentUrl === null ? null : redactDebugValue(session.projectId, patch.currentUrl);
     const idleExpiresAt = nextDebugIdleExpiry(session.maxExpiresAt);
     database
       .prepare(
@@ -1390,7 +1426,7 @@ function createPlatformServices(dataDirectory: string) {
       .run(
         patch.status ?? session.status,
         patch.currentStep ?? session.currentStep,
-        patch.currentUrl === undefined ? session.currentUrl : patch.currentUrl,
+        currentUrl,
         patch.browserContextId === undefined ? session.browserContextId : patch.browserContextId,
         idleExpiresAt,
         now(),
@@ -1433,7 +1469,7 @@ function createPlatformServices(dataDirectory: string) {
 
   function debugSessionPayload(session: DebugSession) {
     const secretNames = Array.isArray(session.snapshot.secretNames)
-      ? session.snapshot.secretNames.filter((value): value is string => typeof value === "string")
+      ? [...new Set(session.snapshot.secretNames.filter((value): value is string => typeof value === "string"))].slice(0, 100)
       : [];
     return {
       type: "debug.start",
@@ -1909,16 +1945,24 @@ function createPlatformServices(dataDirectory: string) {
 
 
   webSocketServer.on("connection", (socket: WebSocket, _request: IncomingMessage, agent: AgentRecord) => {
-    sockets.get(agent.id)?.close(4001, "replaced");
-    sockets.set(agent.id, socket);
-    updateAgentHeartbeat(agent, {});
-    dispatchWaitingRuns();
-    expireDebugSessions();
-    socket.send(json({ type: "connected", agentId: agent.id, heartbeatIntervalSeconds: 15, leaseDurationSeconds: Math.round(agentLeaseDurationMs / 1000) }));
-    deliverDebugSessions(agent);
-    const validationDelivered = deliverElementValidations(agent);
-    const lease = validationDelivered ? undefined : claimLease(agent);
-    if (lease) socket.send(json(agentRunPayload(lease)));
+    try {
+      sockets.get(agent.id)?.close(4001, "replaced");
+      sockets.set(agent.id, socket);
+      updateAgentHeartbeat(agent, {});
+      dispatchWaitingRuns();
+      expireDebugSessions();
+      socket.send(json({ type: "connected", agentId: agent.id, heartbeatIntervalSeconds: 15, leaseDurationSeconds: Math.round(agentLeaseDurationMs / 1000) }));
+      deliverDebugSessions(agent);
+      const validationDelivered = deliverElementValidations(agent);
+      const lease = validationDelivered ? undefined : claimLease(agent);
+      if (lease) socket.send(json(agentRunPayload(lease)));
+    } catch (error) {
+      console.error("agent connection handler failed", error);
+      socket.close(1011, "AGENT_CONNECTION_FAILED");
+    }
+    const pingTimer = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) socket.ping();
+    }, 30_000);
     socket.on("message", (payload: RawData) => {
       try {
         const reply = processAgentMessage(agent, parseJson(payload.toString("utf8"), {}));
@@ -1929,24 +1973,34 @@ function createPlatformServices(dataDirectory: string) {
       }
     });
     socket.on("close", () => {
-      if (sockets.get(agent.id) !== socket) return;
-      sockets.delete(agent.id);
-      database.prepare(`UPDATE agents SET status = 'offline', current_task = NULL WHERE id = ? AND status != 'disabled'`).run(agent.id);
-      database.prepare(`UPDATE element_validations SET status = 'failed', error = 'AGENT_CONNECTION_LOST', updated_at = ? WHERE agent_id = ? AND status IN ('queued', 'running')`).run(now(), agent.id);
-      const interruptedSessions = database
-        .prepare(`SELECT id FROM debug_sessions WHERE agent_id = ? AND status IN ('requested', 'active', 'paused', 'ending')`)
-        .all(agent.id) as Array<{ id: string }>;
-      for (const session of interruptedSessions) {
-        database.prepare(`UPDATE debug_sessions SET status = 'failed', updated_at = ? WHERE id = ?`).run(now(), session.id);
-        appendDebugEvent(session.id, "session.failed", { reason: "AGENT_CONNECTION_LOST" });
+      clearInterval(pingTimer);
+      try {
+        if (sockets.get(agent.id) !== socket) return;
+        sockets.delete(agent.id);
+        database.prepare(`UPDATE agents SET status = 'offline', current_task = NULL WHERE id = ? AND status != 'disabled'`).run(agent.id);
+        database.prepare(`UPDATE element_validations SET status = 'failed', error = 'AGENT_CONNECTION_LOST', updated_at = ? WHERE agent_id = ? AND status IN ('queued', 'running')`).run(now(), agent.id);
+        const interruptedSessions = database
+          .prepare(`SELECT id FROM debug_sessions WHERE agent_id = ? AND status IN ('requested', 'active', 'paused', 'ending')`)
+          .all(agent.id) as Array<{ id: string }>;
+        for (const session of interruptedSessions) {
+          database.prepare(`UPDATE debug_sessions SET status = 'failed', updated_at = ? WHERE id = ?`).run(now(), session.id);
+          appendDebugEvent(session.id, "session.failed", { reason: "AGENT_CONNECTION_LOST" });
+        }
+      } catch (error) {
+        console.error("agent close handler failed", error);
+      } finally {
+        for (const [commandId, pending] of pendingDebugCommands) {
+          if (pending.agentId !== agent.id) continue;
+          clearTimeout(pending.timeout);
+          pendingDebugCommands.delete(commandId);
+          pending.resolve({ accepted: false, reason: "DEBUG_AGENT_DISCONNECTED" });
+        }
+        try {
+          dispatchWaitingRuns();
+        } catch (error) {
+          console.error("dispatchWaitingRuns after agent close failed", error);
+        }
       }
-      for (const [commandId, pending] of pendingDebugCommands) {
-        if (pending.agentId !== agent.id) continue;
-        clearTimeout(pending.timeout);
-        pendingDebugCommands.delete(commandId);
-        pending.resolve({ accepted: false, reason: "DEBUG_AGENT_DISCONNECTED" });
-      }
-      dispatchWaitingRuns();
     });
   });
 
@@ -1967,7 +2021,9 @@ function createPlatformServices(dataDirectory: string) {
       recoverStaleElementValidations();
       expireDebugSessions();
       processDueSchedules();
-      void deliverPendingNotifications();
+      database.prepare(`UPDATE platform_runs SET status = 'failed', result = ?, updated_at = ? WHERE executor_type = 'managed' AND status = 'running' AND updated_at <= ?`)
+        .run(json({ error: "MANAGED_RUN_WATCHDOG_TIMEOUT", interrupted: true }), now(), new Date(Date.now() - 30 * 60_000).toISOString());
+      void deliverPendingNotifications().catch((error) => console.error("deliverPendingNotifications failed", error));
     } catch {
       // Request handling and the next interval both retry transient maintenance failures.
     }
