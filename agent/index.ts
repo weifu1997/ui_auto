@@ -604,7 +604,11 @@ async function startDebugSession(socket: WebSocket, identity: AgentIdentity, pay
   }
   const profile = await mkdtemp(join(tmpdir(), "autoflow-debug-"));
   try {
-    const context = await chromium.launchPersistentContext(profile, { headless: chromiumHeadless });
+    const remoteDebugPort = process.env.AUTOFLOW_AGENT_BROWSER_REMOTE_DEBUG_PORT;
+    const context = await chromium.launchPersistentContext(profile, {
+      headless: chromiumHeadless,
+      args: remoteDebugPort ? [`--remote-debugging-port=${remoteDebugPort}`] : [],
+    });
     const page = context.pages()[0] ?? (await context.newPage());
     const flow = (payload.session.snapshot.flow ?? {}) as Record<string, unknown>;
     const environment = (payload.session.snapshot.environment ?? {}) as Record<string, unknown>;
@@ -803,54 +807,62 @@ async function buildPickerCandidates(runtime: DebugRuntime, target: Record<strin
 }
 
 async function enablePicker(socket: WebSocket, runtime: DebugRuntime) {
-  await runtime.page.evaluate((testIdAttribute) => {
-    const current = window as typeof window & { __autoflowPickerCleanup?: () => void; autoflowDebugPickerCapture?: (payload: unknown) => void };
-    current.__autoflowPickerCleanup?.();
-    const cssPath = (element: Element) => {
-      const id = element.getAttribute("id");
-      if (id) return `#${CSS.escape(id)}`;
-      const segments: string[] = [];
-      let node: Element | null = element;
-      while (node && segments.length < 5) {
-        const tag = node.tagName.toLowerCase();
-        const siblings = node.parentElement ? [...node.parentElement.children].filter((child) => child.tagName === node?.tagName) : [];
-        const index = siblings.indexOf(node) + 1;
-        segments.unshift(`${tag}:nth-of-type(${Math.max(1, index)})`);
-        node = node.parentElement;
-      }
-      return segments.join(" > ");
-    };
-    const roleFor = (element: HTMLElement) => {
-      const explicit = element.getAttribute("role");
-      if (explicit) return explicit;
-      if (element.tagName === "BUTTON") return "button";
-      if (element.tagName === "A") return "link";
-      if (element.tagName === "SELECT") return "combobox";
-      if (element.tagName === "TEXTAREA") return "textbox";
-      if (element.tagName === "INPUT") return element.getAttribute("type") === "checkbox" ? "checkbox" : "textbox";
-      return "";
-    };
-    const listener = (event: MouseEvent) => {
-      const element = event.target instanceof HTMLElement ? event.target : undefined;
-      if (!element) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const labels = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement
-        ? [...element.labels ?? []].map((label) => label.textContent?.trim() ?? "").filter(Boolean)
-        : [];
-      current.autoflowDebugPickerCapture?.({
-        target: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`,
-        testid: element.getAttribute(testIdAttribute) ?? "",
-        role: roleFor(element),
-        label: labels[0] ?? element.getAttribute("aria-label") ?? "",
-        text: (element.innerText || element.textContent || "").trim().replace(/\s+/g, " ").slice(0, 120),
-        css: cssPath(element),
-      });
-      current.__autoflowPickerCleanup?.();
-    };
-    document.addEventListener("click", listener, true);
-    current.__autoflowPickerCleanup = () => document.removeEventListener("click", listener, true);
-  }, runtime.testIdAttribute);
+  // Inject the picker as a plain-JS string: tsx transforms arrow/function declarations with
+  // an `__name` helper that is not available inside page.evaluate's serialized function.
+  const script = `
+    (() => {
+      const testIdAttribute = ${JSON.stringify(runtime.testIdAttribute)};
+      const current = window;
+      if (current.__autoflowPickerCleanup) current.__autoflowPickerCleanup();
+      const cssPath = (element) => {
+        const id = element.getAttribute("id");
+        if (id) return "#" + CSS.escape(id);
+        const segments = [];
+        let node = element;
+        while (node && segments.length < 5) {
+          const tag = node.tagName.toLowerCase();
+          const siblings = node.parentElement ? [...node.parentElement.children].filter((child) => child.tagName === node.tagName) : [];
+          const index = siblings.indexOf(node) + 1;
+          segments.unshift(tag + ":nth-of-type(" + Math.max(1, index) + ")");
+          node = node.parentElement;
+        }
+        return segments.join(" > ");
+      };
+      const roleFor = (element) => {
+        const explicit = element.getAttribute("role");
+        if (explicit) return explicit;
+        if (element.tagName === "BUTTON") return "button";
+        if (element.tagName === "A") return "link";
+        if (element.tagName === "SELECT") return "combobox";
+        if (element.tagName === "TEXTAREA") return "textbox";
+        if (element.tagName === "INPUT") return element.getAttribute("type") === "checkbox" ? "checkbox" : "textbox";
+        return "";
+      };
+      const listener = (event) => {
+        const element = event.target instanceof HTMLElement ? event.target : undefined;
+        if (!element) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const labels = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement
+          ? [...(element.labels || [])].map((label) => (label.textContent || "").trim()).filter(Boolean)
+          : [];
+        if (current.autoflowDebugPickerCapture) {
+          current.autoflowDebugPickerCapture({
+            target: element.tagName.toLowerCase() + (element.id ? "#" + element.id : ""),
+            testid: element.getAttribute(testIdAttribute) || "",
+            role: roleFor(element),
+            label: labels[0] || element.getAttribute("aria-label") || "",
+            text: (element.innerText || element.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 120),
+            css: cssPath(element),
+          });
+        }
+        if (current.__autoflowPickerCleanup) current.__autoflowPickerCleanup();
+      };
+      document.addEventListener("click", listener, true);
+      current.__autoflowPickerCleanup = () => document.removeEventListener("click", listener, true);
+    })();
+  `;
+  await runtime.page.evaluate(script);
   debugEvent(socket, runtime, "picker.enabled");
 }
 

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
+import { chromium } from "playwright";
 import { removeWorkerRoot, startWorker, stopWorker, type TestWorker } from "./worker-test-utils.ts";
 
 const port = 8796;
@@ -110,6 +111,7 @@ try {
        AUTOFLOW_AGENT_REGISTRATION_TOKEN: agentRegistration.body.registrationToken,
       AUTOFLOW_AGENT_NAME: "debug-agent-smoke",
       AUTOFLOW_AGENT_HEADLESS: "1",
+      AUTOFLOW_AGENT_BROWSER_REMOTE_DEBUG_PORT: "9360",
       AUTOFLOW_AGENT_IDENTITY_PATH: join(root, "agent.identity.json"),
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -263,6 +265,39 @@ try {
     const response = await api<{ session: { status: string; currentUrl: string | null } }>(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}`, { headers: headers(token) });
     return response.body.session.status === "paused" && response.body.session.currentUrl?.includes("/__fixture/login") ? response.body.session : undefined;
   }, "blank debug session navigated to start URL");
+  const pickerEnabled = await api(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}/picker/enable`, { method: "POST", headers: headers(token) });
+  if (!pickerEnabled.response.ok) throw new Error("Blank session picker enable failed");
+  const cdpBrowser = await chromium.connectOverCDP("http://127.0.0.1:9360");
+  try {
+    const pages = cdpBrowser.contexts().flatMap((context) => context.pages());
+    const debugPage = pages.find((page) => page.url().includes("/__fixture/login"));
+    if (!debugPage) throw new Error("Debug browser page was not reachable over CDP");
+    await debugPage.click("[data-testid=login-submit]", { timeout: 5_000 });
+    const captured = await waitFor(async () => {
+      const response = await api<{ captures: Array<{ id: string; candidates: Array<{ method: string; value: string }> }> }>(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}/picker-captures`, { headers: headers(token) });
+      const capture = response.body.captures[0];
+      return capture?.candidates.some((candidate) => candidate.method === "testid" && candidate.value === "login-submit") ? capture : undefined;
+    }, "real agent picker candidates");
+    const preview = await api(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}/picker-captures/${captured.id}/preview`, {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({ candidateIndex: 0 }),
+    });
+    if (!preview.response.ok) throw new Error("Real agent picker preview failed");
+    const fillback = await api<{ target: string; candidate: { method: string; value: string }; path: string; environmentId: string }>(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}/picker-captures/${captured.id}/confirm`, {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({ candidateIndex: 0, target: "fillback", name: "blank login submit" }),
+    });
+    if (!fillback.response.ok || fillback.body.target !== "fillback" || fillback.body.candidate.value !== "login-submit") {
+      throw new Error(`Real agent fillback failed: ${JSON.stringify(fillback.body)}`);
+    }
+    const documentAfterFillback = await api<{ data: { elements?: unknown[] } }>(`/api/platform/projects/${projectId}/document`, { headers: headers(token) });
+    const elementCount = Array.isArray(documentAfterFillback.body.data.elements) ? documentAfterFillback.body.data.elements.length : 0;
+    if (elementCount !== 0) throw new Error(`Fillback created an element: ${elementCount}`);
+  } finally {
+    await cdpBrowser.close().catch(() => undefined);
+  }
   await api(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}/commands`, {
     method: "POST",
     headers: headers(token),
