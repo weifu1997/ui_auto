@@ -1,13 +1,14 @@
 import { message } from "../antd-feedback";
 import type { ElementAsset, Project } from "../mock-data";
-import { confirmPickerCandidate, createDebugSession, enableElementPicker, fetchDebugArtifact, getDebugSessions, getPickerCaptures, getPlatformProjectDocument, getPlatformRevisions, previewPickerCandidate, sendDebugCommand } from "../platform-api";
-import type { PlatformDebugSession, PlatformPickerCapture, PlatformRevision, PlatformSession } from "../platform-api";
+import { getDebugSessions, getPlatformProjectDocument, getPlatformRevisions, sendDebugCommand } from "../platform-api";
+import type { PlatformDebugSession, PlatformElement, PlatformRevision, PlatformSession } from "../platform-api";
 import { notifyPlatformContextChanged, readPlatformProjectMap, readStoredPlatformSession, storePlatformDocumentVersion } from "../platform-context";
 import { Link } from "../router";
+import { ElementPickerPanel } from "./ElementPickerPanel";
 import { PageHeading } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
-import { CheckCircleFilled, FileSearchOutlined, PauseCircleOutlined, PlayCircleFilled, PlusOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { Alert, Button, Empty, Form, Input, Modal, Radio, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
+import { PauseCircleOutlined, PlayCircleFilled, PlusOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Alert, Button, Empty, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -17,23 +18,12 @@ export function DebugSessionsPage({ project }: { project: Project }) {
   const [platformProjectMap] = useState<Record<string, string>>(readPlatformProjectMap);
   const [revisions, setRevisions] = useState<PlatformRevision[]>([]);
   const [sessions, setSessions] = useState<PlatformDebugSession[]>([]);
-  const [captures, setCaptures] = useState<PlatformPickerCapture[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>();
   const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
-  const [startMode, setStartMode] = useState<"revision" | "blank">("revision");
-  const [screenshotUrl, setScreenshotUrl] = useState<string>();
-  const [startForm] = Form.useForm();
   const platformProjectId = platformProjectMap[project.id];
   const selectedSession = sessions.find((item) => item.id === selectedSessionId) ?? sessions[0];
   const publishedRevisions = revisions.filter((revision) => revision.status === "published");
-  const selectedRevisionId = Form.useWatch("revisionId", startForm);
-  const selectedRevision = publishedRevisions.find((revision) => revision.id === selectedRevisionId);
-  const selectedRevisionEnvironment = environments.find((environment) => environment.id === selectedRevision?.environmentId);
-  const latestScreenshot = selectedSession?.artifacts.find((artifact) => artifact.contentType.startsWith("image/"));
-  const latestScreenshotId = latestScreenshot?.id;
-  const latestCapture = captures[0];
 
   const loadSessions = useCallback(async () => {
     if (!platformSession || !platformProjectId) return;
@@ -59,45 +49,6 @@ export function DebugSessionsPage({ project }: { project: Project }) {
     return () => clearInterval(interval);
   }, [loadSessions]);
 
-  const loadPickerCaptures = useCallback(async () => {
-    if (!platformSession || !platformProjectId || !selectedSession) {
-      setCaptures([]);
-      return;
-    }
-    try {
-      const response = await getPickerCaptures(platformSession.token, platformProjectId, selectedSession.id);
-      setCaptures(response.captures);
-    } catch {
-      setCaptures([]);
-    }
-  }, [platformProjectId, platformSession, selectedSession]);
-
-  useEffect(() => {
-    void loadPickerCaptures();
-    const interval = setInterval(() => void loadPickerCaptures(), 3_000);
-    return () => clearInterval(interval);
-  }, [loadPickerCaptures]);
-
-  useEffect(() => {
-    if (!platformSession || !latestScreenshotId) {
-      setScreenshotUrl(undefined);
-      return;
-    }
-    let currentUrl: string | undefined;
-    let cancelled = false;
-    void fetchDebugArtifact(platformSession.token, latestScreenshotId)
-      .then((blob) => {
-        if (cancelled) return;
-        currentUrl = URL.createObjectURL(blob);
-        setScreenshotUrl(currentUrl);
-      })
-      .catch(() => setScreenshotUrl(undefined));
-    return () => {
-      cancelled = true;
-      if (currentUrl) URL.revokeObjectURL(currentUrl);
-    };
-  }, [latestScreenshotId, platformSession]);
-
   const command = async (value: "start" | "continue" | "runCurrent" | "skip" | "pause" | "retry" | "stop") => {
     if (!platformSession || !platformProjectId || !selectedSession) return;
     try {
@@ -109,65 +60,33 @@ export function DebugSessionsPage({ project }: { project: Project }) {
     }
   };
 
-  const enablePicker = async () => {
-    if (!platformSession || !platformProjectId || !selectedSession) return;
-    try {
-      await enableElementPicker(platformSession.token, platformProjectId, selectedSession.id);
-      message.info("请在调试浏览器中点击一个元素");
-    } catch {
-      message.error("无法启用元素选取");
+  const handleConfirmedElement = async (element: PlatformElement, documentVersion: number) => {
+    if (!platformSession || !platformProjectId) return;
+    const workspace = useWorkspaceStore.getState();
+    if (!workspace.elementsByProject[project.id]?.some((item) => item.id === element.id)) {
+      const asset: ElementAsset = {
+        ...element,
+        validation: element.validation === "verified" ? "valid" : "unverified",
+      };
+      workspace.setElements(project.id, [
+        ...(workspace.elementsByProject[project.id] ?? []),
+        asset,
+      ]);
     }
-  };
-
-  const previewCandidate = async (capture: PlatformPickerCapture, candidateIndex: number) => {
-    if (!platformSession || !platformProjectId || !selectedSession) return;
+    storePlatformDocumentVersion(platformProjectId, documentVersion);
     try {
-      await previewPickerCandidate(platformSession.token, platformProjectId, selectedSession.id, capture.id, candidateIndex);
+      const document = await getPlatformProjectDocument(platformSession.token, platformProjectId);
+      storePlatformDocumentVersion(platformProjectId, document.version);
+      useWorkspaceStore.getState().hydratePlatformProjects([{
+        platformProjectId,
+        sourceProjectId: project.id,
+        name: project.name,
+        description: project.description,
+        document: document.data,
+      }]);
+      notifyPlatformContextChanged();
     } catch {
-      message.error("无法在浏览器中预览该候选定位器");
-    }
-  };
-
-  const confirmCandidate = async (capture: PlatformPickerCapture, candidateIndex: number) => {
-    if (!platformSession || !platformProjectId || !selectedSession) return;
-    const candidate = capture.candidates[candidateIndex];
-    try {
-      const confirmed = await confirmPickerCandidate(platformSession.token, platformProjectId, selectedSession.id, capture.id, {
-        candidateIndex,
-        target: "element",
-        name: candidate.value,
-      });
-      if (confirmed.target === "fillback") return;
-      const workspace = useWorkspaceStore.getState();
-      if (!workspace.elementsByProject[project.id]?.some((element) => element.id === confirmed.element.id)) {
-        const element: ElementAsset = {
-          ...confirmed.element,
-          validation: confirmed.element.validation === "verified" ? "valid" : "unverified",
-        };
-        workspace.setElements(project.id, [
-          ...(workspace.elementsByProject[project.id] ?? []),
-          element,
-        ]);
-      }
-      storePlatformDocumentVersion(platformProjectId, confirmed.documentVersion);
-      try {
-        const document = await getPlatformProjectDocument(platformSession.token, platformProjectId);
-        storePlatformDocumentVersion(platformProjectId, document.version);
-        useWorkspaceStore.getState().hydratePlatformProjects([{
-          platformProjectId,
-          sourceProjectId: project.id,
-          name: project.name,
-          description: project.description,
-          document: document.data,
-        }]);
-        notifyPlatformContextChanged();
-      } catch {
-        // The confirmed element is already durable on Platform. A later refresh reconciles the full document.
-      }
-      await loadPickerCaptures();
-      message.success("元素已写入草稿元素库");
-    } catch {
-      message.error("无法确认该元素候选");
+      // The confirmed element is already durable on Platform. A later refresh reconciles the full document.
     }
   };
 
@@ -221,7 +140,7 @@ export function DebugSessionsPage({ project }: { project: Project }) {
       <PageHeading
         title="调试"
         description="调试浏览器保持页面、Cookie 与当前步骤状态；空闲 15 分钟或最长 2 小时后自动回收。"
-        actions={<Button type="primary" icon={<PlusOutlined />} onClick={() => { setStartMode(publishedRevisions.length > 0 ? "revision" : "blank"); startForm.resetFields(); if (publishedRevisions.length > 0) { const revision = publishedRevisions[0]; startForm.setFieldsValue({ revisionId: revision?.id, environmentId: revision?.environmentId }); } setStartOpen(true); }}>新建调试会话</Button>}
+        actions={<Button type="primary" icon={<PlusOutlined />} onClick={() => setStartOpen(true)}>新建调试会话</Button>}
       />
       {publishedRevisions.length === 0 && <Alert className="debug-alert" type="info" showIcon title="没有已发布版本，可创建空白调试会话：仅选择环境（+ 起始 URL），浏览器将直接打开目标页面。" />}
       <section className="surface debug-session-table">
@@ -262,35 +181,17 @@ export function DebugSessionsPage({ project }: { project: Project }) {
               <Tooltip title="结束并回收浏览器"><Button danger icon={<StopOutlined />} disabled={!activeSession} onClick={() => void command("stop")}>结束</Button></Tooltip>
             </div>
           </div>
-          <div className="surface debug-observation-panel">
-            <div className="panel-heading"><div><h2>页面快照</h2><span>由 Agent 定时上传</span></div></div>
-            {latestScreenshot ? (
-              screenshotUrl ? <img className="debug-screenshot" src={screenshotUrl} alt={`调试截图 ${latestScreenshot.name}`} /> : <Spin size="small" />
-            ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待安全截图" />}
-          </div>
           <div className="surface debug-picker-panel">
-            <div className="panel-heading">
-              <div><h2>元素选取</h2><span>在调试浏览器中点击元素后生成候选</span></div>
-              <Tooltip title={readySession ? "在调试浏览器中启用一次选取" : "等待 Agent 初始化浏览器"}><Button icon={<FileSearchOutlined />} disabled={!readySession} onClick={() => void enablePicker()} /></Tooltip>
-            </div>
-            {!latestCapture ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待浏览器点击" /> : (
-              <div className="picker-candidate-list">
-                {latestCapture.candidates.map((candidate, index) => (
-                  <div className="picker-candidate-row" key={`${candidate.method}-${candidate.value}`}>
-                    <span className="picker-score">{candidate.score}</span>
-                    <div>
-                      <strong>{candidate.method}</strong>
-                      <code>{candidate.value}</code>
-                      <small>{candidate.count === 1 ? "唯一匹配" : `${candidate.count} 个匹配`}</small>
-                    </div>
-                    <Space size={2}>
-                      <Tooltip title="在调试浏览器中高亮"><Button size="small" icon={<FileSearchOutlined />} onClick={() => void previewCandidate(latestCapture, index)} /></Tooltip>
-                      <Tooltip title="确认写入草稿元素库"><Button size="small" type="primary" icon={<CheckCircleFilled />} disabled={latestCapture.status !== "pending"} onClick={() => void confirmCandidate(latestCapture, index)} /></Tooltip>
-                    </Space>
-                  </div>
-                ))}
-              </div>
-            )}
+            <ElementPickerPanel
+              project={project}
+              sessionId={selectedSession.id}
+              onSessionIdChange={setSelectedSessionId}
+              preferredEnvironmentId={selectedSession.environmentId ?? environments[0]?.id}
+              confirmMode="element"
+              onConfirmElement={(element, documentVersion) => void handleConfirmedElement(element, documentVersion)}
+              createOpen={startOpen}
+              onCreateOpenChange={setStartOpen}
+            />
           </div>
           <div className="surface debug-event-panel">
             <div className="panel-heading"><div><h2>会话事件</h2><span>URL、步骤、控制台与网络失败</span></div><Button icon={<ReloadOutlined />} onClick={() => void loadSessions()} /></div>
@@ -306,58 +207,6 @@ export function DebugSessionsPage({ project }: { project: Project }) {
           </div>
         </section>
       )}
-      <Modal
-        title="新建调试会话"
-        open={startOpen}
-        confirmLoading={creating}
-        onCancel={() => setStartOpen(false)}
-        okText="创建会话"
-        onOk={() => startForm.validateFields().then(async (values) => {
-          if (!platformSession) return;
-          setCreating(true);
-          try {
-            const result = await createDebugSession(platformSession.token, platformProjectId, startMode === "blank"
-              ? { blank: true, environmentId: values.environmentId, startUrl: values.startUrl }
-              : { revisionId: values.revisionId, environmentId: values.environmentId });
-            setSelectedSessionId(result.session.id);
-            setStartOpen(false);
-            await loadSessions();
-            message.success("调试浏览器正在准备");
-          } catch {
-            message.error("无法创建调试会话，请确认有在线绑定节点");
-          } finally {
-            setCreating(false);
-          }
-        })}
-      >
-        <Form form={startForm} layout="vertical">
-          <Form.Item label="会话类型">
-            <Radio.Group value={startMode} onChange={(event) => setStartMode(event.target.value)} optionType="button" buttonStyle="solid">
-              <Radio.Button value="revision">从已发布版本</Radio.Button>
-              <Radio.Button value="blank">空白会话（仅环境 + 起始 URL）</Radio.Button>
-            </Radio.Group>
-          </Form.Item>
-          {startMode === "revision" ? (
-            <>
-              <Form.Item name="revisionId" label="已发布流程版本" rules={[{ required: true, message: "请选择已发布版本" }]}>
-                <Select onChange={(revisionId) => startForm.setFieldsValue({ environmentId: publishedRevisions.find((revision) => revision.id === revisionId)?.environmentId })} options={publishedRevisions.map((revision) => ({ value: revision.id, label: `版本 ${revision.revisionNumber} · ${new Date(revision.publishedAt ?? revision.createdAt).toLocaleString()}` }))} />
-              </Form.Item>
-              <Form.Item name="environmentId" label="运行环境" rules={[{ required: true, message: "请选择运行环境" }]}>
-                <Select disabled options={selectedRevisionEnvironment ? [{ value: selectedRevisionEnvironment.id, label: selectedRevisionEnvironment.name }] : []} />
-              </Form.Item>
-            </>
-          ) : (
-            <>
-              <Form.Item name="environmentId" label="运行环境" rules={[{ required: true, message: "请选择运行环境" }]}>
-                <Select onChange={(environmentId) => { const environment = environments.find((item) => item.id === environmentId); startForm.setFieldsValue({ startUrl: environment?.baseUrl ?? "" }); }} options={environments.map((item) => ({ value: item.id, label: `${item.name} · ${item.baseUrl}` }))} />
-              </Form.Item>
-              <Form.Item name="startUrl" label="起始 URL" tooltip="留空时使用环境基础地址">
-                <Input placeholder="默认使用环境基础地址" />
-              </Form.Item>
-            </>
-          )}
-        </Form>
-      </Modal>
     </>
   );
 }
