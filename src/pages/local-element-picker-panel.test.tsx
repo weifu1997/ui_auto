@@ -62,7 +62,7 @@ describe("LocalElementPickerPanel 本地采集通道", () => {
     expect(screen.getByText(/npm run server/)).toBeTruthy();
   });
 
-  it("本机服务在线时自动创建会话并展示等待点击状态", async () => {
+  it("打开弹窗不自动创建，点击「打开调试浏览器」后才创建会话", async () => {
     workerApi.getWorkerHealth.mockResolvedValue({ ok: true });
     const sessionRecord = { id: "session-1", projectId: "p-1", environmentId: "env-1", environmentName: "测试环境", currentUrl: "https://example.test/", status: "active", captureCount: 0, hasScreenshot: false };
     workerApi.getLocalPickerSessions
@@ -70,7 +70,13 @@ describe("LocalElementPickerPanel 本地采集通道", () => {
       .mockResolvedValue({ sessions: [sessionRecord] });
     workerApi.createLocalPickerSession.mockResolvedValue({ session: sessionRecord });
     workerApi.getLocalPickerCaptures.mockResolvedValue({ captures: [] });
+    const user = userEvent.setup();
     render(<LocalElementPickerPanel project={project} preferredEnvironmentId="env-1" />);
+    // 弹窗打开后不应自动创建会话
+    await waitFor(() => expect(screen.getByRole("button", { name: "打开调试浏览器" })).toBeTruthy(), { timeout: 4_000 });
+    expect(workerApi.createLocalPickerSession).not.toHaveBeenCalled();
+    // 用户显式点击后才创建并展示等待点击状态
+    await user.click(screen.getByRole("button", { name: "打开调试浏览器" }));
     await waitFor(() => expect(screen.getByText("等待浏览器点击")).toBeTruthy(), { timeout: 4_000 });
     expect(workerApi.createLocalPickerSession).toHaveBeenCalledWith("p-1", environment);
   });

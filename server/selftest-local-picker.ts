@@ -119,13 +119,8 @@ try {
   await screenshot("L2-local-picker-modal.png");
   log("local picker modal opened; modal text: " + JSON.stringify((await modal.innerText()).slice(0, 200)));
 
-  // 等待本地会话自动创建并导航到站点（附带诊断）
-  for (let i = 0; i < 10; i += 1) {
-    const list = await api<{ sessions: Array<{ id: string; currentUrl: string }> }>("/api/projects/self/local-picker/sessions");
-    log("SESSIONS POLL: " + JSON.stringify(list.body.sessions.map((s) => ({ id: s.id.slice(0, 8), url: s.currentUrl }))));
-    log("MODAL TEXT: " + JSON.stringify((await modal.innerText()).slice(0, 200)));
-    await new Promise((r) => setTimeout(r, 2000));
-  }
+  // 用户显式点击弹窗内「打开调试浏览器」后才创建本机会话并导航到站点
+  await modal.getByRole("button", { name: "打开调试浏览器" }).click();
   const session = await waitFor(async () => {
     const list = await api<{ sessions: Array<{ id: string; currentUrl: string }> }>("/api/projects/self/local-picker/sessions");
     return list.body.sessions.find((item) => (item.currentUrl ?? "").includes("huang1997.cloud"));
