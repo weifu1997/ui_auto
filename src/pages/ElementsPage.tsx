@@ -4,6 +4,7 @@ import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements,
 import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
+import { ElementPickerPanel } from "./ElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
@@ -275,7 +276,9 @@ export function ElementsPage({ project }: { project: Project }) {
       <ElementDrawer
         open={editor !== null}
         element={editor === "new" ? undefined : editor}
+        project={project}
         environments={environments}
+        elements={items}
         onClose={() => setEditor(null)}
         onSave={(element) => {
           updateItems((list) => {
@@ -331,21 +334,27 @@ export function ElementsPage({ project }: { project: Project }) {
   );
 }
 
-function ElementDrawer({
+export function ElementDrawer({
   open,
   element,
+  project,
   environments,
+  elements,
   onClose,
   onSave,
 }: {
   open: boolean;
   element?: ElementAsset | null;
+  project: Project;
   environments: Environment[];
+  elements: ElementAsset[];
   onClose: () => void;
   onSave: (element: ElementAsset) => void;
 }) {
   const [form] = Form.useForm();
+  const [pickerOpen, setPickerOpen] = useState(false);
   const method = Form.useWatch("method", form);
+  const selectedEnvironment = Form.useWatch("environment", form);
   useEffect(() => {
     if (!open) return;
     form.setFieldsValue(
@@ -388,6 +397,25 @@ function ElementDrawer({
         </Button>
       }
     >
+      <div className="element-picker-toolbar">
+        <Button
+          icon={<FileSearchOutlined />}
+          onClick={() => {
+            if (!platformProjectContext(project.id)) {
+              message.error("未连接平台账户，无法从页面获取元素");
+              return;
+            }
+            if (!selectedEnvironment) {
+              message.warning("请先在表单中选择默认验证环境");
+              return;
+            }
+            setPickerOpen(true);
+          }}
+        >
+          从页面获取
+        </Button>
+        <span className="table-secondary">在调试浏览器中点击元素，自动生成并回填定位器</span>
+      </div>
       <Form form={form} layout="vertical">
         <Form.Item
           name="name"
@@ -450,6 +478,39 @@ function ElementDrawer({
           <Input.TextArea rows={3} placeholder="说明元素用途及使用注意事项" />
         </Form.Item>
       </Form>
+      <Modal
+        title="从页面获取元素"
+        open={pickerOpen}
+        width={760}
+        footer={null}
+        onCancel={() => setPickerOpen(false)}
+      >
+        <div className="element-picker-modal-body">
+          <ElementPickerPanel
+            project={project}
+            preferredEnvironmentId={selectedEnvironment}
+            confirmMode="fillback"
+            onSelectCandidate={(selection) => {
+              const method = selection.candidate.method === "css" ? "CSS" : selection.candidate.method;
+              form.setFieldsValue({
+                method,
+                value: selection.candidate.value,
+                path: selection.path,
+                environment: selection.environmentId,
+                name: form.getFieldValue("name") || selection.suggestedName,
+              });
+              const duplicate = elements.some((item) =>
+                item.method.toLowerCase() === method.toLowerCase() && item.value === selection.candidate.value,
+              );
+              if (duplicate) {
+                message.warning("元素库中已存在相同定位器，保存后可能产生重复元素");
+              }
+              setPickerOpen(false);
+              message.success("已回填定位信息");
+            }}
+          />
+        </div>
+      </Modal>
     </Drawer>
   );
 }
