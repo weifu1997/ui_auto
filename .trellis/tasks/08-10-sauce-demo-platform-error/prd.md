@@ -48,8 +48,11 @@ local Platform account state, so the user can register a new account.
 
 - [x] The prior Platform database files are retained in a timestamped local
       backup directory.
-- [ ] A new Platform account can register successfully with an unused email
-      and obtain a valid session.
+- [x] A new Platform account can register successfully with an unused email
+      and obtain a valid session. (Verified 2026-08-13 via API: register 201 +
+      session cookie restore 200; logout 200 / login 200 / wrong-password 401.
+      The temporary test account was removed from the local DB afterwards and
+      the service restarted.)
 - [x] `GET /health` reports the restarted service as online.
 
 ## Out of Scope
