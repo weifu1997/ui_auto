@@ -1,3 +1,4 @@
+/* oxlint-disable react/only-export-components */
 import { Tabs } from "antd";
 import type { Project } from "../mock-data";
 import { AgentsPage } from "./AgentsPage";

@@ -15,7 +15,7 @@ import type { LocalPickerCapture, LocalPickerSession as WorkerLocalPickerSession
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, FileSearchOutlined, PlusOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Space, Spin, Tooltip } from "antd";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type LocalPickerSelection = {
   captureId: string;
@@ -53,8 +53,6 @@ export function LocalElementPickerPanel({
   const [screenshotStamp, setScreenshotStamp] = useState(0);
   const [screenshotFailed, setScreenshotFailed] = useState(false);
   const [startForm] = Form.useForm();
-  const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
 
   const effectiveEnvironmentId = preferredEnvironmentId;
   const effectiveEnvironment = environments.find((item) => item.id === effectiveEnvironmentId);
@@ -68,9 +66,9 @@ export function LocalElementPickerPanel({
   const refreshHealth = useCallback(async () => {
     try {
       const health = await getWorkerHealth();
-      if (mounted.current) setWorkerState(health.ok ? "online" : "offline");
+      setWorkerState(health.ok ? "online" : "offline");
     } catch {
-      if (mounted.current) setWorkerState("offline");
+      setWorkerState("offline");
     }
   }, []);
   useEffect(() => { void refreshHealth(); }, [refreshHealth]);
@@ -79,7 +77,6 @@ export function LocalElementPickerPanel({
     if (workerState !== "online") return;
     try {
       const response = await getLocalPickerSessions(project.id);
-      if (!mounted.current) return;
       setSessions(response.sessions);
       setManagedSessionId((current) => current ?? response.sessions[0]?.id);
     } catch {
@@ -99,7 +96,6 @@ export function LocalElementPickerPanel({
     }
     try {
       const response = await getLocalPickerCaptures(project.id, selectedSession.id);
-      if (!mounted.current) return;
       setCaptures(response.captures);
       setScreenshotStamp((value) => value + 1);
       setScreenshotFailed(false);
@@ -122,7 +118,7 @@ export function LocalElementPickerPanel({
       void (async () => {
         try {
           const result = await createLocalPickerSession(project.id, effectiveEnvironment);
-          if (cancelled || !mounted.current) return;
+          if (cancelled) return;
           setManagedSessionId(result.session.id);
           await loadSessions();
           message.success("本地调试浏览器正在准备");
