@@ -1,0 +1,3 @@
+{"file": "docs/决策-内网部署形态与平台裁剪.md", "reason": "方案C决策依据：部署拓扑与裁剪范围"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "裁剪跨前端/服务端/数据三层，需按跨层思维检查"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "AgentsPage/PlatformPage/ElementsPage/导航改造遵循前端规范"}
