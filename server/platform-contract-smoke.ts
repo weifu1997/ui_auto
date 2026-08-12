@@ -1,6 +1,4 @@
 import { createHmac } from "node:crypto";
-import { once } from "node:events";
-import WebSocket from "ws";
 import { removeWorkerRoot, startWorker, stopWorker, type TestWorker } from "./worker-test-utils.ts";
 
 const port = 8795;
@@ -17,21 +15,13 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<ApiResponse
   return { response, body: (await response.json()) as T };
 }
 
-function createMessageInbox(socket: WebSocket) {
-  const messages: Record<string, unknown>[] = [];
-  socket.on("message", (raw) => {
-    messages.push(JSON.parse(raw.toString("utf8")) as Record<string, unknown>);
-  });
-  return {
-    async next(type: string) {
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        const index = messages.findIndex((message) => message.type === type);
-        if (index >= 0) return messages.splice(index, 1)[0];
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      throw new Error(`Timed out waiting for ${type}; received: ${JSON.stringify(messages)}`);
-    },
-  };
+async function waitForRun(token: string, projectId: string, runId: string, statuses: string[]) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const response = await api<{ run: { status: string; executorType: string; artifacts: Array<{ id: string; name: string }> } }>(`/api/platform/projects/${projectId}/runs/${runId}`, { headers: headers(token) });
+    if (statuses.includes(response.body.run.status)) return response.body.run;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Managed run ${runId} did not reach ${statuses.join(", ")}`);
 }
 
 function headers(token: string) {
@@ -42,11 +32,10 @@ try {
   worker = await startWorker({
     port,
     env: {
-      DEBUG_IDLE_TIMEOUT_MS: "1000",
       AUTOFLOW_LISTEN_HOST: "0.0.0.0",
       AUTOFLOW_CORS_ORIGINS: "http://console.example.test",
       PLATFORM_SECRET_KEY: "platform-contract-smoke-secret",
-      AUTOFLOW_EXECUTOR_TYPE: "agent",
+      MANAGED_RUNNER_HEADLESS: "1",
     },
   });
   root = worker.root;
@@ -143,7 +132,7 @@ try {
     body: JSON.stringify({ flow: { id: "unsupported", steps: [] }, environment: { ...internalEnvironment, browser: "Firefox" }, elements: [] }),
   });
   if (unsupportedRevision.response.status !== 400 || unsupportedRevision.body.error !== "AGENT_BROWSER_UNSUPPORTED") {
-    throw new Error("Platform accepted a browser engine without an Agent implementation");
+    throw new Error("Platform accepted a browser engine without a Chromium implementation");
   }
 
   const revision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
@@ -211,220 +200,57 @@ try {
   const applied = await api<{ created: { flows: string[] } }>(`/api/platform/templates/${templateId}/apply`, { method: "POST", headers: headers(token), body: JSON.stringify({ projectId: targetProject.body.project.id }) });
   if (!applied.response.ok || applied.body.created.flows[0] === "secondary-flow") throw new Error("Template assets were not cloned with new IDs");
 
-  const agentRegistration = await api<{ registrationToken: string }>("/api/agent-tokens", {
+  // 方案C：执行恒为 ManagedRunner（部署机本机）。用 worker fixture 页面走真实 managed 执行闭环。
+  const fixtureEnvironment = { id: "fixture", name: "Fixture", description: "", baseUrl: `http://127.0.0.1:${port}`, browser: "Chromium", auth: "无认证", timeout: 10, color: "teal", updatedAt: "now" };
+  const fixtureRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
     method: "POST",
     headers: headers(token),
-    body: JSON.stringify({ workspaceId, expiresInMinutes: 5 }),
+    body: JSON.stringify({
+      flow: {
+        id: "fixture-flow",
+        name: "Fixture flow",
+        steps: [{ id: "open", title: "Open fixture", action: "打开页面", value: "/__fixture/login", timeout: 10, failurePolicy: "停止流程", status: "pending" }],
+      },
+      environment: fixtureEnvironment,
+      elements: [],
+      secretNames: ["login_password"],
+    }),
   });
-  const registered = await api<{ agent: { id: string }; credential: string }>("/api/agents/register", {
-    method: "POST",
-    body: JSON.stringify({ registrationToken: agentRegistration.body.registrationToken, name: "contract-agent", browserVersion: "Chromium 130", os: "win32", maxConcurrency: 1 }),
-  });
-  const agentId = registered.body.agent?.id;
-  const credential = registered.body.credential;
-  if (!registered.response.ok || !agentId || !credential) throw new Error("Agent registration failed");
-
-  const heartbeat = await api(`/api/agents/${agentId}/heartbeat`, {
-    method: "POST",
-    headers: headers(credential),
-    body: JSON.stringify({ browserVersion: "Chromium 130", os: "win32" }),
-  });
-  if (!heartbeat.response.ok) throw new Error("Agent heartbeat failed");
-  const binding = await api(`/api/platform/projects/${projectId}/agent-bindings`, {
-    method: "PUT",
-    headers: headers(token),
-    body: JSON.stringify({ environmentId: "internal", agentId }),
-  });
-  if (!binding.response.ok) throw new Error("Agent binding failed");
+  const fixtureRevisionId = fixtureRevision.body.revision?.id;
+  if (!fixtureRevision.response.ok || !fixtureRevisionId) throw new Error(`Fixture revision creation failed: ${JSON.stringify(fixtureRevision.body)}`);
+  const fixturePublished = await api(`/api/platform/projects/${projectId}/revisions/${fixtureRevisionId}/publish`, { method: "POST", headers: headers(token) });
+  if (!fixturePublished.response.ok) throw new Error("Fixture revision publish failed");
 
   const createdRun = await api<{ run: { id: string; snapshot: Record<string, unknown> } }>(`/api/platform/projects/${projectId}/runs`, {
     method: "POST",
     headers: headers(token),
-    body: JSON.stringify({ revisionId, environmentId: "internal" }),
+    body: JSON.stringify({ revisionId: fixtureRevisionId, environmentId: "fixture" }),
   });
   const runId = createdRun.body.run?.id;
   if (!createdRun.response.ok || !runId || JSON.stringify(createdRun.body.run.snapshot).includes("never-log-this")) {
     throw new Error(`Immutable run snapshot failed: ${JSON.stringify(createdRun.body)}`);
   }
+  const completedRun = await waitForRun(token, projectId, runId, ["success", "failed"]);
+  if (completedRun.status !== "success" || completedRun.executorType !== "managed" || !completedRun.artifacts.some((artifact) => artifact.name === "trace.zip")) {
+    throw new Error(`Managed run did not complete with Trace: ${JSON.stringify(completedRun)}`);
+  }
+  const downloadedArtifact = await fetch(`http://127.0.0.1:${port}/api/platform/artifacts/${completedRun.artifacts[0].id}`, { headers: headers(token) });
+  if (!downloadedArtifact.ok) throw new Error("Artifact download failed");
 
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/agents/connect?agentId=${agentId}`, { headers: headers(credential) });
-  const inbox = createMessageInbox(socket);
-  await once(socket, "open");
-  await inbox.next("connected");
-  const leaseMessage = (await inbox.next("run.lease")) as unknown as { lease: { id: string }; run: { id: string; secrets: Record<string, string> } };
-  if (leaseMessage.run.id !== runId || leaseMessage.run.secrets.login_password !== "never-log-this") {
-    throw new Error("Agent did not receive the expected leased run");
-  }
-  socket.send(JSON.stringify({ type: "lease.renew", leaseId: leaseMessage.lease.id }));
-  await inbox.next("lease.renewed");
-  const artifact = await api<{ artifact: { id: string } }>(`/api/agents/${agentId}/leases/${leaseMessage.lease.id}/artifacts`, {
-    method: "POST",
-    headers: headers(credential),
-    body: JSON.stringify({ name: "contract.txt", contentType: "text/plain", contentBase64: Buffer.from("contract artifact").toString("base64") }),
-  });
-  if (!artifact.response.ok || !artifact.body.artifact?.id) throw new Error("Agent artifact upload failed");
-  socket.send(JSON.stringify({ type: "run.event", leaseId: leaseMessage.lease.id, kind: "step.completed", data: { stepId: "open", title: "Open contract fixture", durationMs: 420 } }));
-  await inbox.next("event.ack");
-  socket.send(JSON.stringify({ type: "run.complete", leaseId: leaseMessage.lease.id, status: "success", result: { completedSteps: 0 } }));
-  await inbox.next("run.complete.ack");
-
-  const complete = await api<{ run: { status: string; artifacts: Array<{ id: string }> } }>(`/api/platform/projects/${projectId}/runs/${runId}`, { headers: headers(token) });
-  if (complete.body.run.status !== "success" || complete.body.run.artifacts[0]?.id !== artifact.body.artifact.id) {
-    throw new Error(`Run completion failed: ${JSON.stringify(complete.body)}`);
-  }
-  const downloadedArtifact = await fetch(`http://127.0.0.1:${port}/api/platform/artifacts/${artifact.body.artifact.id}`, { headers: headers(token) });
-  if (!downloadedArtifact.ok || (await downloadedArtifact.text()) !== "contract artifact") throw new Error("Artifact download failed");
-
-  const createdDebug = await api<{ session: { id: string } }>(`/api/platform/projects/${projectId}/debug-sessions`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ revisionId, environmentId: "internal" }),
-  });
-  const debugSessionId = createdDebug.body.session?.id;
-  if (!createdDebug.response.ok || !debugSessionId) throw new Error(`Debug session creation failed: ${JSON.stringify(createdDebug.body)}`);
-  const debugStart = (await inbox.next("debug.start")) as unknown as { session: { id: string; secrets: Record<string, string> } };
-  if (debugStart.session.id !== debugSessionId || debugStart.session.secrets.login_password !== "never-log-this") {
-    throw new Error("Debug session did not receive its immutable snapshot and runtime secret");
-  }
-  const prematureDebugCommand = await api<{ error?: string }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/commands`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ command: "runCurrent" }),
-  });
-  if (prematureDebugCommand.response.status !== 409 || prematureDebugCommand.body.error !== "DEBUG_SESSION_NOT_READY") {
-    throw new Error("Debug commands were accepted before the headed browser became ready");
-  }
-  socket.send(JSON.stringify({ type: "debug.ready", sessionId: debugSessionId, currentStep: 0, currentUrl: "https://internal.example.test/login", browserContextId: "context-1" }));
-  await inbox.next("debug.ready.ack");
-  const readyDebug = await api<{ session: { status: string; currentUrl: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}`, { headers: headers(token) });
-  if (readyDebug.body.session.status !== "paused" || readyDebug.body.session.currentUrl !== "https://internal.example.test/login") {
-    throw new Error(`Debug ready state failed: ${JSON.stringify(readyDebug.body)}`);
-  }
-  const debugArtifact = await api<{ artifact: { id: string } }>(`/api/agents/${agentId}/debug-sessions/${debugSessionId}/artifacts`, {
-    method: "POST",
-    headers: headers(credential),
-    body: JSON.stringify({ name: "debug.png", contentType: "image/png", contentBase64: Buffer.from("debug image").toString("base64") }),
-  });
-  if (!debugArtifact.response.ok) throw new Error("Debug artifact upload failed");
-  const runCurrentRequest = api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/commands`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ command: "runCurrent" }),
-  });
-  const runCurrentCommand = await inbox.next("debug.command");
-  if (runCurrentCommand.command !== "runCurrent") throw new Error("Debug command was not sent to Agent");
-  socket.send(JSON.stringify({ type: "debug.command.ack", sessionId: debugSessionId, commandId: runCurrentCommand.commandId, command: "runCurrent", accepted: true }));
-  const runCurrent = await runCurrentRequest;
-  if (!runCurrent.response.ok) throw new Error("Debug run-current command failed");
-  socket.send(JSON.stringify({ type: "debug.event", sessionId: debugSessionId, kind: "console.error", currentStep: 0, currentUrl: "https://internal.example.test/login", data: { message: "fixture console error" } }));
-  await inbox.next("debug.event.ack");
-  socket.send(JSON.stringify({ type: "debug.state", sessionId: debugSessionId, status: "paused", currentStep: 1, currentUrl: "https://internal.example.test/dashboard" }));
-  await inbox.next("debug.state.ack");
-  const debugAfterStep = await api<{ session: { currentStep: number; artifacts: Array<{ id: string }>; events: Array<{ kind: string }> } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}`, { headers: headers(token) });
-  if (debugAfterStep.body.session.currentStep !== 1 || debugAfterStep.body.session.artifacts[0]?.id !== debugArtifact.body.artifact.id || !debugAfterStep.body.session.events.some((event) => event.kind === "console.error")) {
-    throw new Error(`Debug state/event persistence failed: ${JSON.stringify(debugAfterStep.body)}`);
-  }
-  const pickerEnabled = await api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker/enable`, { method: "POST", headers: headers(token) });
-  if (!pickerEnabled.response.ok) throw new Error("Picker enable failed");
-  const pickerEnableCommand = await inbox.next("picker.enable");
-  if (pickerEnableCommand.sessionId !== debugSessionId) throw new Error("Picker enable command was not sent to Agent");
-  socket.send(JSON.stringify({
-    type: "picker.captured",
-    sessionId: debugSessionId,
-    target: "button#save",
-    candidates: [
-      { method: "testid", value: "save-button", count: 1, score: 98, label: "data-testid: save-button" },
-      { method: "role", value: "button", count: 2, score: 72, label: "role: button" },
-    ],
-  }));
-  const pickerCaptured = await inbox.next("picker.captured.ack");
-  const captureId = String(pickerCaptured.captureId);
-  const captures = await api<{ captures: Array<{ id: string; candidates: Array<{ value: string }> }> }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures`, { headers: headers(token) });
-  if (!captures.response.ok || captures.body.captures[0]?.id !== captureId || captures.body.captures[0]?.candidates[0]?.value !== "save-button") {
-    throw new Error(`Picker candidates were not persisted: ${JSON.stringify(captures.body)}`);
-  }
-  const pickerPreview = await api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/preview`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ candidateIndex: 0 }),
-  });
-  if (!pickerPreview.response.ok) throw new Error("Picker preview failed");
-  const previewCommand = await inbox.next("picker.preview");
-  if (previewCommand.captureId !== captureId || (previewCommand.candidate as { value?: string }).value !== "save-button") throw new Error("Picker preview command did not include candidate");
-  const documentBeforeFillback = await api<{ data: { elements?: unknown[] }; version: number }>(`/api/platform/projects/${projectId}/document`, { headers: headers(token) });
-  const elementsBeforeFillback = Array.isArray(documentBeforeFillback.body.data.elements) ? documentBeforeFillback.body.data.elements.length : 0;
-  const fillbackConfirmed = await api<{ target: string; candidate: { method: string; value: string }; path: string; environmentId: string; suggestedName: string; documentVersion: number }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ candidateIndex: 0, target: "fillback", name: "Fillback name" }),
-  });
-  if (!fillbackConfirmed.response.ok || fillbackConfirmed.body.target !== "fillback" || fillbackConfirmed.body.candidate.value !== "save-button" || fillbackConfirmed.body.suggestedName !== "Fillback name" || fillbackConfirmed.body.path !== "/dashboard" || fillbackConfirmed.body.environmentId !== "internal") {
-    throw new Error(`Fillback confirmation did not return candidate info: ${JSON.stringify(fillbackConfirmed.body)}`);
-  }
-  const fillbackAgain = await api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ candidateIndex: 1, target: "fillback", name: "Fillback again" }),
-  });
-  if (!fillbackAgain.response.ok) throw new Error("Fillback confirmation could not be repeated on the same capture");
-  const documentAfterFillback = await api<{ data: { elements?: unknown[] }; version: number }>(`/api/platform/projects/${projectId}/document`, { headers: headers(token) });
-  const elementsAfterFillback = Array.isArray(documentAfterFillback.body.data.elements) ? documentAfterFillback.body.data.elements.length : 0;
-  if (elementsAfterFillback !== elementsBeforeFillback || documentAfterFillback.body.version !== documentBeforeFillback.body.version) {
-    throw new Error(`Fillback confirmation mutated the project document: ${JSON.stringify({ before: documentBeforeFillback.body.version, after: documentAfterFillback.body.version })}`);
-  }
-  const capturesAfterFillback = await api<{ captures: Array<{ id: string; status: string }> }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures`, { headers: headers(token) });
-  if (capturesAfterFillback.body.captures[0]?.id !== captureId || capturesAfterFillback.body.captures[0]?.status !== "pending") {
-    throw new Error(`Fillback confirmation changed the capture status: ${JSON.stringify(capturesAfterFillback.body)}`);
-  }
-  const pickerConfirmed = await api<{ element: { name: string; value: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ candidateIndex: 0, target: "element", name: "Save button" }),
-  });
-  if (!pickerConfirmed.response.ok || pickerConfirmed.body.element.value !== "save-button") throw new Error("Picker confirmation did not create an element");
-  const stoppedDebugRequest = api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/commands`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ command: "stop" }),
-  });
-  const stopDebugCommand = await inbox.next("debug.command");
-  if (stopDebugCommand.command !== "stop") throw new Error("Debug stop command was not sent to Agent");
-  socket.send(JSON.stringify({ type: "debug.command.ack", sessionId: debugSessionId, commandId: stopDebugCommand.commandId, command: "stop", accepted: true }));
-  const stoppedDebug = await stoppedDebugRequest;
-  if (!stoppedDebug.response.ok) throw new Error("Debug stop command failed");
-  socket.send(JSON.stringify({ type: "debug.ended", sessionId: debugSessionId, status: "ended", reason: "MANUAL_STOP" }));
-  await inbox.next("debug.ended.ack");
-  const endedDebug = await api<{ session: { status: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}`, { headers: headers(token) });
-  if (endedDebug.body.session.status !== "ended") throw new Error("Debug session did not end");
-
-  const expiringDebug = await api<{ session: { id: string } }>(`/api/platform/projects/${projectId}/debug-sessions`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ revisionId, environmentId: "internal" }),
-  });
-  const expiringDebugId = expiringDebug.body.session?.id;
-  if (!expiringDebug.response.ok || !expiringDebugId) throw new Error("Second debug session creation failed");
-  await inbox.next("debug.start");
-  await new Promise((resolve) => setTimeout(resolve, 1100));
-  const expiredDebug = await api<{ session: { status: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${expiringDebugId}`, { headers: headers(token) });
-  const expiryCommand = await inbox.next("debug.command");
-  if (expiredDebug.body.session.status !== "expired" || expiryCommand.command !== "stop") throw new Error("Debug idle timeout was not recovered");
-
-  const secondRun = await api<{ run: { id: string } }>(`/api/platform/projects/${projectId}/runs`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ revisionId, environmentId: "internal" }),
-  });
-  socket.send(JSON.stringify({ type: "ready", browserVersion: "Chromium 130", os: "win32" }));
-  const secondLease = (await inbox.next("run.lease")) as unknown as { lease: { id: string }; run: { id: string } };
-  const canceled = await api<{ run: { cancellationRequested: boolean } }>(`/api/platform/projects/${projectId}/runs/${secondRun.body.run.id}/cancel`, { method: "POST", headers: headers(token) });
+  // 取消：等待中的 managed 运行可取消并收敛为 canceled。
+  const waitingFlow = { id: "fixture-wait", name: "Fixture wait", steps: [{ id: "wait", title: "Wait", action: "等待", value: "10000", timeout: 10, failurePolicy: "停止流程", status: "pending" }] };
+  const waitingRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: headers(token), body: JSON.stringify({ flow: waitingFlow, environment: fixtureEnvironment, elements: [] }) });
+  const waitingRevisionId = waitingRevision.body.revision?.id;
+  if (!waitingRevision.response.ok || !waitingRevisionId) throw new Error("Waiting revision creation failed");
+  await api(`/api/platform/projects/${projectId}/revisions/${waitingRevisionId}/publish`, { method: "POST", headers: headers(token) });
+  const waitingRun = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: headers(token), body: JSON.stringify({ revisionId: waitingRevisionId, environmentId: "fixture" }) });
+  const waitingRunId = waitingRun.body.runIds[0];
+  if (!waitingRun.response.ok || !waitingRunId) throw new Error("Waiting run creation failed");
+  await waitForRun(token, projectId, waitingRunId, ["running"]);
+  const canceled = await api<{ run: { cancellationRequested: boolean } }>(`/api/platform/projects/${projectId}/runs/${waitingRunId}/cancel`, { method: "POST", headers: headers(token) });
   if (!canceled.response.ok || !canceled.body.run.cancellationRequested) throw new Error("Run cancellation request failed");
-  const cancelCommand = await inbox.next("run.cancel");
-  if (cancelCommand.leaseId !== secondLease.lease.id) throw new Error("Agent did not receive cancellation command");
-  socket.send(JSON.stringify({ type: "run.complete", leaseId: secondLease.lease.id, status: "success", result: {} }));
-  await inbox.next("run.complete.ack");
-  const canceledRun = await api<{ run: { status: string } }>(`/api/platform/projects/${projectId}/runs/${secondRun.body.run.id}`, { headers: headers(token) });
-  if (canceledRun.body.run.status !== "canceled") throw new Error("Agent cancellation did not settle the run");
+  const canceledRun = await waitForRun(token, projectId, waitingRunId, ["canceled"]);
+  if (canceledRun.status !== "canceled") throw new Error("Managed cancellation did not settle the run");
 
   const csv = "account,expectedOrder\nalice,A-100\nbob,B-200\n";
   const importedDataset = await api<{ dataset: { id: string }; version: { id: string; rowCount: number; columns: string[] } }>(`/api/platform/projects/${projectId}/datasets`, {
@@ -476,15 +302,9 @@ try {
   if (!parameterized.response.ok || parameterized.body.runs.length !== 2 || (parameterized.body.runs[0]?.snapshot.datasetRow as { data?: { account?: string } } | undefined)?.data?.account !== "alice") {
     throw new Error(`Parameterized run snapshot failed: ${JSON.stringify(parameterized.body)}`);
   }
-  socket.send(JSON.stringify({ type: "ready", browserVersion: "Chromium 130", os: "win32" }));
-  const parameterizedLease = (await inbox.next("run.lease")) as unknown as { lease: { id: string }; run: { id: string } };
-  if (!parameterized.body.runs.some((run) => run.id === parameterizedLease.run.id)) throw new Error("Parameterized run was not leased");
-  socket.send(JSON.stringify({ type: "run.complete", leaseId: parameterizedLease.lease.id, status: "success", result: { flowOutputs: { orderId: "A-100", unsafe: "never-log-this" } } }));
-  await inbox.next("run.complete.ack");
-  const outputRun = await api<{ run: { flowOutputs: Array<{ name: string; value: string }>; result: Record<string, unknown> } }>(`/api/platform/projects/${projectId}/runs/${parameterizedLease.run.id}`, { headers: headers(token) });
-  if (outputRun.body.run.flowOutputs.find((item) => item.name === "orderId")?.value !== "A-100" || JSON.stringify(outputRun.body).includes("never-log-this")) {
-    throw new Error(`Flow outputs were not persisted safely: ${JSON.stringify(outputRun.body)}`);
-  }
+  // managed 执行：再跑一次 fixture 版本产生成功运行，用于通知投递断言。
+  const fixtureRun = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: headers(token), body: JSON.stringify({ revisionId: fixtureRevisionId, environmentId: "fixture" }) });
+  await waitForRun(token, projectId, fixtureRun.body.runIds[0], ["success", "failed"]);
   await new Promise((resolve) => setTimeout(resolve, 100));
   const deliveries = await api<{ deliveries: Array<{ channel: { name: string } }> }>(`/api/platform/projects/${projectId}/deliveries`, { headers: headers(token) });
   if (!deliveries.response.ok || deliveries.body.deliveries[0]?.channel.name !== "Contract webhook") throw new Error("Run notification delivery was not queued");
@@ -523,8 +343,8 @@ try {
   });
   if (!webhookRun.response.ok || !webhookRun.body.accepted || webhookRun.body.runIds.length !== 2) throw new Error("Webhook did not run the published parameterized revision");
 
-  const analytics = await api<{ analytics: { summary: { totalRuns: number }; slowSteps: Array<{ stepId: string; averageMs: number }> } }>(`/api/platform/projects/${projectId}/analytics`, { headers: headers(token) });
-  if (!analytics.response.ok || analytics.body.analytics.summary.totalRuns < 1 || analytics.body.analytics.slowSteps.find((item) => item.stepId === "open")?.averageMs !== 420) {
+  const analytics = await api<{ analytics: { summary: { totalRuns: number } } }>(`/api/platform/projects/${projectId}/analytics`, { headers: headers(token) });
+  if (!analytics.response.ok || analytics.body.analytics.summary.totalRuns < 1) {
     throw new Error(`Analytics aggregation failed: ${JSON.stringify(analytics.body)}`);
   }
   const viewerRegistration = await api<{ token: string }>("/api/auth/register", {
@@ -617,7 +437,6 @@ try {
   const projectRestored = await api(`/api/platform/projects/${projectId}`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ archived: false }) });
   const activeProjects = await api<{ projects: Array<{ id: string }> }>(`/api/workspaces/${workspaceId}/projects`, { headers: headers(token) });
   if (!projectRestored.response.ok || !activeProjects.body.projects.some((project) => project.id === projectId)) throw new Error("Archived project could not be restored");
-  socket.close();
   console.log("Platform contract smoke test passed");
 } finally {
   if (worker) await stopWorker(worker);

@@ -33,7 +33,8 @@ npm run test:unit
 npm run test:e2e
 npm run test:worker
 npm run test:platform
-npm run test:agent  # 已知红：agent 原型 smoke，不纳入 test:all 门禁
+npm run test:production
+npm run test:windows
 ```
 
 ## Platform milestone
@@ -43,11 +44,9 @@ The existing SQLite Worker remains the local development executor. The same serv
 The first Platform milestone includes:
 
 - Login, workspaces, centralized project documents, and idempotent one-time browser `localStorage` imports.
-- Immutable draft/published flow revisions with publish/rollback audit events. Platform runs require a published revision and record the flow, environment, element, dataset, and Agent snapshots.
-- AES-256-GCM encrypted server-side secrets. Secret plaintext is only attached to the in-memory Agent lease payload, never stored in a run snapshot, event, or artifact metadata.
-- Outbound Agent WebSocket registration, 15-second heartbeats, Chromium-only single-concurrency capability, project/environment bindings, short leases, renewal, reconnect recovery, cancellation, and artifact upload.
-- Persistent headed Chromium debug sessions. A session keeps its BrowserContext, cookies, page state, and current step while it is paused; it supports start from the first step, continue, run current step, skip, pause, retry, and end.
-- Debug session events capture the current URL, step transitions, console errors, network failures, and periodic screenshots. Sessions are reclaimed after 15 minutes of inactivity or two hours total, and can always be ended manually.
+- Immutable draft/published flow revisions with publish/rollback audit events. Platform runs require a published revision and record the flow, environment, element, dataset, and execution snapshots.
+- AES-256-GCM encrypted server-side secrets. Secret plaintext is only attached to the in-memory execution payload, never stored in a run snapshot, event, or artifact metadata.
+- Runs and element validations are executed on the deployment machine by `ManagedRunner` (a bundled Chromium executor), with SSE events, screenshots, and Trace artifacts.
 
 Start the local platform service with the existing command:
 
@@ -55,44 +54,34 @@ Start the local platform service with the existing command:
 npm run server
 ```
 
-For an internal Platform that Agents access from other machines, configure the listener, browser origins, and encryption key before starting it:
+For an internal deployment that other machines access over the LAN, configure the listener, browser origins, and encryption key before starting it:
 
 ```bash
 set AUTOFLOW_LISTEN_HOST=0.0.0.0
-set AUTOFLOW_CORS_ORIGINS=https://autoflow-console.example.internal
+set AUTOFLOW_CORS_ORIGINS=http://autoflow-console.example.internal:8787
 set PLATFORM_SECRET_KEY=replace-with-a-long-random-secret
 set NODE_ENV=production
 npm run server
 ```
 
-The legacy local Worker endpoints under `/api/projects/*` stay enabled only when the service listens on loopback. They are disabled by default for an internal listener; production UI execution should use a bound Agent instead. Set `AUTOFLOW_ENABLE_LEGACY_WORKER_API=1` only when that legacy executor is intentionally isolated and protected.
+The legacy local Worker endpoints under `/api/projects/*` stay enabled only when the service listens on loopback. They are disabled by default for an internal listener; platform runs execute through `ManagedRunner` on the deployment machine. Set `AUTOFLOW_ENABLE_LEGACY_WORKER_API=1` only when that legacy executor is intentionally isolated and protected.
 
-Create a registration token from the **执行节点** page, then start an Agent on an internal machine:
-
-```bash
-set AUTOFLOW_PLATFORM_URL=https://platform-host.example.internal
-set AUTOFLOW_AGENT_REGISTRATION_TOKEN=agt_...
-npm run agent
-```
-
-The first registration persists an Agent identity credential at `agent/.identity.json`. This file is ignored by Git. Agents require HTTPS/WSS for a non-loopback Platform URL; use `AUTOFLOW_ALLOW_INSECURE_PLATFORM_TRANSPORT=1` only for an isolated development network. The Agent creates one headed Chromium profile per lease and skips trace/screenshot artifacts whenever the leased run contains secrets.
-
-Debug sessions use the same outbound Agent connection and keep a separate temporary Chromium profile until the session ends or expires. The Agent uploads screenshots only for sessions without secrets. `AUTOFLOW_AGENT_HEADLESS=1` exists solely for the automated `test:agent` smoke test; the default is headed Chromium.
+部署形态与裁剪决策见 `docs/决策-内网部署形态与平台裁剪.md`。
 
 ## Data and Continuous Regression
 
 - CSV and `.xlsx` imports create immutable Dataset Versions. The importer validates unique headers, limits imports to 10,000 rows, and never overwrites a prior version.
 - A platform run can reference a Dataset Version. The platform creates one independent Run per row and freezes the dataset metadata and row data in each run snapshot.
-- Agent steps may read `{{data.column}}` and previous `{{flow.output}}` values. A confirmed step can store text, a DOM attribute, a URL parameter, or a matching JSON response path as a flow output. Secret values are redacted before a result, event, output, trace, screenshot, or notification payload is persisted.
+- Steps may read `{{data.column}}` and previous `{{flow.output}}` values. A confirmed step can store text, a DOM attribute, a URL parameter, or a matching JSON response path as a flow output. Secret values are redacted before a result, event, output, trace, screenshot, or notification payload is persisted.
 - Schedules accept five-field Cron expressions with an explicit IANA timezone. Schedules and webhook triggers require a revision that is currently published; drafts cannot be dispatched through either path.
-- Notification channels support generic Webhook, Feishu, DingTalk, WeCom, and an email-relay Webhook. Endpoint configuration is encrypted at rest. Run delivery payloads contain only the environment, revision, Agent, failure context, artifact metadata, and retry state.
+- Notification channels support generic Webhook, Feishu, DingTalk, WeCom, and an email-relay Webhook. Endpoint configuration is encrypted at rest. Run delivery payloads contain only the environment, revision, failure context, artifact metadata, and retry state.
 
 The **Data Sets** page imports and previews frozen versions. The **Continuous Regression** page manages schedules, CI Webhooks, notification subscriptions, and delivery records. A Webhook URL is shown once when it is created and should be stored in the CI secret manager.
 
 ## Governance and Analysis
 
 - The **Governance** page aggregates daily run trends, normalized failure categories, slow-step duration, and element reuse/failure impact from immutable run snapshots and redacted events.
-- Workspace owners and administrators manage members. Viewers are read-only; editors can create draft assets; publication, secret rotation, Agent binding, schedules, Webhooks, and notification subscriptions require an owner or administrator.
+- Workspace owners and administrators manage members. Viewers are read-only; editors can create draft assets; publication, secret rotation, schedules, Webhooks, and notification subscriptions require an owner or administrator.
 - Every member change and publish/rollback action is audited. The project release-audit view shows the published revision history without exposing secret values.
 
 `test:e2e` 会启动独立的 Vite 和 Worker 实例，覆盖项目隔离、元素验证、流程拖拽，以及浏览器中真实的“创建运行 -> SSE 日志 -> Trace 产物”链路。`test:worker` 会直接运行 Chromium，并验证任务执行和产物项目隔离。

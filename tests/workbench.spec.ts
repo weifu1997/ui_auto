@@ -146,7 +146,7 @@ test("opens the local publish page with a pre-mode persisted workspace", async (
 
   await page.reload();
   await page.goto("/project/legacy-local/platform");
-  await expect(page.getByRole("heading", { name: "发布与远程执行" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "发布与运行" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "发布当前项目" })).toBeVisible();
 });
 

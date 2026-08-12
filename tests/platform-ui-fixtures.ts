@@ -81,24 +81,6 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
   }, localProjectId) as FixtureRevision[];
   const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
 
-  await page.route(`**/api/platform/projects/${platformProjectId}/agent-bindings`, async (route) => {
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        bindings: revisions.slice(0, 1).map((revision) => ({
-          environmentId: revision.environment.id,
-          agent: {
-            id: "platform-ui-agent",
-            name: "Platform UI Agent",
-            status: "online",
-            browserVersion: "Chromium",
-            lastSeenAt: "2030-01-01T00:00:00.000Z",
-          },
-        })),
-      }),
-    });
-  });
-
   await page.route(`**/api/platform/projects/${platformProjectId}/secrets`, async (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -143,7 +125,6 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
         cancellationRequested: false,
         createdAt: "2030-01-01T00:00:00.000Z",
         updatedAt: "2030-01-01T00:00:01.000Z",
-        lease: { id: "lease-ui", runId: `platform-run-${calls.runs.length}`, agentId: "platform-ui-agent", status: "completed", expiresAt: "2030-01-01T00:01:00.000Z", attempt: 1, expired: false },
         artifacts: [{ id: "trace-ui", name: "trace.zip", contentType: "application/zip", createdAt: "2030-01-01T00:00:01.000Z" }],
         events: (flow?.steps ?? []).map((step, index) => ({ id: index + 1, kind: "step.completed", data: { index, title: step.title ?? "Step", durationMs: 100 }, at: "2030-01-01T00:00:01.000Z" })),
         flowOutputs: [],
