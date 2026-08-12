@@ -93,6 +93,97 @@ export async function createRun(projectId: string, payload: RunRequest) {
   });
 }
 
+export type LocalPickerSession = {
+  id: string;
+  projectId: string;
+  environmentId: string;
+  environmentName: string;
+  currentUrl: string;
+  status: string;
+  captureCount: number;
+  hasScreenshot: boolean;
+};
+
+export type LocalPickerCandidate = {
+  method: "testid" | "role" | "label" | "text" | "css";
+  value: string;
+  count: number;
+  score: number;
+  label: string;
+};
+
+export type LocalPickerCapture = {
+  id: string;
+  sessionId: string;
+  target: string;
+  capturedAt: string;
+  candidates: LocalPickerCandidate[];
+};
+
+export type LocalPickerFillback = {
+  target: "fillback";
+  candidate: LocalPickerCandidate;
+  path: string;
+  environmentId: string;
+  suggestedName: string;
+};
+
+export async function createLocalPickerSession(projectId: string, environment: Environment, startUrl?: string) {
+  return request<{ session: LocalPickerSession }>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions`,
+    { method: "POST", body: JSON.stringify({ environment, startUrl }) },
+  );
+}
+
+export async function getLocalPickerSessions(projectId: string) {
+  return request<{ sessions: LocalPickerSession[] }>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions`,
+  );
+}
+
+export async function enableLocalPicker(projectId: string, sessionId: string) {
+  return request<{ session: LocalPickerSession }>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions/${encodeURIComponent(sessionId)}/picker/enable`,
+    { method: "POST" },
+  );
+}
+
+export async function getLocalPickerCaptures(projectId: string, sessionId: string) {
+  return request<{ captures: LocalPickerCapture[] }>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions/${encodeURIComponent(sessionId)}/picker-captures`,
+  );
+}
+
+export async function previewLocalPickerCandidate(projectId: string, sessionId: string, captureId: string, candidateIndex: number) {
+  return request<{ captureId: string; candidateIndex: number; count: number }>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/preview`,
+    { method: "POST", body: JSON.stringify({ candidateIndex }) },
+  );
+}
+
+export async function confirmLocalPickerCandidate(
+  projectId: string,
+  sessionId: string,
+  captureId: string,
+  input: { candidateIndex: number; name?: string },
+) {
+  return request<LocalPickerFillback>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/confirm`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function stopLocalPickerSession(projectId: string, sessionId: string) {
+  return request<{ ended: boolean }>(
+    `/projects/${encodeURIComponent(projectId)}/local-picker/sessions/${encodeURIComponent(sessionId)}/commands`,
+    { method: "POST", body: JSON.stringify({ command: "stop" }) },
+  );
+}
+
+export function localPickerScreenshotUrl(projectId: string, sessionId: string) {
+  return `${apiBase}/projects/${encodeURIComponent(projectId)}/local-picker/sessions/${encodeURIComponent(sessionId)}/screenshot`;
+}
+
 export async function createValidation(
   projectId: string,
   environment: Environment,

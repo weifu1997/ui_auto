@@ -5,6 +5,7 @@ import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
 import { ElementPickerPanel } from "./ElementPickerPanel";
+import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
@@ -353,6 +354,7 @@ export function ElementDrawer({
 }) {
   const [form] = Form.useForm();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<"platform" | "local">("platform");
   const method = Form.useWatch("method", form);
   const selectedEnvironment = Form.useWatch("environment", form);
   useEffect(() => {
@@ -365,6 +367,24 @@ export function ElementDrawer({
       },
     );
   }, [element, environments, form, open]);
+  const applyPickerSelection = (selection: { candidate: { method: string; value: string }; path: string; environmentId: string; suggestedName: string }) => {
+    const method = selection.candidate.method === "css" ? "CSS" : selection.candidate.method;
+    form.setFieldsValue({
+      method,
+      value: selection.candidate.value,
+      path: selection.path,
+      environment: selection.environmentId,
+      name: form.getFieldValue("name") || selection.suggestedName,
+    });
+    const duplicate = elements.some((item) =>
+      item.method.toLowerCase() === method.toLowerCase() && item.value === selection.candidate.value,
+    );
+    if (duplicate) {
+      message.warning("元素库中已存在相同定位器，保存后可能产生重复元素");
+    }
+    setPickerOpen(false);
+    message.success("已回填定位信息");
+  };
   return (
     <Drawer
       title={element ? "编辑元素" : "新建元素"}
@@ -401,10 +421,6 @@ export function ElementDrawer({
         <Button
           icon={<FileSearchOutlined />}
           onClick={() => {
-            if (!platformProjectContext(project.id)) {
-              message.error("未连接平台账户，无法从页面获取元素");
-              return;
-            }
             const environmentValue = typeof form.getFieldValue("environment") === "string"
               ? form.getFieldValue("environment")
               : selectedEnvironment;
@@ -412,6 +428,8 @@ export function ElementDrawer({
               message.warning("请先在表单中选择默认验证环境");
               return;
             }
+            // 已连接平台且项目已导入 -> 平台通道（行为不变）；否则 -> 本地采集通道。
+            setPickerMode(platformProjectContext(project.id) ? "platform" : "local");
             setPickerOpen(true);
           }}
         >
@@ -482,36 +500,27 @@ export function ElementDrawer({
         </Form.Item>
       </Form>
       <Modal
-        title="从页面获取元素"
+        title={pickerMode === "platform" ? "从页面获取元素" : "从页面获取元素（本地通道）"}
         open={pickerOpen}
         width={760}
         footer={null}
         onCancel={() => setPickerOpen(false)}
       >
         <div className="element-picker-modal-body">
-          <ElementPickerPanel
-            project={project}
-            preferredEnvironmentId={selectedEnvironment}
-            confirmMode="fillback"
-            onSelectCandidate={(selection) => {
-              const method = selection.candidate.method === "css" ? "CSS" : selection.candidate.method;
-              form.setFieldsValue({
-                method,
-                value: selection.candidate.value,
-                path: selection.path,
-                environment: selection.environmentId,
-                name: form.getFieldValue("name") || selection.suggestedName,
-              });
-              const duplicate = elements.some((item) =>
-                item.method.toLowerCase() === method.toLowerCase() && item.value === selection.candidate.value,
-              );
-              if (duplicate) {
-                message.warning("元素库中已存在相同定位器，保存后可能产生重复元素");
-              }
-              setPickerOpen(false);
-              message.success("已回填定位信息");
-            }}
-          />
+          {pickerMode === "local" ? (
+            <LocalElementPickerPanel
+              project={project}
+              preferredEnvironmentId={selectedEnvironment}
+              onSelectCandidate={(selection) => applyPickerSelection(selection)}
+            />
+          ) : (
+            <ElementPickerPanel
+              project={project}
+              preferredEnvironmentId={selectedEnvironment}
+              confirmMode="fillback"
+              onSelectCandidate={(selection) => applyPickerSelection(selection)}
+            />
+          )}
         </div>
       </Modal>
     </Drawer>

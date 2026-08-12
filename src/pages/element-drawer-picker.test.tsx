@@ -27,8 +27,17 @@ const pickSelection: PickSelection = {
 
 vi.mock("./ElementPickerPanel", () => ({
   ElementPickerPanel: ({ preferredEnvironmentId, onSelectCandidate }: { preferredEnvironmentId?: string; onSelectCandidate?: (selection: PickSelection) => void }) => (
-    <div data-testid="picker-panel">
-      <span data-testid="picker-env">{preferredEnvironmentId ?? ""}</span>
+    <div data-testid="platform-picker-panel">
+      <span data-testid="platform-picker-env">{preferredEnvironmentId ?? ""}</span>
+      <button type="button" onClick={() => onSelectCandidate?.(pickSelection)}>pick-candidate</button>
+    </div>
+  ),
+}));
+
+vi.mock("./LocalElementPickerPanel", () => ({
+  LocalElementPickerPanel: ({ preferredEnvironmentId, onSelectCandidate }: { preferredEnvironmentId?: string; onSelectCandidate?: (selection: PickSelection) => void }) => (
+    <div data-testid="local-picker-panel">
+      <span data-testid="local-picker-env">{preferredEnvironmentId ?? ""}</span>
       <button type="button" onClick={() => onSelectCandidate?.(pickSelection)}>pick-candidate</button>
     </div>
   ),
@@ -78,28 +87,40 @@ function renderDrawer(element?: ElementAsset, elements: ElementAsset[] = [], env
   return { onSave, onClose };
 }
 
-describe("ElementDrawer 从页面获取", () => {
+describe("ElementDrawer 从页面获取（双通道）", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
   });
 
-  it("未连接平台时点击给出明确提示且不打开采集弹窗", () => {
+  it("未连接平台时使用本地通道并回填定位信息", async () => {
     renderDrawer();
+    await waitFor(() => {
+      const envSelect = document.querySelectorAll(".ant-select-content")[1];
+      expect(envSelect?.getAttribute("title")).toBe("测试环境");
+    }, { timeout: 4_000 });
     fireEvent.click(screen.getByRole("button", { name: /从页面获取/ }));
-    expect(message.error).toHaveBeenCalledWith("未连接平台账户，无法从页面获取元素");
-    expect(screen.queryByTestId("picker-panel")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("local-picker-panel")).toBeTruthy(), { timeout: 4_000 });
+    expect(screen.getByTestId("local-picker-env").textContent).toBe("env-1");
+    fireEvent.click(screen.getByRole("button", { name: "pick-candidate" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("定位值")).toHaveValue("login-submit");
+      expect(screen.getByLabelText("所属页面路径")).toHaveValue("/login");
+    });
+    const methodContent = document.querySelector(".ant-select-content") as HTMLElement | null;
+    expect(methodContent?.textContent).toBe("testid");
   });
 
-  it("已连接平台但项目未导入/未选环境时给出明确提示", () => {
+  it("已连接平台但未选环境时给出明确提示", () => {
     seedPlatformContext();
     renderDrawer(undefined, [], []);
     fireEvent.click(screen.getByRole("button", { name: /从页面获取/ }));
     expect(message.warning).toHaveBeenCalledWith("请先在表单中选择默认验证环境");
-    expect(screen.queryByTestId("picker-panel")).toBeNull();
+    expect(screen.queryByTestId("platform-picker-panel")).toBeNull();
+    expect(screen.queryByTestId("local-picker-panel")).toBeNull();
   });
 
-  it("选定候选后自动回填定位方式/定位值/页面路径/环境，并提示重复定位器但不阻断", async () => {
+  it("已连接平台时走平台通道，选定候选后自动回填并提示重复定位器但不阻断", async () => {
     seedPlatformContext();
     const existing: ElementAsset = {
       id: "element-existing",
@@ -114,19 +135,17 @@ describe("ElementDrawer 从页面获取", () => {
     };
     renderDrawer(undefined, [existing]);
     await waitFor(() => {
-      const contents = document.querySelectorAll(".ant-select-content");
-      expect(contents[1]?.getAttribute("title")).toBe("测试环境");
+      const envSelect = document.querySelectorAll(".ant-select-content")[1];
+      expect(envSelect?.getAttribute("title")).toBe("测试环境");
     }, { timeout: 4_000 });
     fireEvent.click(screen.getByRole("button", { name: /从页面获取/ }));
-    await waitFor(() => expect(screen.getByTestId("picker-panel")).toBeTruthy(), { timeout: 4_000 });
-    expect(screen.getByTestId("picker-env").textContent).toBe("env-1");
+    await waitFor(() => expect(screen.getByTestId("platform-picker-panel")).toBeTruthy(), { timeout: 4_000 });
+    expect(screen.getByTestId("platform-picker-env").textContent).toBe("env-1");
     fireEvent.click(screen.getByRole("button", { name: "pick-candidate" }));
     await waitFor(() => {
       expect(screen.getByLabelText("定位值")).toHaveValue("login-submit");
       expect(screen.getByLabelText("所属页面路径")).toHaveValue("/login");
     });
-    const methodContent = document.querySelector(".ant-select-content") as HTMLElement | null;
-    expect(methodContent?.textContent).toBe("testid");
     expect(message.warning).toHaveBeenCalledWith("元素库中已存在相同定位器，保存后可能产生重复元素");
   });
 });
