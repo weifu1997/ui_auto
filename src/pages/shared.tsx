@@ -48,7 +48,7 @@ export const sectionMeta: Record<
   governance: { label: "系统管理", icon: <SafetyCertificateOutlined /> },
   runs: { label: "运行中心", icon: <PlayCircleFilled /> },
   settings: { label: "项目设置", icon: <SettingOutlined /> },
-  platform: { label: "发布管理", icon: <CloudServerOutlined /> },
+  platform: { label: "平台", icon: <CloudServerOutlined /> },
 };
 
 export const statusMeta = {
