@@ -17,7 +17,6 @@ const sectionPages: Record<ProjectSection, ComponentType<{ project: Project }>> 
   environments: lazySection(() => import("./EnvironmentsPage").then((m) => ({ default: m.EnvironmentsPage }))),
   data: lazySection(() => import("./DatasetsPage").then((m) => ({ default: m.DatasetsPage }))),
   agents: lazySection(() => import("./AgentsPage").then((m) => ({ default: m.AgentsPage }))),
-  debug: lazySection(() => import("./DebugSessionsPage").then((m) => ({ default: m.DebugSessionsPage }))),
   automations: lazySection(() => import("./AutomationsPage").then((m) => ({ default: m.AutomationsPage }))),
   governance: lazySection(() => import("./GovernancePage").then((m) => ({ default: m.GovernancePage }))),
   runs: lazySection(() => import("./RunsPage").then((m) => ({ default: m.RunsPage }))),
@@ -36,10 +35,10 @@ export function ProjectShell() {
   ) as ProjectSection;
   const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
   if (!project) return <Navigate to="/projects" replace />;
-  if (production && ["agents", "debug"].includes(activeSection)) return <Navigate to={`/project/${project.id}/overview`} replace />;
+  if (production && ["agents"].includes(activeSection)) return <Navigate to={`/project/${project.id}/overview`} replace />;
   if (
     projectMode !== "platform-enabled"
-    && ["data", "agents", "debug", "automations", "governance"].includes(activeSection)
+    && ["data", "agents", "automations", "governance"].includes(activeSection)
   ) return <Navigate to={`/project/${project.id}/platform`} replace />;
   const SectionPage = sectionPages[activeSection];
   return (

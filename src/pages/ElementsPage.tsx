@@ -4,7 +4,6 @@ import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements,
 import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
-import { ElementPickerPanel } from "./ElementPickerPanel";
 import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
@@ -376,7 +375,6 @@ export function ElementDrawer({
 }) {
   const [form] = Form.useForm();
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerMode, setPickerMode] = useState<"platform" | "local">("platform");
   const method = Form.useWatch("method", form);
   const selectedEnvironment = Form.useWatch("environment", form);
   useEffect(() => {
@@ -450,8 +448,7 @@ export function ElementDrawer({
               message.warning("请先在表单中选择默认验证环境");
               return;
             }
-            // 已连接平台且项目已导入 -> 平台通道（行为不变）；否则 -> 本地采集通道。
-            setPickerMode(platformProjectContext(project.id) ? "platform" : "local");
+            // 采集统一走本地通道（部署机本机 headed Chromium + 截图反馈）。
             setPickerOpen(true);
           }}
         >
@@ -522,27 +519,18 @@ export function ElementDrawer({
         </Form.Item>
       </Form>
       <Modal
-        title={pickerMode === "platform" ? "从页面获取元素" : "从页面获取元素（本地通道）"}
+        title="从页面获取元素（本地通道）"
         open={pickerOpen}
         width={760}
         footer={null}
         onCancel={() => setPickerOpen(false)}
       >
         <div className="element-picker-modal-body">
-          {pickerMode === "local" ? (
-            <LocalElementPickerPanel
-              project={project}
-              preferredEnvironmentId={selectedEnvironment}
-              onSelectCandidate={(selection) => applyPickerSelection(selection)}
-            />
-          ) : (
-            <ElementPickerPanel
-              project={project}
-              preferredEnvironmentId={selectedEnvironment}
-              confirmMode="fillback"
-              onSelectCandidate={(selection) => applyPickerSelection(selection)}
-            />
-          )}
+          <LocalElementPickerPanel
+            project={project}
+            preferredEnvironmentId={selectedEnvironment}
+            onSelectCandidate={(selection) => applyPickerSelection(selection)}
+          />
         </div>
       </Modal>
     </Drawer>

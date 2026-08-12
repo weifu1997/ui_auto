@@ -4,19 +4,6 @@ export function platformApiOrigin() {
   return new URL(apiBase, window.location.origin).origin;
 }
 
-export type PlatformAgent = {
-  id: string;
-  workspaceId: string;
-  name: string;
-  status: "online" | "offline" | "disabled";
-  browserVersion: string;
-  os: string;
-  maxConcurrency: number;
-  currentTask: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-};
-
 export type PlatformSession = {
   token: string;
   user: { id: string; email: string; name: string };
@@ -79,29 +66,10 @@ export type PlatformRun = {
   cancellationRequested: boolean;
   createdAt: string;
   updatedAt: string;
-  lease?: { id: string; runId: string; agentId: string; status: string; expiresAt: string; attempt: number; expired: boolean };
   agent?: { id: string; name: string; browserVersion: string; os: string; maxConcurrency: number; lastSeenAt: string | null };
   artifacts: Array<{ id: string; name: string; contentType: string; createdAt: string }>;
   events: Array<{ id: number; kind: string; data: Record<string, unknown>; at: string }>;
   flowOutputs: Array<{ name: string; value: string; source: string; createdAt: string }>;
-};
-
-export type PlatformDebugSession = {
-  id: string;
-  projectId: string;
-  revisionId: string | null;
-  environmentId: string;
-  agentId: string;
-  status: "requested" | "active" | "paused" | "ending" | "ended" | "failed" | "expired";
-  currentStep: number;
-  currentUrl: string | null;
-  idleExpiresAt: string;
-  maxExpiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-  agent?: { id: string; name: string; browserVersion: string; os: string; lastSeenAt: string | null };
-  artifacts: Array<{ id: string; name: string; contentType: string; createdAt: string }>;
-  events: Array<{ id: number; kind: string; data: Record<string, unknown>; at: string }>;
 };
 
 export type PlatformElementValidation = {
@@ -115,22 +83,6 @@ export type PlatformElementValidation = {
   error?: string;
   createdAt: string;
   updatedAt: string;
-};
-
-export type PlatformPickerCapture = {
-  id: string;
-  sessionId: string;
-  target: string;
-  status: "pending" | "confirmed";
-  capturedAt: string;
-  confirmedAt: string | null;
-  candidates: Array<{
-    method: "testid" | "role" | "label" | "text" | "css";
-    value: string;
-    count: number;
-    score: number;
-    label: string;
-  }>;
 };
 
 export type PlatformElement = {
@@ -299,35 +251,6 @@ export function logoutPlatform() {
 export async function restorePlatformSession() {
   const session = await request<Omit<PlatformSession, "token">>("/auth/session");
   return { ...session, token: "cookie" } satisfies PlatformSession;
-}
-
-export function getPlatformAgents(token: string, workspaceId: string) {
-  return request<{ agents: PlatformAgent[] }>(`/agents?workspaceId=${encodeURIComponent(workspaceId)}`, {}, token);
-}
-
-export function createAgentRegistrationToken(token: string, workspaceId: string) {
-  return request<{ registrationToken: string; expiresAt: string }>(
-    "/agent-tokens",
-    { method: "POST", body: JSON.stringify({ workspaceId, expiresInMinutes: 30 }) },
-    token,
-  );
-}
-
-export function getAgentBindings(token: string, projectId: string) {
-  return request<{
-    bindings: Array<{
-      environmentId: string;
-      agent: Pick<PlatformAgent, "id" | "name" | "status" | "browserVersion" | "lastSeenAt">;
-    }>;
-  }>(`/platform/projects/${encodeURIComponent(projectId)}/agent-bindings`, {}, token);
-}
-
-export function bindAgent(token: string, projectId: string, environmentId: string, agentId: string) {
-  return request<{ projectId: string; environmentId: string; agentId: string }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/agent-bindings`,
-    { method: "PUT", body: JSON.stringify({ environmentId, agentId }) },
-    token,
-  );
 }
 
 export function importLocalWorkspace(
@@ -587,102 +510,6 @@ export async function fetchPlatformArtifact(token: string, artifactId: string) {
   } finally {
     window.clearTimeout(timeout);
   }
-}
-
-export function getDebugSessions(token: string, projectId: string) {
-  return request<{ sessions: PlatformDebugSession[] }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions`,
-    {},
-    token,
-  );
-}
-
-export function createDebugSession(
-  token: string,
-  projectId: string,
-  input: { revisionId?: string; environmentId: string; startUrl?: string; startStep?: number; blank?: boolean },
-) {
-  return request<{ session: PlatformDebugSession }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions`,
-    { method: "POST", body: JSON.stringify(input) },
-    token,
-  );
-}
-
-export function sendDebugCommand(
-  token: string,
-  projectId: string,
-  sessionId: string,
-  command: "start" | "continue" | "runCurrent" | "skip" | "pause" | "retry" | "stop",
-) {
-  return request<{ session: PlatformDebugSession }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/commands`,
-    { method: "POST", body: JSON.stringify({ command }) },
-    token,
-  );
-}
-
-export function debugArtifactUrl(artifactId: string) {
-  return `${apiBase}/platform/debug-artifacts/${encodeURIComponent(artifactId)}`;
-}
-
-export async function fetchDebugArtifact(token: string, artifactId: string) {
-  const response = await fetch(debugArtifactUrl(artifactId), {
-    credentials: "include",
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new PlatformApiError(response.status, body.error ?? "DEBUG_ARTIFACT_FETCH_FAILED");
-  }
-  return response.blob();
-}
-
-export function enableElementPicker(token: string, projectId: string, sessionId: string) {
-  return request<{ session: PlatformDebugSession }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker/enable`,
-    { method: "POST" },
-    token,
-  );
-}
-
-export function getPickerCaptures(token: string, projectId: string, sessionId: string) {
-  return request<{ captures: PlatformPickerCapture[] }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures`,
-    {},
-    token,
-  );
-}
-
-export function previewPickerCandidate(token: string, projectId: string, sessionId: string, captureId: string, candidateIndex: number) {
-  return request<{ candidateIndex: number }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/preview`,
-    { method: "POST", body: JSON.stringify({ candidateIndex }) },
-    token,
-  );
-}
-
-export type PlatformPickerFillback = {
-  target: "fillback";
-  candidate: { method: string; value: string; count: number; score: number; label: string };
-  path: string;
-  environmentId: string;
-  suggestedName: string;
-  documentVersion: number;
-};
-
-export function confirmPickerCandidate(
-  token: string,
-  projectId: string,
-  sessionId: string,
-  captureId: string,
-  input: { candidateIndex: number; target: "element" | "step" | "fillback"; name?: string; flowId?: string; stepId?: string },
-) {
-  return request<{ element: PlatformElement; documentVersion: number; target: "element" | "step" } | PlatformPickerFillback>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/confirm`,
-    { method: "POST", body: JSON.stringify(input) },
-    token,
-  );
 }
 
 export function getPlatformDatasets(token: string, projectId: string) {

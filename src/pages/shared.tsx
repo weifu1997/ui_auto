@@ -11,7 +11,7 @@ import { WorkerApiError, getWorkerHealth, subscribeToTask } from "../worker-api"
 import type { WorkerTask } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
-import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, ExperimentOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd";
 import { useEffect, useRef, useState } from "react";
 import "../App.css";
@@ -25,7 +25,6 @@ export type ProjectSection =
   | "environments"
   | "data"
   | "agents"
-  | "debug"
   | "automations"
   | "governance"
   | "runs"
@@ -42,8 +41,7 @@ export const sectionMeta: Record<
   variables: { label: "变量", icon: <CodeOutlined /> },
   environments: { label: "环境", icon: <GlobalOutlined /> },
   data: { label: "数据集", icon: <DatabaseOutlined /> },
-  agents: { label: "执行节点", icon: <CloudServerOutlined /> },
-  debug: { label: "调试", icon: <ExperimentOutlined /> },
+  agents: { label: "发布与运行", icon: <CloudServerOutlined /> },
   automations: { label: "持续回归", icon: <ClockCircleOutlined /> },
   governance: { label: "系统管理", icon: <SafetyCertificateOutlined /> },
   runs: { label: "运行中心", icon: <PlayCircleFilled /> },
@@ -187,7 +185,7 @@ export function ProjectLayout({
   };
   const visibleSections = production
     ? (sectionsByRole[workspaceRole] ?? (workspaceRole === "owner" || workspaceRole === "admin" ? ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] : sectionsByRole.viewer))
-    : (Object.keys(sectionMeta) as ProjectSection[]).filter((key) => !["data", "agents", "debug", "automations", "governance"].includes(key));
+    : (Object.keys(sectionMeta) as ProjectSection[]).filter((key) => !["data", "agents", "automations", "governance"].includes(key));
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],
   );
@@ -206,8 +204,6 @@ export function ProjectLayout({
     environments.find((item) => item.id === activeEnvironmentId) ?? environments[0];
   const runningRunCount = projectRuns.filter((run) => run.status === "running").length;
   const [workerStatus, setWorkerStatus] = useState<"checking" | "online" | "offline">("checking");
-  const agentStatus: string = "local";
-  const agentName = undefined;
 
   useEffect(() => {
     let mounted = true;
@@ -236,18 +232,6 @@ export function ProjectLayout({
     : workerStatus === "offline"
       ? (production ? "执行服务离线" : "Worker 离线")
       : (production ? "正在检查执行服务" : "正在检查 Worker");
-  const agentLabel = agentStatus === "online"
-    ? `Agent ${agentName ?? ""} 在线`
-    : agentStatus === "offline"
-      ? `Agent ${agentName ?? ""} 离线`
-      : agentStatus === "unbound"
-        ? "未绑定 Agent"
-        : agentStatus === "unimported"
-          ? "项目未导入 Platform"
-          : agentStatus === "unknown"
-            ? "Platform 状态未知"
-            : "正在检查 Agent";
-  void agentLabel;
   return (
     <div className="app-shell">
       <WorkspaceSide compact />
@@ -478,7 +462,7 @@ export function platformRunAsRun(run: PlatformRun): Run {
     startedAt: new Date(run.createdAt).toLocaleString(),
     duration: isTerminalStatus(status) ? "已完成" : "进行中",
     screenshots: run.artifacts.filter((artifact) => artifact.contentType.startsWith("image/")).length,
-    retries: Math.max(0, (run.lease?.attempt ?? 1) - 1),
+    retries: 0,
   };
 }
 
@@ -571,7 +555,7 @@ export function PlatformProjectRequired({ project, title, description }: { proje
   return (
     <>
       <PageHeading title={title} description={description} />
-      <Alert type="info" showIcon title={production ? "项目数据尚未就绪" : session ? "当前项目尚未导入平台" : "请先连接平台账户"} action={<Link to={production ? "/projects" : `/project/${project.id}/agents`}>{production ? "返回项目列表" : session ? "导入并绑定节点" : "前往执行节点"}</Link>} />
+      <Alert type="info" showIcon title={production ? "项目数据尚未就绪" : session ? "当前项目尚未导入平台" : "请先连接平台账户"} action={<Link to={production ? "/projects" : `/project/${project.id}/agents`}>{production ? "返回项目列表" : session ? "导入并发布" : "前往发布与运行"}</Link>} />
     </>
   );
 }

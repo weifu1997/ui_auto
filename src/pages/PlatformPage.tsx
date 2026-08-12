@@ -4,21 +4,19 @@ import type { Project } from "../mock-data";
 import { AgentsPage } from "./AgentsPage";
 import { AutomationsPage } from "./AutomationsPage";
 import { DatasetsPage } from "./DatasetsPage";
-import { DebugSessionsPage } from "./DebugSessionsPage";
 import { GovernancePage } from "./GovernancePage";
 import { useWorkspaceStore } from "../workspace-store";
 
 export type PlatformTabItem = { key: string; label: string; children: React.ReactNode };
 
 /**
- * production：平台页收敛为平台独占能力（发布与远程运行 / 远程调试），
+ * production：平台页收敛为平台独占能力（发布与运行）；
  * 「数据集 / 持续回归 / 治理分析」以侧边栏为主入口，避免重复；
  * dev（非 production）：侧边栏本就不含这些入口，保留 Tab 以维持可达性与测试。
  */
 export function platformTabItems(production: boolean, project: Project): PlatformTabItem[] {
   const base: PlatformTabItem[] = [
-    { key: "publish", label: "发布与远程运行", children: <AgentsPage project={project} /> },
-    { key: "debug", label: "远程调试", children: <DebugSessionsPage project={project} /> },
+    { key: "publish", label: "发布与运行", children: <AgentsPage project={project} /> },
   ];
   if (production) return base;
   return [

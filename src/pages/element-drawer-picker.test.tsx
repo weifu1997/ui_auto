@@ -25,15 +25,6 @@ const pickSelection: PickSelection = {
   suggestedName: "login-submit",
 };
 
-vi.mock("./ElementPickerPanel", () => ({
-  ElementPickerPanel: ({ preferredEnvironmentId, onSelectCandidate }: { preferredEnvironmentId?: string; onSelectCandidate?: (selection: PickSelection) => void }) => (
-    <div data-testid="platform-picker-panel">
-      <span data-testid="platform-picker-env">{preferredEnvironmentId ?? ""}</span>
-      <button type="button" onClick={() => onSelectCandidate?.(pickSelection)}>pick-candidate</button>
-    </div>
-  ),
-}));
-
 vi.mock("./LocalElementPickerPanel", () => ({
   LocalElementPickerPanel: ({ preferredEnvironmentId, onSelectCandidate }: { preferredEnvironmentId?: string; onSelectCandidate?: (selection: PickSelection) => void }) => (
     <div data-testid="local-picker-panel">
@@ -87,7 +78,7 @@ function renderDrawer(element?: ElementAsset, elements: ElementAsset[] = [], env
   return { onSave, onClose };
 }
 
-describe("ElementDrawer 从页面获取（双通道）", () => {
+describe("ElementDrawer 从页面获取（统一本地通道）", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
@@ -116,11 +107,10 @@ describe("ElementDrawer 从页面获取（双通道）", () => {
     renderDrawer(undefined, [], []);
     fireEvent.click(screen.getByRole("button", { name: /从页面获取/ }));
     expect(message.warning).toHaveBeenCalledWith("请先在表单中选择默认验证环境");
-    expect(screen.queryByTestId("platform-picker-panel")).toBeNull();
     expect(screen.queryByTestId("local-picker-panel")).toBeNull();
   });
 
-  it("已连接平台时走平台通道，选定候选后自动回填并提示重复定位器但不阻断", async () => {
+  it("已连接平台时同样走本地通道，选定候选后自动回填并提示重复定位器但不阻断", async () => {
     seedPlatformContext();
     const existing: ElementAsset = {
       id: "element-existing",
@@ -139,8 +129,8 @@ describe("ElementDrawer 从页面获取（双通道）", () => {
       expect(envSelect?.getAttribute("title")).toBe("测试环境");
     }, { timeout: 4_000 });
     fireEvent.click(screen.getByRole("button", { name: /从页面获取/ }));
-    await waitFor(() => expect(screen.getByTestId("platform-picker-panel")).toBeTruthy(), { timeout: 4_000 });
-    expect(screen.getByTestId("platform-picker-env").textContent).toBe("env-1");
+    await waitFor(() => expect(screen.getByTestId("local-picker-panel")).toBeTruthy(), { timeout: 4_000 });
+    expect(screen.getByTestId("local-picker-env").textContent).toBe("env-1");
     fireEvent.click(screen.getByRole("button", { name: "pick-candidate" }));
     await waitFor(() => {
       expect(screen.getByLabelText("定位值")).toHaveValue("login-submit");

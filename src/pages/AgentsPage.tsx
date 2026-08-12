@@ -1,16 +1,15 @@
 import { message } from "../antd-feedback";
 import type { Project } from "../mock-data";
-import { bindAgent, createAgentRegistrationToken, createPlatformRevision, createPlatformRun, getAgentBindings, getPlatformAgents, getPlatformProjectDocument, getPlatformRevisions, importLocalWorkspace, loginPlatform, PlatformApiError, publishPlatformRevision, registerPlatform, savePlatformSecret } from "../platform-api";
-import type { PlatformAgent, PlatformRevision, PlatformSession } from "../platform-api";
+import { createPlatformRevision, createPlatformRun, getPlatformProjectDocument, getPlatformRevisions, importLocalWorkspace, loginPlatform, PlatformApiError, publishPlatformRevision, registerPlatform, savePlatformSecret } from "../platform-api";
+import type { PlatformRevision, PlatformSession } from "../platform-api";
 import { disconnectPlatformProject as clearPlatformProjectMap, notifyPlatformContextChanged, platformSessionStorageKey, readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformDocumentVersion, storePlatformProjectMap, storePlatformWorkspaceId } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { PageHeading, platformRunAsRun, platformVariables, requestRunSecrets, requiredSecretVariables, variableReference } from "./shared";
 import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
-import { CloudServerOutlined, PlayCircleFilled, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
-import { Alert, Avatar, Button, Empty, Form, Input, Modal, Select, Space, Table, Tag, Tooltip } from "antd";
-import type { TableColumnsType } from "antd";
+import { PlayCircleFilled, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { Alert, Button, Empty, Form, Input, Modal, Select, Space, Table, Tag, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 const emptySecretValues: Record<string, string> = {};
@@ -32,78 +31,32 @@ export function AgentsPage({ project }: { project: Project }) {
   const [session, setSession] = useState<PlatformSession | undefined>(readStoredPlatformSession);
   const [workspaceId, setWorkspaceId] = useState(() => readStoredPlatformWorkspaceId(readStoredPlatformSession()));
   const [projectMap, setProjectMap] = useState<Record<string, string>>(() => readPlatformProjectMap(readStoredPlatformWorkspaceId(readStoredPlatformSession())));
-  const [agents, setAgents] = useState<PlatformAgent[]>([]);
-  const [bindings, setBindings] = useState<Array<{ environmentId: string; agent: { id: string; name: string; status: string } }>>([]);
   const [revisions, setRevisions] = useState<PlatformRevision[]>([]);
   const [loading, setLoading] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string>();
   const [loginForm] = Form.useForm();
-  const [bindingForm] = Form.useForm();
   const [releaseForm] = Form.useForm();
-  const [registrationToken, setRegistrationToken] = useState<string>();
-  const [bindingOpen, setBindingOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const platformProjectId = projectMap[project.id];
   const activeEnvironment = environments.find((environment) => environment.id === activeEnvironmentId) ?? environments[0];
 
-  const loadNodes = useCallback(async () => {
+  const loadRevisions = useCallback(async () => {
     if (!session || !workspaceId || !platformProjectId) return;
     setLoading(true);
     try {
-      const agentResponse = await getPlatformAgents(session.token, workspaceId);
-      setAgents(agentResponse.agents);
-      if (platformProjectId) {
-        const [bindingResponse, revisionResponse] = await Promise.all([
-          getAgentBindings(session.token, platformProjectId),
-          getPlatformRevisions(session.token, platformProjectId),
-        ]);
-        setBindings(bindingResponse.bindings);
-        setRevisions(revisionResponse.revisions);
-      } else {
-        setBindings([]);
-        setRevisions([]);
-      }
+      const { revisions } = await getPlatformRevisions(session.token, platformProjectId);
+      setRevisions(revisions);
     } catch {
-      message.error("无法读取平台节点，请检查登录状态和服务地址");
+      message.error("无法读取平台版本，请检查登录状态和服务地址");
     } finally {
       setLoading(false);
     }
   }, [platformProjectId, session, workspaceId]);
 
   useEffect(() => {
-    void loadNodes();
-  }, [loadNodes]);
-
-  const agentColumns: TableColumnsType<PlatformAgent> = [
-    {
-      title: "节点",
-      dataIndex: "name",
-      render: (name: string, agent) => (
-        <Space size={10}>
-          <Avatar shape="square" size={30} style={{ background: "#e4f1ee", color: "#147a73" }} icon={<CloudServerOutlined />} />
-          <span>
-            <strong>{name}</strong>
-            <small className="table-secondary">{agent.os}</small>
-          </span>
-        </Space>
-      ),
-    },
-    {
-      title: "状态",
-      dataIndex: "status",
-      width: 110,
-      render: (status: PlatformAgent["status"]) => (
-        <Tag color={status === "online" ? "green" : status === "disabled" ? "default" : "orange"}>
-          {status === "online" ? "在线" : status === "disabled" ? "已禁用" : "离线"}
-        </Tag>
-      ),
-    },
-    { title: "Chromium", dataIndex: "browserVersion", width: 160 },
-    { title: "容量", dataIndex: "maxConcurrency", width: 90, render: (value: number) => `${value} 并发` },
-    { title: "当前任务", dataIndex: "currentTask", render: (value: string | null) => value ?? "空闲" },
-    { title: "最后心跳", dataIndex: "lastSeenAt", width: 180, render: (value: string | null) => value ? new Date(value).toLocaleString() : "尚未连接" },
-  ];
+    void loadRevisions();
+  }, [loadRevisions]);
 
   const publishFlow = async (targetProjectId: string, flowId?: string, environmentId?: string) => {
     if (!session) return;
@@ -130,7 +83,7 @@ export function AgentsPage({ project }: { project: Project }) {
       });
       await publishPlatformRevision(session.token, targetProjectId, revision.revision.id);
       setReleaseOpen(false);
-      await loadNodes();
+      await loadRevisions();
       message.success(`已发布 ${flow.name} 的新版本`);
     } catch {
       message.error("流程版本发布失败");
@@ -147,11 +100,6 @@ export function AgentsPage({ project }: { project: Project }) {
       return;
     }
     try {
-      const { bindings } = await getAgentBindings(session.token, platformProjectId);
-      if (!bindings.some((binding) => binding.environmentId === environmentId && binding.agent.status === "online")) {
-        message.error("远程运行需要已绑定且在线的 Agent。");
-        return;
-      }
       const flow = flows.find((item) => item.id === revision.flowId) ?? flows.find((item) => item.name === revision.flowName);
       const revisionSteps = flow?.definition ?? [];
       const secretValues = await requestRunSecrets(
@@ -168,10 +116,10 @@ export function AgentsPage({ project }: { project: Project }) {
       }
       const result = await createPlatformRun(session.token, platformProjectId, { revisionId: revision.id, environmentId });
       result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
-      message.success(`已创建 ${result.runIds.length} 个 Agent 运行`);
+      message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
       if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
     } catch {
-      message.error("创建 Agent 运行失败，请确认环境已绑定在线节点");
+      message.error("创建运行失败，请确认版本与环境配置");
     }
   };
 
@@ -229,16 +177,15 @@ export function AgentsPage({ project }: { project: Project }) {
     notifyPlatformContextChanged();
     message.info("已停止同步。本地项目和 Platform 远程项目均被保留。");
   };
-  const showLegacyImportAlert = () => false;
   if (!session) {
     return (
       <>
-        <PageHeading title="发布与远程执行" description="连接 Platform 后，可发布当前项目并启用远程执行。" />
+        <PageHeading title="发布与运行" description="连接 Platform 后，可发布当前项目并运行已发布版本。" />
         {publishError && <Alert type="error" showIcon title={publishError} />}
         <section className="surface settings-section platform-login-panel">
           <div>
             <h2>发布当前项目</h2>
-            <p>登录 Platform 后即可发布当前项目，并按需启用远程执行与同步。</p>
+            <p>登录 Platform 后即可发布当前项目，并按需启用同步与运行。</p>
           </div>
           <Form
             form={loginForm}
@@ -295,7 +242,7 @@ export function AgentsPage({ project }: { project: Project }) {
   if (!platformProjectId) {
     return (
       <>
-        <PageHeading title="发布与远程执行" description="发布当前项目后，才会启用同步、版本和远程 Agent 执行。" />
+        <PageHeading title="发布与运行" description="发布当前项目后，才会启用同步、版本与运行。" />
         <section className="surface settings-section">
           <h2>发布当前项目</h2>
           <p>发布会包含当前项目的流程、元素、变量、环境和成员。本地编辑与本机运行保持独立。</p>
@@ -309,7 +256,7 @@ export function AgentsPage({ project }: { project: Project }) {
 
   return (
     <>
-      <PageHeading title="执行节点" description="节点通过主动出站连接领取已发布流程的短时租约。" />
+      <PageHeading title="发布与运行" description="已发布版本由部署机本机执行（ManagedRunner）。" />
       {syncError && (
         <Alert
           type="error"
@@ -317,24 +264,6 @@ export function AgentsPage({ project }: { project: Project }) {
           title="Platform synchronization failed"
           description={syncError}
         />
-      )}
-      {showLegacyImportAlert() && (
-        <Alert
-          className="platform-import-alert"
-          type="info"
-          showIcon
-          title="当前项目尚未导入平台"
-          action={<Button size="small" onClick={() => void importCurrentWorkspace()}>导入本地项目</Button>}
-        />
-      )}
-      {!platformProjectId && (
-        <section className="surface settings-section">
-          <h2>发布当前项目</h2>
-          <p>将当前项目的流程、元素、变量、环境和成员发布到 Platform 后，才会启用同步与远程执行。</p>
-          <Button type="primary" icon={<UploadOutlined />} onClick={() => void importCurrentWorkspace()}>
-            发布到 Platform
-          </Button>
-        </section>
       )}
       <div className="table-toolbar agent-toolbar">
         <Select
@@ -348,62 +277,25 @@ export function AgentsPage({ project }: { project: Project }) {
           options={session.workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
         />
         <Space>
-          <Tooltip title="刷新节点状态"><Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadNodes()} /></Tooltip>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={async () => {
-              try {
-                const result = await createAgentRegistrationToken(session.token, workspaceId);
-                setRegistrationToken(`${result.registrationToken}\n有效至 ${new Date(result.expiresAt).toLocaleString()}`);
-              } catch {
-                message.error("无法生成注册令牌");
-              }
-            }}
-          >
-            生成注册令牌
-          </Button>
+          <Tooltip title="刷新版本列表"><Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadRevisions()} /></Tooltip>
         </Space>
       </div>
-      {platformProjectId && (
-        <Space>
-          <Tag color={syncStatus === "synced" ? "green" : syncStatus === "failed" ? "red" : "blue"}>
-            {syncStatus === "synced" ? "已同步" : syncStatus === "retrying" ? "待重试" : syncStatus === "failed" ? "同步失败" : "同步中"}
-          </Tag>
-          <Button danger onClick={stopSync}>停止同步</Button>
-        </Space>
-      )}
-      <section className="surface project-table">
-        <Table rowKey="id" columns={agentColumns} dataSource={agents} loading={loading} pagination={false} locale={{ emptyText: <Empty description="暂无已注册的执行节点" /> }} />
-      </section>
-      <section className="surface settings-section agent-binding-section">
-        <div>
-          <h2>项目环境绑定</h2>
-          <p>只会向当前项目、当前环境已绑定且在线的节点派发运行。</p>
-        </div>
-        <Table
-          rowKey={(item) => `${item.environmentId}-${item.agent.id}`}
-          size="small"
-          pagination={false}
-          dataSource={bindings}
-          columns={[
-            { title: "环境", dataIndex: "environmentId", render: (id: string) => environments.find((environment) => environment.id === id)?.name ?? id },
-            { title: "节点", dataIndex: ["agent", "name"] },
-            { title: "状态", dataIndex: ["agent", "status"], render: (status: string) => <Tag color={status === "online" ? "green" : "default"}>{status === "online" ? "在线" : status}</Tag> },
-          ]}
-          locale={{ emptyText: "尚未绑定节点" }}
-        />
-        <Button disabled={!platformProjectId || agents.length === 0 || environments.length === 0} icon={<PlusOutlined />} onClick={() => setBindingOpen(true)}>绑定节点</Button>
-      </section>
+      <Space>
+        <Tag color={syncStatus === "synced" ? "green" : syncStatus === "failed" ? "red" : "blue"}>
+          {syncStatus === "synced" ? "已同步" : syncStatus === "retrying" ? "待重试" : syncStatus === "failed" ? "同步失败" : "同步中"}
+        </Tag>
+        <Button danger onClick={stopSync}>停止同步</Button>
+      </Space>
       <section className="surface settings-section agent-binding-section">
         <div>
           <h2>流程版本</h2>
-          <p>发布会固定当前流程、元素、环境和密钥引用；仅已发布版本可由 Agent 执行、调试或触发持续回归。</p>
+          <p>发布会固定当前流程、元素、环境和密钥引用；仅已发布版本可运行或触发持续回归。</p>
         </div>
         <Table
           rowKey="id"
           size="small"
           pagination={false}
+          loading={loading}
           dataSource={revisions}
           columns={[
             { title: "版本", dataIndex: "revisionNumber", width: 90, render: (value: number) => `v${value}` },
@@ -411,40 +303,10 @@ export function AgentsPage({ project }: { project: Project }) {
             { title: "创建时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() },
             { title: "", width: 72, render: (_, revision: PlatformRevision) => <Tooltip title="使用当前环境执行"><Button size="small" icon={<PlayCircleFilled />} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip> },
           ]}
-          locale={{ emptyText: "发布当前流程后将显示可执行版本" }}
+          locale={{ emptyText: <Empty description="发布当前流程后将显示可执行版本" /> }}
         />
         <Button type="primary" disabled={!platformProjectId || flows.length === 0 || environments.length === 0} icon={<UploadOutlined />} onClick={() => { releaseForm.setFieldsValue({ flowId: flows[0]?.id, environmentId: activeEnvironment?.id ?? environments[0]?.id }); setReleaseOpen(true); }}>发布流程版本</Button>
       </section>
-      <Modal title="一次性注册令牌" open={Boolean(registrationToken)} footer={<Button onClick={() => setRegistrationToken(undefined)}>关闭</Button>} onCancel={() => setRegistrationToken(undefined)}>
-        <Input.TextArea value={registrationToken} autoSize readOnly onFocus={(event) => event.currentTarget.select()} />
-      </Modal>
-      <Modal
-        title="绑定执行节点"
-        open={bindingOpen}
-        onCancel={() => setBindingOpen(false)}
-        okText="保存绑定"
-        onOk={() => bindingForm.validateFields().then(async (values) => {
-          if (!platformProjectId) return;
-          try {
-            await bindAgent(session.token, platformProjectId, values.environmentId, values.agentId);
-            bindingForm.resetFields();
-            setBindingOpen(false);
-            await loadNodes();
-            message.success("节点已绑定到环境");
-          } catch {
-            message.error("节点绑定失败");
-          }
-        })}
-      >
-        <Form form={bindingForm} layout="vertical">
-          <Form.Item name="environmentId" label="环境" rules={[{ required: true, message: "请选择环境" }]}>
-            <Select options={environments.map((environment) => ({ value: environment.id, label: environment.name }))} />
-          </Form.Item>
-          <Form.Item name="agentId" label="执行节点" rules={[{ required: true, message: "请选择执行节点" }]}>
-            <Select options={agents.filter((agent) => agent.status === "online").map((agent) => ({ value: agent.id, label: `${agent.name} (${agent.browserVersion})` }))} />
-          </Form.Item>
-        </Form>
-      </Modal>
       <Modal
         title="发布流程版本"
         open={releaseOpen}
