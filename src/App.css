@@ -776,6 +776,15 @@
   border-radius: 5px;
   overflow: hidden;
   margin: 0 0 14px;
+  background: #fff;
+}
+.browser-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 460px;
+  object-fit: contain;
+  object-position: top left;
 }
 .browser-toolbar {
   background: #eef2f0;
