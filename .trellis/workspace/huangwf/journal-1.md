@@ -56,3 +56,26 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: 裁剪 Agent 远程执行：方案C实施完成，test:all 全绿
+
+**Date**: 2026-08-13
+**Task**: 裁剪 Agent 远程执行：方案C实施完成，test:all 全绿
+**Branch**: `codex/element-picker`
+
+### Summary
+
+按决策文档（方案C）完成裁剪：服务端移除 agent 客户端/WS/租约/调试会话端点（-2338 行），执行恒为 ManagedRunner（AUTOFLOW_EXECUTOR_TYPE 分支删除），迁移 v9 drop 7 张废弃表（agents 表保留 ManagedRunner 伪行，真实库验证通过）；前端删除 ElementPickerPanel/DebugSessionsPage，采集统一本地通道，AgentsPage 收敛为发布与运行；测试收缩（contract smoke 改为真实 managed 执行、删 agent/debug 相关测试）；README/决策文档/spec 指南更新。build/lint/unit(53)/platform/managed/worker/e2e(25)/production/windows 全绿。e2e templates-and-conflicts 存在既有偶发（单独与多轮全量通过）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3a751d6` | (see git log) |
+| `98cc41a` | (see git log) |
+| `4211b89` | (see git log) |
+
+### Status
+
+[OK] **Completed**
