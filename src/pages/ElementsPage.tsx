@@ -405,7 +405,10 @@ export function ElementDrawer({
               message.error("未连接平台账户，无法从页面获取元素");
               return;
             }
-            if (!selectedEnvironment) {
+            const environmentValue = typeof form.getFieldValue("environment") === "string"
+              ? form.getFieldValue("environment")
+              : selectedEnvironment;
+            if (!environmentValue) {
               message.warning("请先在表单中选择默认验证环境");
               return;
             }
