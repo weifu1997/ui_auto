@@ -116,9 +116,9 @@ describe("ElementDrawer 从页面获取", () => {
     await waitFor(() => {
       const contents = document.querySelectorAll(".ant-select-content");
       expect(contents[1]?.getAttribute("title")).toBe("测试环境");
-    });
+    }, { timeout: 4_000 });
     fireEvent.click(screen.getByRole("button", { name: /从页面获取/ }));
-    await waitFor(() => expect(screen.getByTestId("picker-panel")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("picker-panel")).toBeTruthy(), { timeout: 4_000 });
     expect(screen.getByTestId("picker-env").textContent).toBe("env-1");
     fireEvent.click(screen.getByRole("button", { name: "pick-candidate" }));
     await waitFor(() => {

@@ -155,58 +155,60 @@ export function DebugSessionsPage({ project }: { project: Project }) {
           locale={{ emptyText: <Empty description="尚无调试会话" /> }}
         />
       </section>
-      {selectedSession && (
-        <section className="debug-workbench">
-          <div className="surface debug-control-panel">
-            <div className="debug-session-heading">
-              <div>
-                <span className="eyebrow">当前会话</span>
-                <h2>#{selectedSession.id.slice(0, 8)}</h2>
-              </div>
-              <Tag color={activeSession ? "processing" : "default"}>{selectedSession.status}</Tag>
-            </div>
-            <dl className="debug-session-meta">
-              <div><dt>当前 URL</dt><dd>{selectedSession.currentUrl ?? "浏览器准备中"}</dd></div>
-              <div><dt>执行节点</dt><dd>{selectedSession.agent?.name ?? selectedSession.agentId}</dd></div>
-              <div><dt>当前步骤</dt><dd>{selectedSession.currentStep + 1}</dd></div>
-              <div><dt>空闲回收</dt><dd>{new Date(selectedSession.idleExpiresAt).toLocaleTimeString()}</dd></div>
-            </dl>
-            <div className="debug-command-bar">
-              <Tooltip title={readySession ? "从第一个步骤连续执行" : "等待 Agent 初始化浏览器"}><Button type="primary" icon={<PlayCircleFilled />} disabled={!readySession} onClick={() => void command("start")}>从头运行</Button></Tooltip>
-              <Tooltip title={readySession ? "从当前步骤继续执行" : "等待 Agent 初始化浏览器"}><Button icon={<PlayCircleFilled />} disabled={!readySession} onClick={() => void command("continue")}>继续</Button></Tooltip>
-              <Tooltip title={readySession ? "仅执行当前步骤" : "等待 Agent 初始化浏览器"}><Button icon={<PlayCircleFilled />} disabled={!readySession} onClick={() => void command("runCurrent")}>当前步骤</Button></Tooltip>
-              <Tooltip title={readySession ? "跳过当前步骤" : "等待 Agent 初始化浏览器"}><Button icon={<ThunderboltOutlined />} disabled={!readySession} onClick={() => void command("skip")}>跳过</Button></Tooltip>
-              <Tooltip title={readySession ? "在下一步骤边界暂停" : "等待 Agent 初始化浏览器"}><Button icon={<PauseCircleOutlined />} disabled={!readySession} onClick={() => void command("pause")}>暂停</Button></Tooltip>
-              <Tooltip title={readySession ? "重试当前步骤" : "等待 Agent 初始化浏览器"}><Button icon={<ReloadOutlined />} disabled={!readySession} onClick={() => void command("retry")}>重试</Button></Tooltip>
-              <Tooltip title="结束并回收浏览器"><Button danger icon={<StopOutlined />} disabled={!activeSession} onClick={() => void command("stop")}>结束</Button></Tooltip>
-            </div>
-          </div>
-          <div className="surface debug-picker-panel">
-            <ElementPickerPanel
-              project={project}
-              sessionId={selectedSession.id}
-              onSessionIdChange={setSelectedSessionId}
-              preferredEnvironmentId={selectedSession.environmentId ?? environments[0]?.id}
-              confirmMode="element"
-              onConfirmElement={(element, documentVersion) => void handleConfirmedElement(element, documentVersion)}
-              createOpen={startOpen}
-              onCreateOpenChange={setStartOpen}
-            />
-          </div>
-          <div className="surface debug-event-panel">
-            <div className="panel-heading"><div><h2>会话事件</h2><span>URL、步骤、控制台与网络失败</span></div><Button icon={<ReloadOutlined />} onClick={() => void loadSessions()} /></div>
-            <div className="debug-event-list">
-              {selectedSession.events.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待 Agent 事件" /> : selectedSession.events.map((event) => (
-                <div className={`debug-event-row ${event.kind.includes("failed") || event.kind.includes("error") ? "error" : ""}`} key={event.id}>
-                  <time>{new Date(event.at).toLocaleTimeString()}</time>
-                  <strong>{event.kind}</strong>
-                  <span>{typeof event.data.message === "string" ? event.data.message : typeof event.data.currentUrl === "string" ? event.data.currentUrl : ""}</span>
+      <section className="debug-workbench">
+        {selectedSession && (
+          <>
+            <div className="surface debug-control-panel">
+              <div className="debug-session-heading">
+                <div>
+                  <span className="eyebrow">当前会话</span>
+                  <h2>#{selectedSession.id.slice(0, 8)}</h2>
                 </div>
-              ))}
+                <Tag color={activeSession ? "processing" : "default"}>{selectedSession.status}</Tag>
+              </div>
+              <dl className="debug-session-meta">
+                <div><dt>当前 URL</dt><dd>{selectedSession.currentUrl ?? "浏览器准备中"}</dd></div>
+                <div><dt>执行节点</dt><dd>{selectedSession.agent?.name ?? selectedSession.agentId}</dd></div>
+                <div><dt>当前步骤</dt><dd>{selectedSession.currentStep + 1}</dd></div>
+                <div><dt>空闲回收</dt><dd>{new Date(selectedSession.idleExpiresAt).toLocaleTimeString()}</dd></div>
+              </dl>
+              <div className="debug-command-bar">
+                <Tooltip title={readySession ? "从第一个步骤连续执行" : "等待 Agent 初始化浏览器"}><Button type="primary" icon={<PlayCircleFilled />} disabled={!readySession} onClick={() => void command("start")}>从头运行</Button></Tooltip>
+                <Tooltip title={readySession ? "从当前步骤继续执行" : "等待 Agent 初始化浏览器"}><Button icon={<PlayCircleFilled />} disabled={!readySession} onClick={() => void command("continue")}>继续</Button></Tooltip>
+                <Tooltip title={readySession ? "仅执行当前步骤" : "等待 Agent 初始化浏览器"}><Button icon={<PlayCircleFilled />} disabled={!readySession} onClick={() => void command("runCurrent")}>当前步骤</Button></Tooltip>
+                <Tooltip title={readySession ? "跳过当前步骤" : "等待 Agent 初始化浏览器"}><Button icon={<ThunderboltOutlined />} disabled={!readySession} onClick={() => void command("skip")}>跳过</Button></Tooltip>
+                <Tooltip title={readySession ? "在下一步骤边界暂停" : "等待 Agent 初始化浏览器"}><Button icon={<PauseCircleOutlined />} disabled={!readySession} onClick={() => void command("pause")}>暂停</Button></Tooltip>
+                <Tooltip title={readySession ? "重试当前步骤" : "等待 Agent 初始化浏览器"}><Button icon={<ReloadOutlined />} disabled={!readySession} onClick={() => void command("retry")}>重试</Button></Tooltip>
+                <Tooltip title="结束并回收浏览器"><Button danger icon={<StopOutlined />} disabled={!activeSession} onClick={() => void command("stop")}>结束</Button></Tooltip>
+              </div>
             </div>
-          </div>
-        </section>
-      )}
+            <div className="surface debug-event-panel">
+              <div className="panel-heading"><div><h2>会话事件</h2><span>URL、步骤、控制台与网络失败</span></div><Button icon={<ReloadOutlined />} onClick={() => void loadSessions()} /></div>
+              <div className="debug-event-list">
+                {selectedSession.events.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待 Agent 事件" /> : selectedSession.events.map((event) => (
+                  <div className={`debug-event-row ${event.kind.includes("failed") || event.kind.includes("error") ? "error" : ""}`} key={event.id}>
+                    <time>{new Date(event.at).toLocaleTimeString()}</time>
+                    <strong>{event.kind}</strong>
+                    <span>{typeof event.data.message === "string" ? event.data.message : typeof event.data.currentUrl === "string" ? event.data.currentUrl : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+        <div className="surface debug-picker-panel">
+          <ElementPickerPanel
+            project={project}
+            sessionId={selectedSession?.id}
+            onSessionIdChange={setSelectedSessionId}
+            preferredEnvironmentId={selectedSession?.environmentId ?? environments[0]?.id}
+            confirmMode="element"
+            onConfirmElement={(element, documentVersion) => void handleConfirmedElement(element, documentVersion)}
+            createOpen={startOpen}
+            onCreateOpenChange={setStartOpen}
+          />
+        </div>
+      </section>
     </>
   );
 }
