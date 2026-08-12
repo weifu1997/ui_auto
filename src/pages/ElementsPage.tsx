@@ -7,8 +7,8 @@ import { platformProjectContext } from "../platform-context";
 import { ElementPickerPanel } from "./ElementPickerPanel";
 import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
-import { CheckCircleFilled, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
-import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
+import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
+import { Alert, Button, Drawer, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useRef, useState } from "react";
 
@@ -204,7 +204,7 @@ export function ElementsPage({ project }: { project: Project }) {
     {
       title: "",
       key: "actions",
-      width: 105,
+      width: 140,
       render: (_, item) => (
         <Space size={0}>
           {canRunValidation && (
@@ -226,6 +226,28 @@ export function ElementsPage({ project }: { project: Project }) {
                 onClick={() => setEditor(item)}
               />
             </Tooltip>
+          )}
+          {canManageElement && (
+            <Popconfirm
+              title="删除元素"
+              description={`确定删除元素「${item.name}」？此操作会同步删除平台上的元素。`}
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => {
+                updateItems((list) => list.filter((candidate) => candidate.id !== item.id));
+                message.success("元素已删除");
+              }}
+            >
+              <Tooltip title="删除">
+                <Button
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={`删除元素 ${item.name}`}
+                />
+              </Tooltip>
+            </Popconfirm>
           )}
         </Space>
       ),

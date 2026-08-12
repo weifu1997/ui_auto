@@ -594,6 +594,7 @@ type LocalPickerSession = {
   expiresAt: number;
 };
 const localPickerSessions = new Map<string, LocalPickerSession>();
+const localPickerPending = new Map<string, Promise<LocalPickerSession>>();
 const localPickerIdleMs = 15 * 60_000;
 const localPickerMaxMs = 2 * 60 * 60_000;
 const localPickerHeadless = process.env.WORKER_PICKER_HEADLESS === "1";
@@ -646,8 +647,24 @@ async function createLocalPickerSession(projectId: string, environment: Environm
   const baseUrl = String(environment.baseUrl ?? "");
   const testIdAttribute = String(environment.testIdAttribute ?? "data-testid");
   if (!/^[a-zA-Z_][\w:-]*$/.test(testIdAttribute)) throw new Error("INVALID_TEST_ID_ATTRIBUTE");
+  // 复用已完成会话；对同一（项目, 环境）的并发创建去重，避免打开多个浏览器。
   const existing = [...localPickerSessions.values()].find((item) => item.projectId === projectId && item.environmentId === environment.id);
   if (existing) return existing;
+  const pendingKey = `${projectId}:${environment.id}`;
+  const pending = localPickerPending.get(pendingKey);
+  if (pending) return pending;
+  const promise = (async () => {
+    try {
+      return await launchLocalPickerSession(projectId, environment, baseUrl, testIdAttribute, startUrl);
+    } finally {
+      localPickerPending.delete(pendingKey);
+    }
+  })();
+  localPickerPending.set(pendingKey, promise);
+  return promise;
+}
+
+async function launchLocalPickerSession(projectId: string, environment: Environment, baseUrl: string, testIdAttribute: string, startUrl?: string) {
   const id = `picker_${randomUUID()}`;
   const browser = await chromium.launch({
     headless: localPickerHeadless,

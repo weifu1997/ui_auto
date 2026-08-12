@@ -15,7 +15,7 @@ import type { LocalPickerCapture, LocalPickerSession as WorkerLocalPickerSession
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, FileSearchOutlined, PlusOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Space, Spin, Tooltip } from "antd";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type LocalPickerSelection = {
   captureId: string;
@@ -48,6 +48,9 @@ export function LocalElementPickerPanel({
   const [sessions, setSessions] = useState<WorkerLocalPickerSession[]>([]);
   const [captures, setCaptures] = useState<LocalPickerCapture[]>([]);
   const [managedSessionId, setManagedSessionId] = useState<string>();
+  // 防止并发/反复自动创建：同一面板实例对同一环境只允许一个创建请求在途；
+  // 服务端对（项目, 环境）的并发创建去重并复用已完成会话，因此这里不需要防重试集合。
+  const autoCreateInFlight = useRef<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
   const [internalCreateOpen, setInternalCreateOpen] = useState(false);
   const [screenshotStamp, setScreenshotStamp] = useState(0);
@@ -110,24 +113,28 @@ export function LocalElementPickerPanel({
   }, [loadCaptures]);
 
   // 自动创建/复用当前环境的本地调试会话（即「从页面获取」打开浏览器）。
+  // 立即创建并用 ref 保证同一环境只有一个创建请求在途：轮询重渲染不再取消定时器，
+  // 避免“定时器被清理后因防重集合而永不创建”或并发调度拉起多个浏览器。
   useEffect(() => {
     if (workerState !== "online" || !effectiveEnvironment) return;
+    if (autoCreateInFlight.current) return;
     if (sessions.some((item) => item.environmentId === effectiveEnvironment.id)) return;
+    autoCreateInFlight.current = effectiveEnvironment.id;
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const result = await createLocalPickerSession(project.id, effectiveEnvironment);
-          if (cancelled) return;
-          setManagedSessionId(result.session.id);
-          await loadSessions();
-          message.success("本地调试浏览器正在准备");
-        } catch {
-          if (!cancelled) message.error("无法启动本地调试浏览器，请确认本机执行服务可用");
-        }
-      })();
-    }, 600);
-    return () => { cancelled = true; window.clearTimeout(timer); };
+    void (async () => {
+      try {
+        const result = await createLocalPickerSession(project.id, effectiveEnvironment);
+        if (cancelled) return;
+        setManagedSessionId(result.session.id);
+        await loadSessions();
+        message.success("本地调试浏览器正在准备");
+      } catch {
+        if (!cancelled) message.error("无法启动本地调试浏览器，请确认本机执行服务可用");
+      } finally {
+        if (!cancelled) autoCreateInFlight.current = undefined;
+      }
+    })();
+    return () => { cancelled = true; };
   }, [effectiveEnvironment, loadSessions, project.id, sessions, workerState]);
 
   const enablePicker = async () => {

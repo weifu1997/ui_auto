@@ -38,13 +38,26 @@ try {
     updatedAt: "now",
   };
 
-  // 1) 本地采集会话：创建 + 导航起始 URL
-  const created = await api<{ session: { id: string; currentUrl: string } }>(`/api/projects/${projectId}/local-picker/sessions`, {
-    method: "POST",
-    body: JSON.stringify({ environment, startUrl: "/__fixture/login" }),
-  });
-  const sessionId = created.body.session?.id;
-  if (!created.response.ok || !sessionId) throw new Error(`local picker session creation failed: ${JSON.stringify(created.body)}`);
+  // 1) 本地采集会话：并发创建同一（项目, 环境）应去重，只打开一个浏览器
+  const [first, second] = await Promise.all([
+    api<{ session: { id: string; currentUrl: string } }>(`/api/projects/${projectId}/local-picker/sessions`, {
+      method: "POST",
+      body: JSON.stringify({ environment, startUrl: "/__fixture/login" }),
+    }),
+    api<{ session: { id: string; currentUrl: string } }>(`/api/projects/${projectId}/local-picker/sessions`, {
+      method: "POST",
+      body: JSON.stringify({ environment, startUrl: "/__fixture/login" }),
+    }),
+  ]);
+  const sessionId = first.body.session?.id;
+  if (!first.response.ok || !sessionId) throw new Error(`local picker session creation failed: ${JSON.stringify(first.body)}`);
+  if (second.body.session?.id !== sessionId) {
+    throw new Error(`concurrent local picker creation opened multiple sessions: ${first.body.session?.id} vs ${second.body.session?.id}`);
+  }
+  const sessionsAfterCreate = await api<{ sessions: Array<{ id: string }> }>(`/api/projects/${projectId}/local-picker/sessions`);
+  if (sessionsAfterCreate.body.sessions.filter((item) => item.id === sessionId).length !== 1) {
+    throw new Error("local picker session was created more than once for the same environment");
+  }
   await waitFor(async () => {
     const list = await api<{ sessions: Array<{ id: string; currentUrl: string }> }>(`/api/projects/${projectId}/local-picker/sessions`);
     const session = list.body.sessions.find((item) => item.id === sessionId);
