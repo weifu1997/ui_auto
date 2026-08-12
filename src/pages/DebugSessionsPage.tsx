@@ -7,7 +7,7 @@ import { Link } from "../router";
 import { PageHeading } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, FileSearchOutlined, PauseCircleOutlined, PlayCircleFilled, PlusOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { Alert, Button, Empty, Form, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
+import { Alert, Button, Empty, Form, Input, Modal, Radio, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -22,6 +22,7 @@ export function DebugSessionsPage({ project }: { project: Project }) {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
+  const [startMode, setStartMode] = useState<"revision" | "blank">("revision");
   const [screenshotUrl, setScreenshotUrl] = useState<string>();
   const [startForm] = Form.useForm();
   const platformProjectId = platformProjectMap[project.id];
@@ -219,9 +220,9 @@ export function DebugSessionsPage({ project }: { project: Project }) {
       <PageHeading
         title="调试"
         description="调试浏览器保持页面、Cookie 与当前步骤状态；空闲 15 分钟或最长 2 小时后自动回收。"
-        actions={<Button type="primary" icon={<PlusOutlined />} disabled={!publishedRevisions.some((revision) => revision.environmentId)} onClick={() => { const revision = publishedRevisions[0]; startForm.setFieldsValue({ revisionId: revision?.id, environmentId: revision?.environmentId }); setStartOpen(true); }}>新建调试会话</Button>}
+        actions={<Button type="primary" icon={<PlusOutlined />} onClick={() => { setStartMode(publishedRevisions.length > 0 ? "revision" : "blank"); startForm.resetFields(); if (publishedRevisions.length > 0) { const revision = publishedRevisions[0]; startForm.setFieldsValue({ revisionId: revision?.id, environmentId: revision?.environmentId }); } setStartOpen(true); }}>新建调试会话</Button>}
       />
-      {publishedRevisions.length === 0 && <Alert className="debug-alert" type="warning" showIcon title="没有已发布版本，无法创建调试会话。" />}
+      {publishedRevisions.length === 0 && <Alert className="debug-alert" type="info" showIcon title="没有已发布版本，可创建空白调试会话：仅选择环境（+ 起始 URL），浏览器将直接打开目标页面。" />}
       <section className="surface debug-session-table">
         <Table
           rowKey="id"
@@ -314,7 +315,9 @@ export function DebugSessionsPage({ project }: { project: Project }) {
           if (!platformSession) return;
           setCreating(true);
           try {
-            const result = await createDebugSession(platformSession.token, platformProjectId, values);
+            const result = await createDebugSession(platformSession.token, platformProjectId, startMode === "blank"
+              ? { blank: true, environmentId: values.environmentId, startUrl: values.startUrl }
+              : { revisionId: values.revisionId, environmentId: values.environmentId });
             setSelectedSessionId(result.session.id);
             setStartOpen(false);
             await loadSessions();
@@ -327,12 +330,31 @@ export function DebugSessionsPage({ project }: { project: Project }) {
         })}
       >
         <Form form={startForm} layout="vertical">
-          <Form.Item name="revisionId" label="已发布流程版本" rules={[{ required: true, message: "请选择已发布版本" }]}>
-            <Select onChange={(revisionId) => startForm.setFieldsValue({ environmentId: publishedRevisions.find((revision) => revision.id === revisionId)?.environmentId })} options={publishedRevisions.map((revision) => ({ value: revision.id, label: `版本 ${revision.revisionNumber} · ${new Date(revision.publishedAt ?? revision.createdAt).toLocaleString()}` }))} />
+          <Form.Item label="会话类型">
+            <Radio.Group value={startMode} onChange={(event) => setStartMode(event.target.value)} optionType="button" buttonStyle="solid">
+              <Radio.Button value="revision">从已发布版本</Radio.Button>
+              <Radio.Button value="blank">空白会话（仅环境 + 起始 URL）</Radio.Button>
+            </Radio.Group>
           </Form.Item>
-          <Form.Item name="environmentId" label="运行环境" rules={[{ required: true, message: "请选择运行环境" }]}>
-            <Select disabled options={selectedRevisionEnvironment ? [{ value: selectedRevisionEnvironment.id, label: selectedRevisionEnvironment.name }] : []} />
-          </Form.Item>
+          {startMode === "revision" ? (
+            <>
+              <Form.Item name="revisionId" label="已发布流程版本" rules={[{ required: true, message: "请选择已发布版本" }]}>
+                <Select onChange={(revisionId) => startForm.setFieldsValue({ environmentId: publishedRevisions.find((revision) => revision.id === revisionId)?.environmentId })} options={publishedRevisions.map((revision) => ({ value: revision.id, label: `版本 ${revision.revisionNumber} · ${new Date(revision.publishedAt ?? revision.createdAt).toLocaleString()}` }))} />
+              </Form.Item>
+              <Form.Item name="environmentId" label="运行环境" rules={[{ required: true, message: "请选择运行环境" }]}>
+                <Select disabled options={selectedRevisionEnvironment ? [{ value: selectedRevisionEnvironment.id, label: selectedRevisionEnvironment.name }] : []} />
+              </Form.Item>
+            </>
+          ) : (
+            <>
+              <Form.Item name="environmentId" label="运行环境" rules={[{ required: true, message: "请选择运行环境" }]}>
+                <Select onChange={(environmentId) => { const environment = environments.find((item) => item.id === environmentId); startForm.setFieldsValue({ startUrl: environment?.baseUrl ?? "" }); }} options={environments.map((item) => ({ value: item.id, label: `${item.name} · ${item.baseUrl}` }))} />
+              </Form.Item>
+              <Form.Item name="startUrl" label="起始 URL" tooltip="留空时使用环境基础地址">
+                <Input placeholder="默认使用环境基础地址" />
+              </Form.Item>
+            </>
+          )}
         </Form>
       </Modal>
     </>

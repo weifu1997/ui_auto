@@ -89,7 +89,7 @@ export type PlatformRun = {
 export type PlatformDebugSession = {
   id: string;
   projectId: string;
-  revisionId: string;
+  revisionId: string | null;
   environmentId: string;
   agentId: string;
   status: "requested" | "active" | "paused" | "ending" | "ended" | "failed" | "expired";
@@ -600,7 +600,7 @@ export function getDebugSessions(token: string, projectId: string) {
 export function createDebugSession(
   token: string,
   projectId: string,
-  input: { revisionId: string; environmentId: string; startStep?: number },
+  input: { revisionId?: string; environmentId: string; startUrl?: string; startStep?: number; blank?: boolean },
 ) {
   return request<{ session: PlatformDebugSession }>(
     `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions`,

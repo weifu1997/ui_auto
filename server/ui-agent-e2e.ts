@@ -82,7 +82,7 @@ function assert(value: unknown, message: string): asserts value {
 try {
   const platformPort = await availablePort();
   const frontendPort = await availablePort();
-  worker = await startWorker({ port: platformPort });
+  worker = await startWorker({ port: platformPort, env: { AUTOFLOW_EXECUTOR_TYPE: "agent" } });
   root = worker.root;
 
   frontend = spawn(
@@ -127,6 +127,7 @@ try {
       AUTOFLOW_PLATFORM_URL: `http://127.0.0.1:${platformPort}`,
       AUTOFLOW_AGENT_REGISTRATION_TOKEN: registrationToken,
       AUTOFLOW_AGENT_NAME: "ui-agent-e2e",
+      AUTOFLOW_AGENT_HEADLESS: "1",
       AUTOFLOW_AGENT_IDENTITY_PATH: join(root, "ui-agent.identity.json"),
     },
     stdio: ["ignore", "pipe", "pipe"],

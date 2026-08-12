@@ -81,7 +81,7 @@ export type Lease = {
 export type DebugSession = {
   id: string;
   projectId: string;
-  revisionId: string;
+  revisionId: string | null;
   environmentId: string;
   agentId: string;
   status: DebugSessionStatus;

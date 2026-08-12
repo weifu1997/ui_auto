@@ -273,7 +273,7 @@ function createPlatformServices(dataDirectory: string) {
     CREATE TABLE IF NOT EXISTS debug_sessions (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES platform_projects(id),
-      revision_id TEXT NOT NULL REFERENCES flow_revisions(id),
+      revision_id TEXT REFERENCES flow_revisions(id),
       environment_id TEXT NOT NULL,
       agent_id TEXT NOT NULL REFERENCES agents(id),
       status TEXT NOT NULL,

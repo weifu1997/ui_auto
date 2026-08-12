@@ -38,7 +38,7 @@ type DebugStart = {
   session: {
     id: string;
     projectId: string;
-    revisionId: string;
+    revisionId: string | null;
     environmentId: string;
     currentStep: number;
     snapshot: Record<string, unknown>;
@@ -108,7 +108,7 @@ const running = new Map<string, RunRuntime>();
 const validating = new Map<string, ValidationRuntime>();
 const debugSessions = new Map<string, DebugRuntime>();
 const debugScreenshotIntervalMs = Number(process.env.AUTOFLOW_DEBUG_SCREENSHOT_INTERVAL_MS ?? 15_000);
-const chromiumHeadless = false;
+const chromiumHeadless = process.env.AUTOFLOW_AGENT_HEADLESS === "1";
 
 function loopbackHostname(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
@@ -655,6 +655,14 @@ async function startDebugSession(socket: WebSocket, identity: AgentIdentity, pay
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) debugState(socket, runtime, runtime.executing ? "active" : "paused");
     });
+    if (runtime.steps.length === 0) {
+      // Blank debug session: navigate straight to the start URL (defaults to the environment base URL).
+      const startUrl = typeof payload.session.snapshot.startUrl === "string" && payload.session.snapshot.startUrl.trim()
+        ? payload.session.snapshot.startUrl.trim()
+        : "/";
+      const timeout = Math.max(10, Number(environment.timeout ?? 30)) * 1000;
+      await page.goto(environmentUrl(runtime.baseUrl, startUrl), { waitUntil: "domcontentloaded", timeout });
+    }
     if (Object.keys(runtime.secrets).length === 0) {
       runtime.screenshotTimer = setInterval(() => {
         void captureDebugScreenshot(socket, identity, runtime, "interval");

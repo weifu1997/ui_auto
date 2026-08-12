@@ -36,6 +36,7 @@ describe("platform database migrations", () => {
       { version: 5, name: "automation-idempotency-and-archival" },
       { version: 6, name: "internal-template-library" },
       { version: 7, name: "managed-validation-artifacts" },
+      { version: 8, name: "blank-debug-sessions" },
     ]);
     const columns = database.prepare("PRAGMA table_info(flow_revisions)").all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(["flow_id", "flow_name", "environment_id"]));

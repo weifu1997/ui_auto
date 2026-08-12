@@ -42,7 +42,7 @@ async function stopAgent() {
 }
 
 try {
-  worker = await startWorker({ port });
+  worker = await startWorker({ port, env: { AUTOFLOW_EXECUTOR_TYPE: "agent" } });
   root = worker.root;
   const registration = await api<{ token: string }>("/api/auth/register", {
     method: "POST",
@@ -109,6 +109,7 @@ try {
       AUTOFLOW_PLATFORM_URL: `http://127.0.0.1:${port}`,
        AUTOFLOW_AGENT_REGISTRATION_TOKEN: agentRegistration.body.registrationToken,
       AUTOFLOW_AGENT_NAME: "debug-agent-smoke",
+      AUTOFLOW_AGENT_HEADLESS: "1",
       AUTOFLOW_AGENT_IDENTITY_PATH: join(root, "agent.identity.json"),
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -250,6 +251,27 @@ try {
     const response = await api<{ session: { status: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${sensitiveDebugId}`, { headers: headers(token) });
     return response.body.session.status === "ended" ? response.body.session : undefined;
   }, "sensitive debug cleanup");
+
+  const blankDebug = await api<{ session: { id: string } }>(`/api/platform/projects/${projectId}/debug-sessions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ blank: true, environmentId: "fixture", startUrl: "/__fixture/login" }),
+  });
+  const blankDebugId = blankDebug.body.session?.id;
+  if (!blankDebug.response.ok || !blankDebugId) throw new Error(`Blank debug session creation failed: ${JSON.stringify(blankDebug.body)}`);
+  await waitFor(async () => {
+    const response = await api<{ session: { status: string; currentUrl: string | null } }>(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}`, { headers: headers(token) });
+    return response.body.session.status === "paused" && response.body.session.currentUrl?.includes("/__fixture/login") ? response.body.session : undefined;
+  }, "blank debug session navigated to start URL");
+  await api(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}/commands`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ command: "stop" }),
+  });
+  await waitFor(async () => {
+    const response = await api<{ session: { status: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${blankDebugId}`, { headers: headers(token) });
+    return response.body.session.status === "ended" ? response.body.session : undefined;
+  }, "blank debug session cleanup");
 
   const dataset = await api<{ version: { id: string } }>(`/api/platform/projects/${projectId}/datasets`, {
     method: "POST",

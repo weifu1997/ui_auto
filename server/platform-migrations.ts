@@ -5,6 +5,8 @@ export type DatabaseMigration = {
   version: number;
   name: string;
   up: (database: DatabaseSync) => void;
+  /** Run outside the default BEGIN/COMMIT wrapper (needed for PRAGMA foreign_keys toggles). */
+  noTransaction?: boolean;
 };
 
 function appliedVersions(database: DatabaseSync) {
@@ -30,6 +32,12 @@ export function runMigrations(database: DatabaseSync, migrations: DatabaseMigrat
 
   for (const migration of ordered) {
     if (applied.has(migration.version)) continue;
+    if (migration.noTransaction) {
+      migration.up(database);
+      database.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(migration.version, migration.name, new Date().toISOString());
+      continue;
+    }
     database.exec("BEGIN IMMEDIATE");
     try {
       migration.up(database);
@@ -226,6 +234,48 @@ function addManagedValidationArtifacts(database: DatabaseSync) {
   `);
 }
 
+function allowBlankDebugSessions(database: DatabaseSync) {
+  const tables = database.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'debug_sessions'`).all();
+  if (tables.length === 0) return; // Schema does not include debug_sessions yet (e.g. minimal test schema).
+  const columns = database.prepare(`PRAGMA table_info(debug_sessions)`).all() as Array<{ name: string; notnull: number }>;
+  const revision = columns.find((column) => column.name === "revision_id");
+  if (revision && revision.notnull === 0) return; // Already nullable.
+  // Rebuild debug_sessions so revision_id can be NULL (blank sessions have no published revision).
+  database.exec("PRAGMA foreign_keys = OFF");
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    database.exec(`
+      CREATE TABLE debug_sessions_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES platform_projects(id),
+        revision_id TEXT REFERENCES flow_revisions(id),
+        environment_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL REFERENCES agents(id),
+        status TEXT NOT NULL,
+        snapshot TEXT NOT NULL,
+        current_step INTEGER NOT NULL DEFAULT 0,
+        current_url TEXT,
+        browser_context_id TEXT,
+        idle_expires_at TEXT NOT NULL,
+        max_expires_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO debug_sessions_new (id, project_id, revision_id, environment_id, agent_id, status, snapshot, current_step, current_url, browser_context_id, idle_expires_at, max_expires_at, created_by, created_at, updated_at)
+        SELECT id, project_id, revision_id, environment_id, agent_id, status, snapshot, current_step, current_url, browser_context_id, idle_expires_at, max_expires_at, created_by, created_at, updated_at FROM debug_sessions;
+      DROP TABLE debug_sessions;
+      ALTER TABLE debug_sessions_new RENAME TO debug_sessions;
+    `);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
 export function runPlatformMigrations(database: DatabaseSync, bootstrapSchema: string) {
   database.exec(`
     PRAGMA journal_mode = WAL;
@@ -240,5 +290,6 @@ export function runPlatformMigrations(database: DatabaseSync, bootstrapSchema: s
     { version: 5, name: "automation-idempotency-and-archival", up: addAutomationGovernance },
     { version: 6, name: "internal-template-library", up: addTemplateLibrary },
     { version: 7, name: "managed-validation-artifacts", up: addManagedValidationArtifacts },
+    { version: 8, name: "blank-debug-sessions", up: allowBlankDebugSessions, noTransaction: true },
   ]);
 }

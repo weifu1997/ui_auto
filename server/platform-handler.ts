@@ -1339,31 +1339,48 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           return true;
         }
         if (request.method === "POST") {
-          const body = await readJson<{ revisionId?: string; environmentId?: string; startStep?: number }>(request);
-          const revision = body.revisionId
-            ? services.database
-                .prepare(`SELECT id, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum FROM flow_revisions WHERE id = ? AND project_id = ? AND status = 'published'`)
-                .get(body.revisionId, projectId) as { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined
-            : services.database
-                .prepare(`SELECT id, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum FROM flow_revisions WHERE project_id = ? AND status = 'published' ORDER BY published_at DESC LIMIT 1`)
-                .get(projectId) as { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined;
-          if (!revision) throw new PlatformError(409, "PUBLISHED_REVISION_REQUIRED");
-           const environment = parseJson<Record<string, unknown>>(revision.environment_snapshot, {});
-           const environmentId = body.environmentId ?? (typeof environment.id === "string" ? environment.id : "");
-           if (!environmentId) throw new PlatformError(400, "ENVIRONMENT_REQUIRED");
+          const body = await readJson<{ revisionId?: string; environmentId?: string; startUrl?: string; startStep?: number; blank?: boolean }>(request);
+          const blank = body.blank === true;
+          let revision: { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined;
+          let environment: Record<string, unknown> | undefined;
+          let environmentId = body.environmentId ?? "";
+          let startUrl = "";
+          if (blank) {
+            // Blank session: only environment (+ optional start URL); no published revision required.
+            const document = services.documentFor(projectId);
+            const environments = Array.isArray(document.data.environments) ? document.data.environments.map(asRecord) : [];
+            environment = environments.find((item) => item.id === environmentId) as Record<string, unknown> | undefined;
+            if (!environmentId || !environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
+            services.requireChromiumEnvironment(environment);
+            startUrl = typeof body.startUrl === "string" ? body.startUrl.trim().slice(0, 2048) : "";
+          } else {
+            revision = body.revisionId
+              ? services.database
+                  .prepare(`SELECT id, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum FROM flow_revisions WHERE id = ? AND project_id = ? AND status = 'published'`)
+                  .get(body.revisionId, projectId) as { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined
+              : services.database
+                  .prepare(`SELECT id, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum FROM flow_revisions WHERE project_id = ? AND status = 'published' ORDER BY published_at DESC LIMIT 1`)
+                  .get(projectId) as { id: string; flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string; checksum: string } | undefined;
+            if (!revision) throw new PlatformError(409, "PUBLISHED_REVISION_REQUIRED");
+            environment = parseJson<Record<string, unknown>>(revision.environment_snapshot, {});
+            environmentId = body.environmentId ?? (typeof environment.id === "string" ? environment.id : "");
+            if (!environmentId) throw new PlatformError(400, "ENVIRONMENT_REQUIRED");
             services.requireRevisionEnvironment(revision, environmentId);
             services.requireChromiumEnvironment(environment);
+          }
+          if (!environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
           const agent = services.candidateAgent(projectId, environmentId);
           if (!agent || !services.sockets.has(agent.id)) throw new PlatformError(409, "AGENT_UNAVAILABLE");
           const snapshot = {
-            flowRevisionId: revision.id,
-            flowRevisionChecksum: revision.checksum,
+            flowRevisionId: revision?.id ?? null,
+            flowRevisionChecksum: revision?.checksum ?? null,
             environmentId,
-            flow: parseJson<Record<string, unknown>>(revision.flow_snapshot, {}),
+            flow: revision ? parseJson<Record<string, unknown>>(revision.flow_snapshot, {}) : {},
             environment,
-            elements: parseJson<unknown[]>(revision.element_snapshot, []),
-            dataset: parseJson<unknown>(revision.dataset_snapshot, null),
-            secretNames: parseJson<Record<string, unknown>>(revision.flow_snapshot, {}).secretNames ?? [],
+            elements: revision ? parseJson<unknown[]>(revision.element_snapshot, []) : [],
+            dataset: revision ? parseJson<unknown>(revision.dataset_snapshot, null) : null,
+            secretNames: revision ? (parseJson<Record<string, unknown>>(revision.flow_snapshot, {}).secretNames ?? []) : [],
+            startUrl: blank ? startUrl : undefined,
             agent: { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency },
           };
           const createdAt = now();
@@ -1371,7 +1388,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           const session = {
             id: randomUUID(),
             projectId,
-            revisionId: revision.id,
+            revisionId: revision?.id ?? null,
             environmentId,
             agentId: agent.id,
             currentStep: Math.max(0, Math.floor(Number(body.startStep ?? 0))),
@@ -1402,8 +1419,8 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
             services.database.prepare(`DELETE FROM debug_sessions WHERE id = ?`).run(session.id);
             throw new PlatformError(409, "AGENT_UNAVAILABLE");
           }
-          services.appendDebugEvent(session.id, "session.requested", { revisionId: session.revisionId, environmentId, agentId: agent.id, currentStep: session.currentStep });
-          services.audit(project.workspace_id, { type: "user", id: user.id }, "debug_session.created", { type: "debug_session", id: session.id }, { revisionId: session.revisionId, environmentId, agentId: agent.id }, projectId);
+          services.appendDebugEvent(session.id, "session.requested", { revisionId: session.revisionId, environmentId, agentId: agent.id, currentStep: session.currentStep, blank });
+          services.audit(project.workspace_id, { type: "user", id: user.id }, "debug_session.created", { type: "debug_session", id: session.id }, { revisionId: session.revisionId, environmentId, agentId: agent.id, blank }, projectId);
           sendJson(response, 202, { session: services.debugSessionResponse(services.debugSessionById(session.id)) });
           return true;
         }
