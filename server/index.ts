@@ -1306,10 +1306,6 @@ const server = createServer(routeHandler(async (request, response, url) => {
     sendJson(response, 404, { error: "NOT_FOUND" });
   }, { errorResponse: { exposeMessage: localListenHosts.has(listenHost), internalCode: "PLATFORM_INTERNAL_ERROR" } }));
 
-server.on("upgrade", (request, socket, head) => {
-  if (!platform.handleUpgrade(request, socket, head)) socket.destroy();
-});
-
 server.listen(port, listenHost, () => {
   console.log(`AutoFlow Worker API listening on http://${listenHost}:${port}`);
 });

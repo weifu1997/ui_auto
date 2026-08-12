@@ -291,5 +291,25 @@ export function runPlatformMigrations(database: DatabaseSync, bootstrapSchema: s
     { version: 6, name: "internal-template-library", up: addTemplateLibrary },
     { version: 7, name: "managed-validation-artifacts", up: addManagedValidationArtifacts },
     { version: 8, name: "blank-debug-sessions", up: allowBlankDebugSessions, noTransaction: true },
+    { version: 9, name: "drop-agent-and-debug-tables", up: dropAgentAndDebugTables },
   ]);
+}
+
+// 方案C：单机部署移除分布式 Agent 远程执行与远程调试会话（见 docs/决策-内网部署形态与平台裁剪.md）。
+// agents 表保留（ManagedRunner 伪代理行由 managed 执行路径写入），仅清理协议专属表。
+function dropAgentAndDebugTables(database: DatabaseSync) {
+  database.exec("PRAGMA foreign_keys = OFF");
+  try {
+    database.exec(`
+      DROP TABLE IF EXISTS picker_captures;
+      DROP TABLE IF EXISTS debug_session_events;
+      DROP TABLE IF EXISTS debug_artifacts;
+      DROP TABLE IF EXISTS debug_sessions;
+      DROP TABLE IF EXISTS run_leases;
+      DROP TABLE IF EXISTS agent_bindings;
+      DROP TABLE IF EXISTS agent_tokens;
+    `);
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON");
+  }
 }

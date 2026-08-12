@@ -10,6 +10,7 @@ const minimalLegacySchema = `
   CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS notification_channels (id TEXT PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS agent_bindings (project_id TEXT, environment_id TEXT, agent_id TEXT);
+  CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, workspace_id TEXT);
   CREATE TABLE IF NOT EXISTS platform_projects (id TEXT PRIMARY KEY, workspace_id TEXT);
   CREATE TABLE IF NOT EXISTS platform_users (id TEXT PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY);
@@ -37,9 +38,20 @@ describe("platform database migrations", () => {
       { version: 6, name: "internal-template-library" },
       { version: 7, name: "managed-validation-artifacts" },
       { version: 8, name: "blank-debug-sessions" },
+      { version: 9, name: "drop-agent-and-debug-tables" },
     ]);
     const columns = database.prepare("PRAGMA table_info(flow_revisions)").all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(["flow_id", "flow_name", "environment_id"]));
+    database.close();
+  });
+
+  it("drops agent and debug tables at v9 while keeping agents", () => {
+    const database = new DatabaseSync(":memory:");
+    runPlatformMigrations(database, minimalLegacySchema);
+    for (const table of ["picker_captures", "debug_session_events", "debug_artifacts", "debug_sessions", "run_leases", "agent_bindings", "agent_tokens"]) {
+      expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)).toBeUndefined();
+    }
+    expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agents'").get()).toBeTruthy();
     database.close();
   });
 

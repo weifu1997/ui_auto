@@ -5,11 +5,9 @@ import { PlatformError, errorResponse } from "./http-utils";
 import {
   cronFieldMatches,
   cronMatches,
-  debugElementPath,
   failureCategory,
   nextCronTime,
   normalizeDatasetRows,
-  normalizeLocatorCandidates,
   notificationHostAllowed,
   parseCsv,
   publicFlowOutputNames,
@@ -82,20 +80,6 @@ describe("nextCronTime", () => {
   }, 40_000);
 });
 
-describe("debugElementPath", () => {
-  it("extracts the pathname from a session URL", () => {
-    expect(debugElementPath("https://example.test/login?next=/home")).toBe("/login");
-    expect(debugElementPath("https://example.test/")).toBe("/");
-  });
-
-  it("falls back to / for empty or malformed URLs", () => {
-    expect(debugElementPath(null)).toBe("/");
-    expect(debugElementPath(undefined)).toBe("/");
-    expect(debugElementPath("not-a-url")).toBe("/");
-    expect(debugElementPath("")).toBe("/");
-  });
-});
-
 describe("parseCsv", () => {
   it("parses simple rows with commas and newlines", () => {
     expect(parseCsv("a,b\n1,2")).toEqual([["a", "b"], ["1", "2"]]);
@@ -157,25 +141,6 @@ describe("failureCategory", () => {
   it("falls back to other for unknown messages", () => {
     expect(failureCategory("something unexpected")).toBe("other");
     expect(failureCategory(undefined)).toBe("other");
-  });
-});
-
-describe("normalizeLocatorCandidates", () => {
-  it("filters to supported methods and shapes output", () => {
-    const result = normalizeLocatorCandidates([
-      { method: "testid", value: "login-submit", count: 1, score: 90, label: "Login" },
-      { method: "unsupported", value: "x" },
-      { method: "role", value: "" },
-    ]);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ method: "testid", value: "login-submit", count: 1, score: 90 });
-  });
-
-  it("returns [] for non-array input and clamps counts/scores", () => {
-    expect(normalizeLocatorCandidates(undefined)).toEqual([]);
-    const result = normalizeLocatorCandidates([{ method: "css", value: "#a", count: -5, score: 999 }]);
-    expect(result[0].count).toBe(0);
-    expect(result[0].score).toBe(100);
   });
 });
 

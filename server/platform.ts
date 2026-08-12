@@ -1,19 +1,14 @@
 import {
   PlatformError,
-  agentLeaseDurationMs,
-  agentOfflineAfterMs,
   allowInsecureNotificationTargets,
   allowPrivateNotificationTargets,
   asRecord,
   authorization,
-  debugIdleTimeoutMs,
   digest,
   failureCategory,
   json,
-  leaseExpiresAt,
   nextCronTime,
   normalizeDatasetRows,
-  normalizeLocatorCandidates,
   notificationHostAllowed,
   notificationHostAllowlist,
   notificationMaxAttempts,
@@ -29,18 +24,12 @@ import {
   webhookRateLimitPerMinute,
 } from "./platform-core";
 import type {
-  AgentRecord,
   AuthUser,
   Capability,
   DatasetVersionRecord,
-  DebugSession,
-  DebugSessionStatus,
   DeliveryStatus,
   ElementValidation,
   ElementValidationStatus,
-  Lease,
-  LeaseStatus,
-  LocatorCandidate,
   NotificationChannelType,
   PlatformApi,
   PlatformRun,
@@ -70,8 +59,6 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { URL } from "node:url";
-import type { RawData } from "ws";
-import { WebSocket, WebSocketServer } from "ws";
 import { readSheet } from "read-excel-file/node";
 import { createAuditWriter } from "./platform-audit";
 
@@ -442,16 +429,8 @@ function createPlatformServices(dataDirectory: string) {
     CREATE INDEX IF NOT EXISTS webhook_deliveries_received ON webhook_deliveries (received_at);
     CREATE INDEX IF NOT EXISTS deliveries_channel ON deliveries (channel_id, status, created_at DESC);
   `);
-  const managedExecutionEnabled = process.env.AUTOFLOW_EXECUTOR_TYPE !== "agent";
   const managedRunner = new ManagedRunner(platformArtifactDirectory);
 
-  const sockets = new Map<string, WebSocket>();
-  const pendingDebugCommands = new Map<string, {
-    agentId: string;
-    resolve: (result: { accepted: boolean; reason?: string }) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
-  const webSocketServer = new WebSocketServer({ noServer: true });
   const webhookRequests = new Map<string, number[]>();
   const configuredPlatformSecret = process.env.PLATFORM_SECRET_KEY;
   if (process.env.NODE_ENV === "production" && !configuredPlatformSecret) {
@@ -615,19 +594,6 @@ function createPlatformServices(dataDirectory: string) {
     return row as PublishedRevision;
   }
 
-  function boundOnlineAgent(projectId: string, environmentId: string) {
-    const cutoff = new Date(Date.now() - agentOfflineAfterMs).toISOString();
-    const row = database
-      .prepare(
-        `SELECT a.id, a.workspace_id, a.name, a.status, a.browser_version, a.os, a.max_concurrency, a.current_task, a.last_seen_at, a.created_at
-         FROM agent_bindings b JOIN agents a ON a.id = b.agent_id
-         WHERE b.project_id = ? AND b.environment_id = ? AND b.is_default = 1 AND a.status = 'online' AND a.last_seen_at > ?
-         ORDER BY a.last_seen_at DESC LIMIT 1`,
-      )
-      .get(projectId, environmentId, cutoff) as (AgentRecord & { workspace_id: string; browser_version: string; max_concurrency: number; current_task: string | null; last_seen_at: string | null; created_at: string }) | undefined;
-    return row ? mapAgent(row) : undefined;
-  }
-
   function managedAgent(projectId: string) {
     const project = projectFor(projectId);
     const id = `managed-${project.workspace_id}`;
@@ -667,9 +633,8 @@ function createPlatformServices(dataDirectory: string) {
     if (!environmentId) throw new PlatformError(400, "ENVIRONMENT_REQUIRED");
     if (environment.id !== environmentId) throw new PlatformError(409, "REVISION_ENVIRONMENT_MISMATCH");
     requireChromiumEnvironment(environment);
-    const agent = managedExecutionEnabled ? managedAgent(input.projectId) : boundOnlineAgent(input.projectId, environmentId);
-    if (!agent) throw new PlatformError(409, "AGENT_UNAVAILABLE");
-    const executorType = managedExecutionEnabled ? "managed" : "agent";
+    const agent = managedAgent(input.projectId);
+    const executorType = "managed" as const;
     const datasetVersionId = input.datasetVersionId ?? (asRecord(parseJson<unknown>(revision.dataset_snapshot, null)).versionId as string | undefined);
     const datasetVersion = datasetVersionId ? datasetVersionFor(input.projectId, datasetVersionId) : undefined;
     const rows = datasetVersion ? datasetRowsFor(datasetVersion.id) : [{ rowNumber: undefined, data: undefined }];
@@ -719,7 +684,6 @@ function createPlatformServices(dataDirectory: string) {
           secretNames: secretNames.filter((name) => requiredSecretNames.has(name)),
           upToStepId: input.upToStepId ?? null,
           executor: { type: executorType, id: agent.id, name: agent.name, browserVersion: agent.browserVersion },
-          agent: executorType === "agent" ? { id: agent.id, name: agent.name, browserVersion: agent.browserVersion, os: agent.os, maxConcurrency: agent.maxConcurrency } : null,
           trigger: input.source,
         };
         database.prepare(`INSERT INTO platform_runs (id, project_id, revision_id, environment_id, agent_id, executor_type, dispatch_key, status, snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`)
@@ -733,8 +697,7 @@ function createPlatformServices(dataDirectory: string) {
       throw error;
     }
     for (const runId of runIds) {
-      if (managedExecutionEnabled) enqueueManagedRun(runId);
-      else dispatchQueuedRun(runId);
+      enqueueManagedRun(runId);
     }
     return { runIds, revision, environmentId, datasetVersionId };
   }
@@ -898,18 +861,13 @@ function createPlatformServices(dataDirectory: string) {
     if (!environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
     requireChromiumEnvironment(environment);
     requireSameOriginElementPath(environment, element);
-    const agent = managedExecutionEnabled ? managedAgent(projectId) : candidateAgent(projectId, environmentId);
-    if (!agent || (!managedExecutionEnabled && !sockets.has(agent.id))) throw new PlatformError(409, "AGENT_UNAVAILABLE");
+    const agent = managedAgent(projectId);
     const createdAt = now();
     const id = randomUUID();
     database.prepare("INSERT INTO element_validations (id, project_id, environment_id, agent_id, status, element_snapshot, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)")
       .run(id, projectId, environmentId, agent.id, json(element), createdBy, createdAt, createdAt);
     const validation = elementValidationById(id);
-    if (managedExecutionEnabled) enqueueManagedValidation(validation, environment);
-    else if (!sendAgent(agent.id, agentValidationPayload(validation))) {
-      database.prepare("UPDATE element_validations SET status = 'failed', error = 'AGENT_UNAVAILABLE', updated_at = ? WHERE id = ?").run(now(), id);
-      throw new PlatformError(409, "AGENT_UNAVAILABLE");
-    }
+    enqueueManagedValidation(validation, environment);
     return elementValidationById(id);
   }
 
@@ -1213,45 +1171,6 @@ function createPlatformServices(dataDirectory: string) {
     return { version, data };
   }
 
-  function agentByCredential(credential?: string) {
-    if (!credential) throw new PlatformError(401, "AGENT_CREDENTIAL_REQUIRED");
-    const row = database
-      .prepare(
-        `SELECT id, workspace_id, name, status, browser_version, os, max_concurrency, current_task, last_seen_at, created_at, revoked_at
-         FROM agents WHERE credential_hash = ?`,
-      )
-      .get(digest(credential)) as (AgentRecord & { workspace_id: string; browser_version: string; max_concurrency: number; current_task: string | null; last_seen_at: string | null; created_at: string; revoked_at: string | null }) | undefined;
-    if (!row || row.revoked_at || row.status === "disabled") throw new PlatformError(401, "AGENT_CREDENTIAL_INVALID");
-    return mapAgent(row);
-  }
-
-  function mapAgent(row: AgentRecord & { workspace_id?: string; browser_version?: string; max_concurrency?: number; current_task?: string | null; last_seen_at?: string | null; created_at?: string }) {
-    return {
-      id: row.id,
-      workspaceId: row.workspace_id ?? row.workspaceId,
-      name: row.name,
-      status: row.status,
-      browserVersion: row.browser_version ?? row.browserVersion,
-      os: row.os,
-      maxConcurrency: Number(row.max_concurrency ?? row.maxConcurrency),
-      currentTask: row.current_task ?? row.currentTask ?? null,
-      lastSeenAt: row.last_seen_at ?? row.lastSeenAt ?? null,
-      createdAt: row.created_at ?? row.createdAt,
-    } satisfies AgentRecord;
-  }
-
-  function updateAgentHeartbeat(agent: AgentRecord, payload: Record<string, unknown>) {
-    const browserVersion = typeof payload.browserVersion === "string" ? payload.browserVersion.slice(0, 160) : agent.browserVersion;
-    const os = typeof payload.os === "string" ? payload.os.slice(0, 160) : agent.os;
-    const currentTask = typeof payload.currentTask === "string" ? payload.currentTask.slice(0, 120) : null;
-    database
-      .prepare(
-        `UPDATE agents SET status = 'online', browser_version = ?, os = ?, current_task = ?, last_seen_at = ? WHERE id = ?`,
-      )
-      .run(browserVersion, os, currentTask, now(), agent.id);
-    return { ...agent, status: "online" as const, browserVersion, os, currentTask, lastSeenAt: now() };
-  }
-
   function runById(runId: string) {
     const row = database
       .prepare(
@@ -1297,13 +1216,6 @@ function createPlatformServices(dataDirectory: string) {
     };
   }
 
-  function activeLeaseForRun(runId: string) {
-    const row = database
-      .prepare(`SELECT id, run_id, agent_id, status, expires_at, attempt FROM run_leases WHERE run_id = ? AND status IN ('offered', 'leased') ORDER BY attempt DESC LIMIT 1`)
-      .get(runId) as { id: string; run_id: string; agent_id: string; status: LeaseStatus; expires_at: string; attempt: number } | undefined;
-    return row ? { id: row.id, runId: row.run_id, agentId: row.agent_id, status: row.status, expiresAt: row.expires_at, attempt: row.attempt } : undefined;
-  }
-
   function appendRunEvent(runId: string, kind: string, data: Record<string, unknown>) {
     database
       .prepare(`INSERT INTO platform_run_events (run_id, kind, data, created_at) VALUES (?, ?, ?, ?)`)
@@ -1311,7 +1223,6 @@ function createPlatformServices(dataDirectory: string) {
   }
 
   function runResponse(run: PlatformRun) {
-    const lease = activeLeaseForRun(run.id);
     const agent = database
       .prepare(`SELECT id, name, browser_version, os, max_concurrency, last_seen_at FROM agents WHERE id = ?`)
       .get(run.agentId) as { id: string; name: string; browser_version: string; os: string; max_concurrency: number; last_seen_at: string | null } | undefined;
@@ -1326,7 +1237,6 @@ function createPlatformServices(dataDirectory: string) {
       .all(run.id) as Array<{ name: string; value: string; source: string; created_at: string }>;
     return {
       ...run,
-      lease: lease ? { ...lease, expired: new Date(lease.expiresAt).getTime() <= Date.now() } : undefined,
       agent: run.executorType === "agent" && agent
         ? {
             id: agent.id,
@@ -1343,172 +1253,6 @@ function createPlatformServices(dataDirectory: string) {
     };
   }
 
-  function debugSessionById(sessionId: string) {
-    const row = database
-      .prepare(
-        `SELECT id, project_id, revision_id, environment_id, agent_id, status, snapshot, current_step, current_url,
-                browser_context_id, idle_expires_at, max_expires_at, created_at, updated_at
-         FROM debug_sessions WHERE id = ?`,
-      )
-      .get(sessionId) as
-      | {
-          id: string;
-          project_id: string;
-          revision_id: string;
-          environment_id: string;
-          agent_id: string;
-          status: DebugSessionStatus;
-          snapshot: string;
-          current_step: number;
-          current_url: string | null;
-          browser_context_id: string | null;
-          idle_expires_at: string;
-          max_expires_at: string;
-          created_at: string;
-          updated_at: string;
-        }
-      | undefined;
-    if (!row) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
-    return {
-      id: row.id,
-      projectId: row.project_id,
-      revisionId: row.revision_id,
-      environmentId: row.environment_id,
-      agentId: row.agent_id,
-      status: row.status,
-      snapshot: parseJson<Record<string, unknown>>(row.snapshot, {}),
-      currentStep: row.current_step,
-      currentUrl: row.current_url,
-      browserContextId: row.browser_context_id,
-      idleExpiresAt: row.idle_expires_at,
-      maxExpiresAt: row.max_expires_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    } satisfies DebugSession;
-  }
-
-  function truncateDebugData(value: unknown): unknown {
-    if (typeof value === "string") return value.slice(0, 2048);
-    if (Array.isArray(value)) return value.map(truncateDebugData);
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, truncateDebugData(item)]));
-    return value;
-  }
-
-  function appendDebugEvent(sessionId: string, kind: string, data: Record<string, unknown>) {
-    database
-      .prepare(`INSERT INTO debug_session_events (session_id, kind, data, created_at) VALUES (?, ?, ?, ?)`)
-      .run(sessionId, kind.slice(0, 80), json(truncateDebugData(data)), now());
-  }
-
-  function nextDebugIdleExpiry(maxExpiresAt: string) {
-    return new Date(Math.min(Date.now() + debugIdleTimeoutMs, new Date(maxExpiresAt).getTime())).toISOString();
-  }
-
-  function redactDebugValue(projectId: string, value: string): string {
-    try {
-      const rows = database.prepare(`SELECT name, iv, tag, ciphertext FROM project_secrets WHERE project_id = ?`).all(projectId) as Array<{ name: string; iv: string; tag: string; ciphertext: string }>;
-      const secrets = Object.fromEntries(rows.map((row) => [row.name, decrypt(row)]));
-      return Object.values(secrets).reduce((result, secret) => secret ? result.replaceAll(secret, "***") : result, value);
-    } catch {
-      return "***";
-    }
-  }
-
-  function touchDebugSession(session: DebugSession, patch: { status?: DebugSessionStatus; currentStep?: number; currentUrl?: string | null; browserContextId?: string | null } = {}) {
-    const currentUrl = patch.currentUrl === undefined ? session.currentUrl : patch.currentUrl === null ? null : redactDebugValue(session.projectId, patch.currentUrl);
-    const idleExpiresAt = nextDebugIdleExpiry(session.maxExpiresAt);
-    database
-      .prepare(
-        `UPDATE debug_sessions
-         SET status = ?, current_step = ?, current_url = ?, browser_context_id = ?, idle_expires_at = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(
-        patch.status ?? session.status,
-        patch.currentStep ?? session.currentStep,
-        currentUrl,
-        patch.browserContextId === undefined ? session.browserContextId : patch.browserContextId,
-        idleExpiresAt,
-        now(),
-        session.id,
-      );
-    return debugSessionById(session.id);
-  }
-
-  function debugSessionResponse(session: DebugSession) {
-    const agent = database
-      .prepare(`SELECT id, name, browser_version, os, last_seen_at FROM agents WHERE id = ?`)
-      .get(session.agentId) as { id: string; name: string; browser_version: string; os: string; last_seen_at: string | null } | undefined;
-    const artifacts = database
-      .prepare(`SELECT id, name, content_type, created_at FROM debug_artifacts WHERE session_id = ? ORDER BY created_at DESC LIMIT 100`)
-      .all(session.id) as Array<{ id: string; name: string; content_type: string; created_at: string }>;
-    const events = database
-      .prepare(`SELECT id, kind, data, created_at FROM debug_session_events WHERE session_id = ? ORDER BY id DESC LIMIT 500`)
-      .all(session.id) as Array<{ id: number; kind: string; data: string; created_at: string }>;
-    return {
-      ...session,
-      agent: agent
-        ? { id: agent.id, name: agent.name, browserVersion: agent.browser_version, os: agent.os, lastSeenAt: agent.last_seen_at }
-        : undefined,
-      artifacts: artifacts.map((artifact) => ({ id: artifact.id, name: artifact.name, contentType: artifact.content_type, createdAt: artifact.created_at })),
-      events: events.reverse().map((event) => ({ id: event.id, kind: event.kind, data: parseJson<Record<string, unknown>>(event.data, {}), at: event.created_at })),
-    };
-  }
-
-  function pickerCaptureResponse(row: { id: string; session_id: string; candidates: string; target: string; status: string; captured_at: string; confirmed_at: string | null }) {
-    return {
-      id: row.id,
-      sessionId: row.session_id,
-      candidates: parseJson<LocatorCandidate[]>(row.candidates, []),
-      target: row.target,
-      status: row.status,
-      capturedAt: row.captured_at,
-      confirmedAt: row.confirmed_at,
-    };
-  }
-
-  function debugSessionPayload(session: DebugSession) {
-    const secretNames = Array.isArray(session.snapshot.secretNames)
-      ? [...new Set(session.snapshot.secretNames.filter((value): value is string => typeof value === "string"))].slice(0, 100)
-      : [];
-    return {
-      type: "debug.start",
-      session: {
-        id: session.id,
-        projectId: session.projectId,
-        revisionId: session.revisionId,
-        environmentId: session.environmentId,
-        currentStep: session.currentStep,
-        snapshot: session.snapshot,
-        secrets: secretValues(session.projectId, secretNames),
-        idleExpiresAt: session.idleExpiresAt,
-        maxExpiresAt: session.maxExpiresAt,
-      },
-    };
-  }
-
-  function agentOwnsDebugSession(agentId: string, sessionId: string) {
-    const session = debugSessionById(sessionId);
-    if (session.agentId !== agentId) throw new PlatformError(403, "DEBUG_SESSION_AGENT_MISMATCH");
-    return session;
-  }
-
-  function expireDebugSessions() {
-    const expired = database
-      .prepare(
-        `SELECT id, agent_id, status, idle_expires_at, max_expires_at
-         FROM debug_sessions
-         WHERE status IN ('requested', 'active', 'paused', 'ending')
-           AND (idle_expires_at <= ? OR max_expires_at <= ?)`,
-      )
-      .all(now(), now()) as Array<{ id: string; agent_id: string; status: DebugSessionStatus; idle_expires_at: string; max_expires_at: string }>;
-    for (const item of expired) {
-      database.prepare(`UPDATE debug_sessions SET status = 'expired', updated_at = ? WHERE id = ?`).run(now(), item.id);
-      appendDebugEvent(item.id, "session.expired", { idleExpiresAt: item.idle_expires_at, maxExpiresAt: item.max_expires_at });
-      sendAgent(item.agent_id, { type: "debug.command", sessionId: item.id, command: "stop", reason: "SESSION_TIMEOUT" });
-    }
-  }
-
   function secretValues(projectId: string, requested: string[]) {
     if (requested.length === 0) return {};
     const rows = database
@@ -1516,391 +1260,6 @@ function createPlatformServices(dataDirectory: string) {
       .all(projectId, ...requested) as Array<{ name: string; iv: string; tag: string; ciphertext: string }>;
     if (rows.length !== requested.length) throw new PlatformError(409, "RUN_SECRET_NOT_CONFIGURED");
     return Object.fromEntries(rows.map((row) => [row.name, decrypt(row)]));
-  }
-
-  function recoverExpiredLeases() {
-    const expired = database
-      .prepare(`SELECT id, run_id, agent_id FROM run_leases WHERE status IN ('offered', 'leased') AND expires_at <= ?`)
-      .all(now()) as Array<{ id: string; run_id: string; agent_id: string }>;
-    for (const lease of expired) {
-      database.prepare(`UPDATE run_leases SET status = 'expired', updated_at = ? WHERE id = ?`).run(now(), lease.id);
-      const run = runById(lease.run_id);
-      if (run.cancellationRequested) {
-        database.prepare(`UPDATE platform_runs SET status = 'canceled', updated_at = ? WHERE id = ?`).run(now(), run.id);
-        appendRunEvent(run.id, "run.canceled_after_lease_expiry", { leaseId: lease.id });
-        continue;
-      }
-      if (["success", "failed", "canceled"].includes(run.status)) continue;
-      database.prepare(`UPDATE platform_runs SET status = 'queued', updated_at = ? WHERE id = ?`).run(now(), run.id);
-      appendRunEvent(run.id, "lease.expired", { leaseId: lease.id, agentId: lease.agent_id });
-      dispatchQueuedRun(run.id);
-    }
-  }
-
-  function recoverStaleElementValidations() {
-    const cutoff = new Date(Date.now() - agentOfflineAfterMs).toISOString();
-    const stale = database
-      .prepare(
-        `SELECT v.id FROM element_validations v
-         JOIN agents a ON a.id = v.agent_id
-         WHERE v.status IN ('queued', 'running')
-           AND v.agent_id NOT LIKE 'managed-%'
-           AND (a.status != 'online' OR a.last_seen_at IS NULL OR a.last_seen_at <= ?)`,
-      )
-      .all(cutoff) as Array<{ id: string }>;
-    for (const validation of stale) {
-      database.prepare(`UPDATE element_validations SET status = 'failed', error = 'AGENT_UNAVAILABLE', updated_at = ? WHERE id = ?`).run(now(), validation.id);
-    }
-  }
-
-  function candidateAgent(projectId: string, environmentId: string) {
-    const cutoff = new Date(Date.now() - agentOfflineAfterMs).toISOString();
-    const rows = database
-      .prepare(
-        `SELECT a.id, a.workspace_id, a.name, a.status, a.browser_version, a.os, a.max_concurrency, a.current_task, a.last_seen_at, a.created_at,
-                COUNT(l.id) AS active_leases
-         FROM agent_bindings b
-          JOIN agents a ON a.id = b.agent_id
-         LEFT JOIN run_leases l ON l.agent_id = a.id AND l.status IN ('offered', 'leased') AND l.expires_at > ?
-          WHERE b.project_id = ? AND b.environment_id = ? AND b.is_default = 1 AND a.status = 'online' AND a.last_seen_at > ?
-            AND NOT EXISTS (
-              SELECT 1 FROM debug_sessions d
-              WHERE d.agent_id = a.id AND d.status IN ('requested', 'active', 'paused', 'ending')
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM element_validations v
-              WHERE v.agent_id = a.id AND v.status IN ('queued', 'running')
-            )
-         GROUP BY a.id
-         HAVING COUNT(l.id) < a.max_concurrency
-         ORDER BY COUNT(l.id) ASC, a.last_seen_at DESC`,
-      )
-      .all(now(), projectId, environmentId, cutoff) as Array<AgentRecord & { workspace_id: string; browser_version: string; max_concurrency: number; current_task: string | null; last_seen_at: string | null; created_at: string; active_leases: number }>;
-    return rows[0] ? mapAgent(rows[0]) : undefined;
-  }
-
-  function dispatchQueuedRun(runId: string) {
-    const run = runById(runId);
-    if (run.cancellationRequested || run.status !== "queued") return undefined;
-    const agent = candidateAgent(run.projectId, run.environmentId);
-    if (!agent) return undefined;
-    const attempts = database.prepare(`SELECT attempt FROM run_leases WHERE run_id = ?`).all(run.id) as Array<{ attempt: number }>;
-    const lease: Lease = {
-      id: randomUUID(),
-      runId: run.id,
-      agentId: agent.id,
-      status: "offered",
-      expiresAt: leaseExpiresAt(),
-      attempt: Math.max(0, ...attempts.map((item) => item.attempt)) + 1,
-    };
-    database
-      .prepare(`INSERT INTO run_leases (id, run_id, agent_id, status, expires_at, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(lease.id, lease.runId, lease.agentId, lease.status, lease.expiresAt, lease.attempt, now(), now());
-    database.prepare(`UPDATE platform_runs SET agent_id = ?, status = 'dispatched', updated_at = ? WHERE id = ?`).run(agent.id, now(), run.id);
-    appendRunEvent(run.id, "lease.offered", { leaseId: lease.id, agentId: agent.id, attempt: lease.attempt });
-    const socket = sockets.get(agent.id);
-    if (socket && socket.readyState === socket.OPEN) {
-      const claimed = claimLease(agent);
-      if (claimed) socket.send(json(agentRunPayload(claimed)));
-    }
-    return lease;
-  }
-
-  function dispatchWaitingRuns(projectId?: string) {
-    recoverExpiredLeases();
-    const query = projectId
-      ? database.prepare(`SELECT id FROM platform_runs WHERE project_id = ? AND status = 'queued' AND cancellation_requested = 0 ORDER BY created_at ASC`)
-      : database.prepare(`SELECT id FROM platform_runs WHERE status = 'queued' AND cancellation_requested = 0 ORDER BY created_at ASC`);
-    const rows = (projectId ? query.all(projectId) : query.all()) as Array<{ id: string }>;
-    for (const row of rows) dispatchQueuedRun(row.id);
-  }
-
-  function agentRunPayload(lease: Lease) {
-    const run = runById(lease.runId);
-    const secretNames = Array.isArray(run.snapshot.secretNames)
-      ? run.snapshot.secretNames.filter((value): value is string => typeof value === "string")
-      : [];
-    return {
-      type: "run.lease",
-      lease: { id: lease.id, expiresAt: lease.expiresAt, attempt: lease.attempt },
-      run: {
-        id: run.id,
-        projectId: run.projectId,
-        revisionId: run.revisionId,
-        environmentId: run.environmentId,
-        snapshot: run.snapshot,
-        secrets: secretValues(run.projectId, secretNames),
-      },
-    };
-  }
-
-  function agentValidationPayload(validation: ElementValidation) {
-    const document = documentFor(validation.projectId);
-    const environments = Array.isArray(document.data.environments) ? document.data.environments.map(asRecord) : [];
-    const environment = environments.find((item) => item.id === validation.environmentId);
-    if (!environment) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND");
-    return {
-      type: "validation.start",
-      validation: {
-        id: validation.id,
-        projectId: validation.projectId,
-        environmentId: validation.environmentId,
-        environment,
-        element: validation.element,
-      },
-    };
-  }
-
-  function sendAgent(agentId: string, message: Record<string, unknown>) {
-    const socket = sockets.get(agentId);
-    if (!socket || socket.readyState !== socket.OPEN) return false;
-    socket.send(json(message));
-    return true;
-  }
-
-  function deliverElementValidations(agent: AgentRecord) {
-    const rows = database
-      .prepare(`SELECT id FROM element_validations WHERE agent_id = ? AND status = 'queued' ORDER BY created_at ASC LIMIT 1`)
-      .all(agent.id) as Array<{ id: string }>;
-    const validation = rows[0] ? elementValidationById(rows[0].id) : undefined;
-    return validation ? sendAgent(agent.id, agentValidationPayload(validation)) : false;
-  }
-
-  function sendConfirmedDebugCommand(agentId: string, sessionId: string, command: string) {
-    const commandId = randomUUID();
-    return new Promise<{ accepted: boolean; reason?: string }>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!pendingDebugCommands.delete(commandId)) return;
-        resolve({ accepted: false, reason: "DEBUG_COMMAND_ACK_TIMEOUT" });
-      }, 5_000);
-      timeout.unref();
-      pendingDebugCommands.set(commandId, { agentId, resolve, timeout });
-      if (sendAgent(agentId, { type: "debug.command", sessionId, command, commandId })) return;
-      clearTimeout(timeout);
-      pendingDebugCommands.delete(commandId);
-      resolve({ accepted: false, reason: "DEBUG_AGENT_DISCONNECTED" });
-    });
-  }
-
-  function deliverDebugSessions(agent: AgentRecord) {
-    const rows = database
-      .prepare(`SELECT id FROM debug_sessions WHERE agent_id = ? AND status IN ('requested', 'active', 'paused', 'ending', 'expired') ORDER BY created_at ASC`)
-      .all(agent.id) as Array<{ id: string }>;
-    for (const row of rows) {
-      const session = debugSessionById(row.id);
-      if (session.status === "requested") {
-        sendAgent(agent.id, debugSessionPayload(session));
-      } else if (session.status === "expired") {
-        sendAgent(agent.id, { type: "debug.command", sessionId: session.id, command: "stop", reason: "SESSION_TIMEOUT" });
-      } else {
-        sendAgent(agent.id, { type: "debug.reconnect", sessionId: session.id });
-      }
-    }
-  }
-
-  function claimLease(agent: AgentRecord) {
-    recoverExpiredLeases();
-    const row = database
-      .prepare(`SELECT id, run_id, agent_id, status, expires_at, attempt FROM run_leases WHERE agent_id = ? AND status = 'offered' AND expires_at > ? ORDER BY created_at ASC LIMIT 1`)
-      .get(agent.id, now()) as { id: string; run_id: string; agent_id: string; status: LeaseStatus; expires_at: string; attempt: number } | undefined;
-    if (!row) return undefined;
-    const lease: Lease = { id: row.id, runId: row.run_id, agentId: row.agent_id, status: row.status, expiresAt: row.expires_at, attempt: row.attempt };
-    database.prepare(`UPDATE run_leases SET status = 'leased', expires_at = ?, updated_at = ? WHERE id = ? AND status = 'offered'`).run(leaseExpiresAt(), now(), lease.id);
-    const updated = activeLeaseForRun(lease.runId);
-    if (!updated || updated.status !== "leased") return undefined;
-    database.prepare(`UPDATE platform_runs SET status = 'running', updated_at = ? WHERE id = ?`).run(now(), lease.runId);
-    database.prepare(`UPDATE agents SET current_task = ? WHERE id = ?`).run(lease.runId, agent.id);
-    appendRunEvent(lease.runId, "lease.claimed", { leaseId: lease.id, agentId: agent.id });
-    return { ...updated, status: "leased" as const };
-  }
-
-  function processAgentMessage(agent: AgentRecord, raw: unknown) {
-    const message = asRecord(raw);
-    const type = typeof message.type === "string" ? message.type : "";
-    if (type === "heartbeat") {
-      updateAgentHeartbeat(agent, asRecord(message));
-      recoverStaleElementValidations();
-      dispatchWaitingRuns();
-      expireDebugSessions();
-      if (deliverElementValidations(agent)) return { type: "validation.dispatched", at: now() };
-      const lease = claimLease(agent);
-      return lease ? agentRunPayload(lease) : { type: "heartbeat.ack", at: now() };
-    }
-    if (type === "ready") {
-      updateAgentHeartbeat(agent, asRecord(message));
-      recoverStaleElementValidations();
-      dispatchWaitingRuns();
-      expireDebugSessions();
-      deliverDebugSessions(agent);
-      if (deliverElementValidations(agent)) return { type: "validation.dispatched", at: now() };
-      const lease = claimLease(agent);
-      return lease ? agentRunPayload(lease) : { type: "idle", at: now() };
-    }
-    if (type === "debug.command.ack") {
-      const commandId = typeof message.commandId === "string" ? message.commandId : "";
-      const pending = pendingDebugCommands.get(commandId);
-      if (!pending || pending.agentId !== agent.id) return { type: "debug.command.ack", commandId, ignored: true };
-      clearTimeout(pending.timeout);
-      pendingDebugCommands.delete(commandId);
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const accepted = message.accepted === true;
-      const reason = typeof message.reason === "string" ? message.reason.slice(0, 160) : undefined;
-      if (sessionId) appendDebugEvent(sessionId, accepted ? "command.acknowledged" : "command.rejected", { command: message.command, commandId, reason });
-      pending.resolve({ accepted, reason });
-      return { type: "debug.command.ack", commandId, accepted };
-    }
-    if (type === "debug.ready") {
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const session = agentOwnsDebugSession(agent.id, sessionId);
-      if (session.status === "expired" || session.status === "ended") {
-        return { type: "debug.command", sessionId, command: "stop", reason: "SESSION_CLOSED" };
-      }
-      const updated = touchDebugSession(session, {
-        status: "paused",
-        currentStep: typeof message.currentStep === "number" && Number.isInteger(message.currentStep) ? message.currentStep : session.currentStep,
-        currentUrl: typeof message.currentUrl === "string" ? message.currentUrl.slice(0, 2048) : session.currentUrl,
-        browserContextId: typeof message.browserContextId === "string" ? message.browserContextId.slice(0, 160) : session.browserContextId,
-      });
-      database.prepare(`UPDATE agents SET current_task = ? WHERE id = ?`).run(session.id, agent.id);
-      appendDebugEvent(session.id, "session.ready", { currentStep: updated.currentStep, currentUrl: updated.currentUrl });
-      return { type: "debug.ready.ack", sessionId, status: updated.status };
-    }
-    if (type === "picker.captured") {
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const session = agentOwnsDebugSession(agent.id, sessionId);
-      if (["ended", "failed", "expired"].includes(session.status)) return { type: "picker.rejected", sessionId, reason: "DEBUG_SESSION_CLOSED" };
-      const candidates = normalizeLocatorCandidates(message.candidates);
-      if (candidates.length === 0) return { type: "picker.rejected", sessionId, reason: "PICKER_CANDIDATES_REQUIRED" };
-      const capture = { id: randomUUID(), target: typeof message.target === "string" ? message.target.slice(0, 240) : "" };
-      database.prepare(`INSERT INTO picker_captures (id, session_id, candidates, target, status, captured_at) VALUES (?, ?, ?, ?, 'pending', ?)`)
-        .run(capture.id, session.id, json(candidates), capture.target, now());
-      appendDebugEvent(session.id, "picker.captured", { captureId: capture.id, candidateCount: candidates.length, target: capture.target });
-      return { type: "picker.captured.ack", sessionId, captureId: capture.id };
-    }
-    if (type === "picker.previewed") {
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const session = agentOwnsDebugSession(agent.id, sessionId);
-      appendDebugEvent(session.id, "picker.previewed", { captureId: message.captureId, candidateIndex: message.candidateIndex, count: message.count });
-      return { type: "picker.previewed.ack", sessionId };
-    }
-    if (type === "debug.state") {
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const session = agentOwnsDebugSession(agent.id, sessionId);
-      if (["ended", "failed", "expired"].includes(session.status)) return { type: "debug.command", sessionId, command: "stop", reason: "SESSION_CLOSED" };
-      const reportedStatus: DebugSessionStatus = message.status === "active" || message.status === "paused" ? message.status : session.status;
-      const updated = touchDebugSession(session, {
-        status: reportedStatus,
-        currentStep: typeof message.currentStep === "number" && Number.isInteger(message.currentStep) ? message.currentStep : session.currentStep,
-        currentUrl: typeof message.currentUrl === "string" ? message.currentUrl.slice(0, 2048) : session.currentUrl,
-      });
-      appendDebugEvent(session.id, "session.state", { status: updated.status, currentStep: updated.currentStep, currentUrl: updated.currentUrl });
-      return { type: "debug.state.ack", sessionId };
-    }
-    if (type === "debug.event") {
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const session = agentOwnsDebugSession(agent.id, sessionId);
-      if (["ended", "failed", "expired"].includes(session.status)) return { type: "debug.command", sessionId, command: "stop", reason: "SESSION_CLOSED" };
-      const updated = touchDebugSession(session, {
-        currentStep: typeof message.currentStep === "number" && Number.isInteger(message.currentStep) ? message.currentStep : session.currentStep,
-        currentUrl: typeof message.currentUrl === "string" ? message.currentUrl.slice(0, 2048) : session.currentUrl,
-      });
-      appendDebugEvent(updated.id, typeof message.kind === "string" ? message.kind : "debug.event", asRecord(message.data));
-      return { type: "debug.event.ack", sessionId };
-    }
-    if (type === "debug.ended") {
-      const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
-      const session = agentOwnsDebugSession(agent.id, sessionId);
-      const status: DebugSessionStatus = session.status === "expired" ? "expired" : message.status === "failed" ? "failed" : "ended";
-      database.prepare(`UPDATE debug_sessions SET status = ?, updated_at = ? WHERE id = ?`).run(status, now(), session.id);
-      database.prepare(`UPDATE agents SET current_task = NULL WHERE id = ?`).run(agent.id);
-      appendDebugEvent(session.id, "session.ended", { status, reason: typeof message.reason === "string" ? message.reason.slice(0, 500) : undefined });
-      dispatchWaitingRuns();
-      return { type: "debug.ended.ack", sessionId, status };
-    }
-    if (type === "lease.renew") {
-      const leaseId = typeof message.leaseId === "string" ? message.leaseId : "";
-      const lease = database
-        .prepare(`SELECT id, run_id, agent_id, status, expires_at, attempt FROM run_leases WHERE id = ? AND agent_id = ?`)
-        .get(leaseId, agent.id) as { id: string; run_id: string; agent_id: string; status: LeaseStatus; expires_at: string; attempt: number } | undefined;
-      if (!lease || lease.status !== "leased") return { type: "lease.rejected", leaseId, reason: "LEASE_NOT_ACTIVE" };
-      const run = runById(lease.run_id);
-      if (run.cancellationRequested) return { type: "run.cancel", leaseId, runId: run.id };
-      const expiresAt = leaseExpiresAt();
-      database.prepare(`UPDATE run_leases SET expires_at = ?, updated_at = ? WHERE id = ?`).run(expiresAt, now(), lease.id);
-      return { type: "lease.renewed", leaseId, expiresAt };
-    }
-    if (type === "run.event") {
-      const leaseId = typeof message.leaseId === "string" ? message.leaseId : "";
-      const lease = activeLeaseForAgent(agent.id, leaseId);
-      if (!lease) return { type: "lease.rejected", leaseId, reason: "LEASE_NOT_ACTIVE" };
-      const eventKind = typeof message.kind === "string" ? message.kind.slice(0, 80) : "agent.event";
-      appendRunEvent(lease.runId, eventKind, redactRunValue(runById(lease.runId), asRecord(message.data)) as Record<string, unknown>);
-      return { type: "event.ack", leaseId };
-    }
-    if (type === "run.complete") {
-      const leaseId = typeof message.leaseId === "string" ? message.leaseId : "";
-      const lease = activeLeaseForAgent(agent.id, leaseId);
-      if (!lease) return { type: "lease.rejected", leaseId, reason: "LEASE_NOT_ACTIVE" };
-      const run = runById(lease.runId);
-      const requestedStatus = message.status === "success" || message.status === "failed" ? message.status : "failed";
-      const status: PlatformRunStatus = run.cancellationRequested ? "canceled" : requestedStatus;
-      const result = redactRunValue(run, asRecord(message.result)) as Record<string, unknown>;
-      const allowedOutputs = publicFlowOutputNames(run);
-      const suppliedOutputs = asRecord(result.flowOutputs);
-      const publishedOutputs = Object.fromEntries(
-        Object.entries(suppliedOutputs).filter(([name]) => allowedOutputs.has(name)),
-      );
-      if (Object.keys(publishedOutputs).length > 0) result.flowOutputs = publishedOutputs;
-      else delete result.flowOutputs;
-      const sensitiveFlowOutputs = Array.isArray(result.sensitiveFlowOutputs)
-        ? result.sensitiveFlowOutputs.filter((item): item is string => typeof item === "string").slice(0, 200)
-        : [];
-      if (sensitiveFlowOutputs.length > 0) result.sensitiveFlowOutputs = sensitiveFlowOutputs;
-      else delete result.sensitiveFlowOutputs;
-      database.prepare(`UPDATE run_leases SET status = 'completed', updated_at = ? WHERE id = ?`).run(now(), lease.id);
-      database.prepare(`UPDATE platform_runs SET status = ?, result = ?, updated_at = ? WHERE id = ?`).run(status, json(result), now(), run.id);
-      database.prepare(`UPDATE agents SET current_task = NULL WHERE id = ?`).run(agent.id);
-      persistFlowOutputs(run, result);
-      appendRunEvent(run.id, "run.complete", { status, result });
-      queueRunDeliveries(runById(run.id), status);
-      dispatchWaitingRuns(run.projectId);
-      return { type: "run.complete.ack", leaseId, status };
-    }
-    if (type === "validation.started") {
-      const validationId = typeof message.validationId === "string" ? message.validationId : "";
-      const validation = elementValidationById(validationId);
-      if (validation.agentId !== agent.id) throw new PlatformError(403, "VALIDATION_AGENT_MISMATCH");
-      if (validation.status !== "queued") return { type: "validation.rejected", validationId, reason: "VALIDATION_NOT_QUEUED" };
-      database.prepare(`UPDATE element_validations SET status = 'running', updated_at = ? WHERE id = ?`).run(now(), validation.id);
-      database.prepare(`UPDATE agents SET current_task = ? WHERE id = ?`).run(`validation:${validation.id}`, agent.id);
-      return { type: "validation.started.ack", validationId };
-    }
-    if (type === "validation.complete") {
-      const validationId = typeof message.validationId === "string" ? message.validationId : "";
-      const validation = elementValidationById(validationId);
-      if (validation.agentId !== agent.id) throw new PlatformError(403, "VALIDATION_AGENT_MISMATCH");
-      const requestedStatus = message.status === "success" ? "success" : "failed";
-      const result = asRecord(message.result);
-      const count = Number(result.count);
-      const normalized = {
-        count: Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0,
-        firstMatch: typeof result.firstMatch === "string" ? result.firstMatch.slice(0, 2_000) : undefined,
-        elapsedMs: Number.isFinite(Number(result.elapsedMs)) ? Math.max(0, Math.floor(Number(result.elapsedMs))) : 0,
-      };
-      const error = typeof message.error === "string" ? message.error.slice(0, 500) : null;
-      database.prepare(`UPDATE element_validations SET status = ?, result = ?, error = ?, updated_at = ? WHERE id = ?`).run(requestedStatus, json(normalized), error, now(), validation.id);
-      database.prepare(`UPDATE agents SET current_task = NULL WHERE id = ?`).run(agent.id);
-      dispatchWaitingRuns(validation.projectId);
-      return { type: "validation.complete.ack", validationId, status: requestedStatus };
-    }
-    return { type: "error", error: "AGENT_MESSAGE_UNSUPPORTED" };
-  }
-
-  function activeLeaseForAgent(agentId: string, leaseId: string) {
-    const row = database
-      .prepare(`SELECT id, run_id, agent_id, status, expires_at, attempt FROM run_leases WHERE id = ? AND agent_id = ? AND status = 'leased' AND expires_at > ?`)
-      .get(leaseId, agentId, now()) as { id: string; run_id: string; agent_id: string; status: LeaseStatus; expires_at: string; attempt: number } | undefined;
-    return row ? { id: row.id, runId: row.run_id, agentId: row.agent_id, status: row.status, expiresAt: row.expires_at, attempt: row.attempt } : undefined;
   }
 
   function createWorkspace(user: AuthUser, name: string) {
@@ -1944,82 +1303,17 @@ function createPlatformServices(dataDirectory: string) {
   }
 
 
-  webSocketServer.on("connection", (socket: WebSocket, _request: IncomingMessage, agent: AgentRecord) => {
-    try {
-      sockets.get(agent.id)?.close(4001, "replaced");
-      sockets.set(agent.id, socket);
-      updateAgentHeartbeat(agent, {});
-      dispatchWaitingRuns();
-      expireDebugSessions();
-      socket.send(json({ type: "connected", agentId: agent.id, heartbeatIntervalSeconds: 15, leaseDurationSeconds: Math.round(agentLeaseDurationMs / 1000) }));
-      deliverDebugSessions(agent);
-      const validationDelivered = deliverElementValidations(agent);
-      const lease = validationDelivered ? undefined : claimLease(agent);
-      if (lease) socket.send(json(agentRunPayload(lease)));
-    } catch (error) {
-      console.error("agent connection handler failed", error);
-      socket.close(1011, "AGENT_CONNECTION_FAILED");
-    }
-    const pingTimer = setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) socket.ping();
-    }, 30_000);
-    socket.on("message", (payload: RawData) => {
-      try {
-        const reply = processAgentMessage(agent, parseJson(payload.toString("utf8"), {}));
-        socket.send(json(reply));
-      } catch (error) {
-        const platformError = error instanceof PlatformError ? error : new PlatformError(500, "AGENT_MESSAGE_FAILED");
-        socket.send(json({ type: "error", error: platformError.code }));
-      }
-    });
-    socket.on("close", () => {
-      clearInterval(pingTimer);
-      try {
-        if (sockets.get(agent.id) !== socket) return;
-        sockets.delete(agent.id);
-        database.prepare(`UPDATE agents SET status = 'offline', current_task = NULL WHERE id = ? AND status != 'disabled'`).run(agent.id);
-        database.prepare(`UPDATE element_validations SET status = 'failed', error = 'AGENT_CONNECTION_LOST', updated_at = ? WHERE agent_id = ? AND status IN ('queued', 'running')`).run(now(), agent.id);
-        const interruptedSessions = database
-          .prepare(`SELECT id FROM debug_sessions WHERE agent_id = ? AND status IN ('requested', 'active', 'paused', 'ending')`)
-          .all(agent.id) as Array<{ id: string }>;
-        for (const session of interruptedSessions) {
-          database.prepare(`UPDATE debug_sessions SET status = 'failed', updated_at = ? WHERE id = ?`).run(now(), session.id);
-          appendDebugEvent(session.id, "session.failed", { reason: "AGENT_CONNECTION_LOST" });
-        }
-      } catch (error) {
-        console.error("agent close handler failed", error);
-      } finally {
-        for (const [commandId, pending] of pendingDebugCommands) {
-          if (pending.agentId !== agent.id) continue;
-          clearTimeout(pending.timeout);
-          pendingDebugCommands.delete(commandId);
-          pending.resolve({ accepted: false, reason: "DEBUG_AGENT_DISCONNECTED" });
-        }
-        try {
-          dispatchWaitingRuns();
-        } catch (error) {
-          console.error("dispatchWaitingRuns after agent close failed", error);
-        }
-      }
-    });
-  });
-
-  if (managedExecutionEnabled) {
-    const interrupted = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'running'`).all() as Array<{ id: string }>;
-    for (const item of interrupted) {
-      database.prepare(`UPDATE platform_runs SET status = 'failed', interruption_reason = 'SERVICE_RESTARTED', result = ?, updated_at = ? WHERE id = ?`)
-        .run(json({ error: "SERVICE_RESTARTED", interrupted: true }), now(), item.id);
-      appendRunEvent(item.id, "run.interrupted", { reason: "SERVICE_RESTARTED" });
-    }
-    const recoverable = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'queued' ORDER BY created_at`).all() as Array<{ id: string }>;
-    for (const item of recoverable) enqueueManagedRun(item.id);
+  const interrupted = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'running'`).all() as Array<{ id: string }>;
+  for (const item of interrupted) {
+    database.prepare(`UPDATE platform_runs SET status = 'failed', interruption_reason = 'SERVICE_RESTARTED', result = ?, updated_at = ? WHERE id = ?`)
+      .run(json({ error: "SERVICE_RESTARTED", interrupted: true }), now(), item.id);
+    appendRunEvent(item.id, "run.interrupted", { reason: "SERVICE_RESTARTED" });
   }
+  const recoverable = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'queued' ORDER BY created_at`).all() as Array<{ id: string }>;
+  for (const item of recoverable) enqueueManagedRun(item.id);
 
   const maintenanceTimer = setInterval(() => {
     try {
-      recoverExpiredLeases();
-      recoverStaleElementValidations();
-      expireDebugSessions();
       processDueSchedules();
       database.prepare(`UPDATE platform_runs SET status = 'failed', result = ?, updated_at = ? WHERE executor_type = 'managed' AND status = 'running' AND updated_at <= ?`)
         .run(json({ error: "MANAGED_RUN_WATCHDOG_TIMEOUT", interrupted: true }), now(), new Date(Date.now() - 30 * 60_000).toISOString());
@@ -2031,16 +1325,9 @@ function createPlatformServices(dataDirectory: string) {
   maintenanceTimer.unref();
 
   return {
-    activeLeaseForAgent,
-    activeLeaseForRun,
-    agentByCredential,
-    agentOwnsDebugSession,
-    agentValidationPayload,
     allowWebhookRequest,
-    appendDebugEvent,
     appendRunEvent,
     audit,
-    candidateAgent,
     cancelManagedRun,
     createElementValidation,
     createAuthSession,
@@ -2048,20 +1335,13 @@ function createPlatformServices(dataDirectory: string) {
     createWorkspaceInvitation,
     datasetRowsFor,
     datasetVersionFor,
-    debugSessionById,
-    debugSessionPayload,
-    debugSessionResponse,
     decrypt,
-    dispatchWaitingRuns,
     documentFor,
     elementValidationById,
     encrypt,
-    expireDebugSessions,
-    nextDebugIdleExpiry,
     normalizeRole,
     notificationTarget,
     parseDatasetUpload,
-    pickerCaptureResponse,
     processDueSchedules,
     projectAnalytics,
     projectFor,
@@ -2069,8 +1349,6 @@ function createPlatformServices(dataDirectory: string) {
     publishedRevisionFor,
     putDocument,
     queuePublishedRuns,
-    recoverExpiredLeases,
-    recoverStaleElementValidations,
     requireChromiumEnvironment,
     requireProjectAdmin,
     requireProjectCapability,
@@ -2081,17 +1359,9 @@ function createPlatformServices(dataDirectory: string) {
     requireWorkspaceCapability,
     runById,
     runResponse,
-    sendAgent,
-    sendConfirmedDebugCommand,
     sessionUser,
-    touchDebugSession,
-    updateAgentHeartbeat,
     datasetVersionResponse,
-    mapAgent,
     database,
-    sockets,
-    pendingDebugCommands,
-    webSocketServer,
     webhookRequests,
     keyMaterial,
   };
