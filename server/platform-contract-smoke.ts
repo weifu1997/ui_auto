@@ -351,6 +351,31 @@ try {
   if (!pickerPreview.response.ok) throw new Error("Picker preview failed");
   const previewCommand = await inbox.next("picker.preview");
   if (previewCommand.captureId !== captureId || (previewCommand.candidate as { value?: string }).value !== "save-button") throw new Error("Picker preview command did not include candidate");
+  const documentBeforeFillback = await api<{ data: { elements?: unknown[] }; version: number }>(`/api/platform/projects/${projectId}/document`, { headers: headers(token) });
+  const elementsBeforeFillback = Array.isArray(documentBeforeFillback.body.data.elements) ? documentBeforeFillback.body.data.elements.length : 0;
+  const fillbackConfirmed = await api<{ target: string; candidate: { method: string; value: string }; path: string; environmentId: string; suggestedName: string; documentVersion: number }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ candidateIndex: 0, target: "fillback", name: "Fillback name" }),
+  });
+  if (!fillbackConfirmed.response.ok || fillbackConfirmed.body.target !== "fillback" || fillbackConfirmed.body.candidate.value !== "save-button" || fillbackConfirmed.body.suggestedName !== "Fillback name" || fillbackConfirmed.body.path !== "/dashboard" || fillbackConfirmed.body.environmentId !== "internal") {
+    throw new Error(`Fillback confirmation did not return candidate info: ${JSON.stringify(fillbackConfirmed.body)}`);
+  }
+  const fillbackAgain = await api(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ candidateIndex: 1, target: "fillback", name: "Fillback again" }),
+  });
+  if (!fillbackAgain.response.ok) throw new Error("Fillback confirmation could not be repeated on the same capture");
+  const documentAfterFillback = await api<{ data: { elements?: unknown[] }; version: number }>(`/api/platform/projects/${projectId}/document`, { headers: headers(token) });
+  const elementsAfterFillback = Array.isArray(documentAfterFillback.body.data.elements) ? documentAfterFillback.body.data.elements.length : 0;
+  if (elementsAfterFillback !== elementsBeforeFillback || documentAfterFillback.body.version !== documentBeforeFillback.body.version) {
+    throw new Error(`Fillback confirmation mutated the project document: ${JSON.stringify({ before: documentBeforeFillback.body.version, after: documentAfterFillback.body.version })}`);
+  }
+  const capturesAfterFillback = await api<{ captures: Array<{ id: string; status: string }> }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures`, { headers: headers(token) });
+  if (capturesAfterFillback.body.captures[0]?.id !== captureId || capturesAfterFillback.body.captures[0]?.status !== "pending") {
+    throw new Error(`Fillback confirmation changed the capture status: ${JSON.stringify(capturesAfterFillback.body)}`);
+  }
   const pickerConfirmed = await api<{ element: { name: string; value: string } }>(`/api/platform/projects/${projectId}/debug-sessions/${debugSessionId}/picker-captures/${captureId}/confirm`, {
     method: "POST",
     headers: headers(token),

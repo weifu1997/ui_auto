@@ -1,5 +1,5 @@
 import type {PlatformServices} from "./platform";
-import {PlatformError, asRecord, authorization, cleanProjectSlug, debugMaxDurationMs, digest, json, nextCronTime, now, parseJson, passwordHash, passwordMatches, platformArtifactDirectory, readBody, readJson, revisionNumber, safeArtifactName, sendJson, webhookMaxRuns, webhookSignatureMatches, webhookTimestampToleranceMs} from "./platform-core";
+import {PlatformError, asRecord, authorization, cleanProjectSlug, debugElementPath, debugMaxDurationMs, digest, json, nextCronTime, now, parseJson, passwordHash, passwordMatches, platformArtifactDirectory, readBody, readJson, revisionNumber, safeArtifactName, sendJson, webhookMaxRuns, webhookSignatureMatches, webhookTimestampToleranceMs} from "./platform-core";
 import {routeHandler} from "./http-utils";
 import type {AgentRecord, AuthUser, Capability, DeliveryStatus, LocatorCandidate, NotificationChannelType, PlatformApi, RevisionStatus, Role, ValidatedNotificationTarget} from "./platform-core";
 import {randomBytes, randomUUID} from "node:crypto";
@@ -1517,21 +1517,31 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         if (session.projectId !== projectId) throw new PlatformError(404, "DEBUG_SESSION_NOT_FOUND");
         const capture = services.database.prepare(`SELECT id, session_id, candidates, target, status, captured_at, confirmed_at FROM picker_captures WHERE id = ? AND session_id = ?`).get(captureId, sessionId) as { id: string; session_id: string; candidates: string; target: string; status: string; captured_at: string; confirmed_at: string | null } | undefined;
         if (!capture) throw new PlatformError(404, "PICKER_CAPTURE_NOT_FOUND");
-        if (capture.status !== "pending") throw new PlatformError(409, "PICKER_CAPTURE_ALREADY_CONFIRMED");
-        const body = await readJson<{ candidateIndex?: number; target?: "element" | "step"; name?: string; flowId?: string; stepId?: string }>(request);
+        const body = await readJson<{ candidateIndex?: number; target?: "element" | "step" | "fillback"; name?: string; flowId?: string; stepId?: string }>(request);
         const candidates = parseJson<LocatorCandidate[]>(capture.candidates, []);
         const candidateIndex = Number(body.candidateIndex);
         const candidate = candidates[candidateIndex];
-        if (!Number.isInteger(candidateIndex) || !candidate || (body.target !== "element" && body.target !== "step")) throw new PlatformError(400, "PICKER_CONFIRMATION_INVALID");
+        if (!Number.isInteger(candidateIndex) || !candidate || (body.target !== "element" && body.target !== "step" && body.target !== "fillback")) throw new PlatformError(400, "PICKER_CONFIRMATION_INVALID");
+        const path = debugElementPath(session.currentUrl);
+        if (body.target === "fillback") {
+          // 仅回填不落库：不写入元素库、不改变采集记录状态（可多次确认），只返回选中的定位器信息与建议名称。
+          const suggestedName = body.name?.trim().slice(0, 160) || capture.target || candidate.label;
+          services.appendDebugEvent(session.id, "picker.filled_back", { captureId: capture.id, candidateIndex, target: body.target, path, method: candidate.method, value: candidate.value });
+          services.audit(project.workspace_id, { type: "user", id: user.id }, "picker.filled_back", { type: "element", id: `${candidate.method}:${candidate.value}` }, { captureId: capture.id, candidateIndex, target: body.target, path, environmentId: session.environmentId, method: candidate.method, value: candidate.value }, projectId);
+          sendJson(response, 200, {
+            target: "fillback",
+            candidate: { method: candidate.method, value: candidate.value, count: candidate.count, score: candidate.score, label: candidate.label },
+            path,
+            environmentId: session.environmentId,
+            suggestedName,
+            documentVersion: services.documentFor(projectId).version,
+          });
+          return true;
+        }
+        if (capture.status !== "pending") throw new PlatformError(409, "PICKER_CAPTURE_ALREADY_CONFIRMED");
         const document = services.documentFor(projectId);
         const elements: unknown[] = Array.isArray(document.data.elements) ? [...document.data.elements] : [];
         const elementName = body.name?.trim().slice(0, 160) || capture.target || candidate.label;
-        let path = "/";
-        try {
-          path = session.currentUrl ? new URL(session.currentUrl).pathname || "/" : "/";
-        } catch {
-          path = "/";
-        }
         const element = {
           id: `element-${randomUUID()}`,
           name: elementName,

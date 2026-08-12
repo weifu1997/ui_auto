@@ -137,6 +137,7 @@ export function DebugSessionsPage({ project }: { project: Project }) {
         target: "element",
         name: candidate.value,
       });
+      if (confirmed.target === "fillback") return;
       const workspace = useWorkspaceStore.getState();
       if (!workspace.elementsByProject[project.id]?.some((element) => element.id === confirmed.element.id)) {
         const element: ElementAsset = {

@@ -662,14 +662,23 @@ export function previewPickerCandidate(token: string, projectId: string, session
   );
 }
 
+export type PlatformPickerFillback = {
+  target: "fillback";
+  candidate: { method: string; value: string; count: number; score: number; label: string };
+  path: string;
+  environmentId: string;
+  suggestedName: string;
+  documentVersion: number;
+};
+
 export function confirmPickerCandidate(
   token: string,
   projectId: string,
   sessionId: string,
   captureId: string,
-  input: { candidateIndex: number; target: "element" | "step"; name?: string; flowId?: string; stepId?: string },
+  input: { candidateIndex: number; target: "element" | "step" | "fillback"; name?: string; flowId?: string; stepId?: string },
 ) {
-  return request<{ element: PlatformElement; documentVersion: number; target: "element" | "step" }>(
+  return request<{ element: PlatformElement; documentVersion: number; target: "element" | "step" } | PlatformPickerFillback>(
     `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/confirm`,
     { method: "POST", body: JSON.stringify(input) },
     token,

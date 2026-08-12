@@ -218,6 +218,14 @@ export function normalizeLocatorCandidates(value: unknown) {
   }).slice(0, 12);
 }
 
+export function debugElementPath(currentUrl: string | null | undefined) {
+  try {
+    return currentUrl ? new URL(currentUrl).pathname || "/" : "/";
+  } catch {
+    return "/";
+  }
+}
+
 export function failureCategory(message: unknown) {
   const value = String(message ?? "").toUpperCase();
   if (value.includes("TIMEOUT")) return "timeout";

@@ -5,6 +5,7 @@ import { PlatformError, errorResponse } from "./http-utils";
 import {
   cronFieldMatches,
   cronMatches,
+  debugElementPath,
   failureCategory,
   nextCronTime,
   normalizeDatasetRows,
@@ -79,6 +80,20 @@ describe("nextCronTime", () => {
   it("throws for impossible expressions", () => {
     expect(() => nextCronTime("0 9 30 2 *", "Asia/Shanghai", new Date("2026-01-01T00:00:00Z"))).toThrow();
   }, 40_000);
+});
+
+describe("debugElementPath", () => {
+  it("extracts the pathname from a session URL", () => {
+    expect(debugElementPath("https://example.test/login?next=/home")).toBe("/login");
+    expect(debugElementPath("https://example.test/")).toBe("/");
+  });
+
+  it("falls back to / for empty or malformed URLs", () => {
+    expect(debugElementPath(null)).toBe("/");
+    expect(debugElementPath(undefined)).toBe("/");
+    expect(debugElementPath("not-a-url")).toBe("/");
+    expect(debugElementPath("")).toBe("/");
+  });
 });
 
 describe("parseCsv", () => {
