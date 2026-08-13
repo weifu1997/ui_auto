@@ -163,6 +163,7 @@ export function FlowsPage({ project }: { project: Project }) {
             <Tooltip title="运行流程">
               <Button
                 type="text"
+                size="small"
                 icon={<PlayCircleFilled />}
                 aria-label={`运行流程 ${flow.name}`}
                 onClick={() => void runFlow(flow)}
@@ -174,6 +175,7 @@ export function FlowsPage({ project }: { project: Project }) {
               <Tooltip title="复制流程">
                 <Button
                   type="text"
+                  size="small"
                   icon={<CopyOutlined />}
                   aria-label={`复制流程 ${flow.name}`}
                   onClick={() => {
@@ -201,6 +203,7 @@ export function FlowsPage({ project }: { project: Project }) {
                 <Tooltip title="删除流程">
                   <Button
                     type="text"
+                    size="small"
                     danger
                     icon={<DeleteOutlined />}
                     aria-label={`删除流程 ${flow.name}`}

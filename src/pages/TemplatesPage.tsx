@@ -113,7 +113,7 @@ export function TemplatesPage() {
                     }
                   }}
                 >
-                  <div className="template-card-top"><Tag>{template.category}</Tag><Button type="text" aria-label={template.favorite ? "取消收藏" : "收藏"} icon={template.favorite ? <StarFilled /> : <StarOutlined />} onClick={(event) => { event.stopPropagation(); if (!session) return; void favoritePlatformTemplate(session.token, template.id, !template.favorite).then(() => setTemplates((items) => items.map((item) => item.id === template.id ? { ...item, favorite: !item.favorite } : item))); }} /></div>
+                  <div className="template-card-top"><Tag>{template.category}</Tag><Button type="text" size="small" aria-label={template.favorite ? "取消收藏" : "收藏"} icon={template.favorite ? <StarFilled /> : <StarOutlined />} onClick={(event) => { event.stopPropagation(); if (!session) return; void favoritePlatformTemplate(session.token, template.id, !template.favorite).then(() => setTemplates((items) => items.map((item) => item.id === template.id ? { ...item, favorite: !item.favorite } : item))); }} /></div>
                   <h2>{template.name}</h2><p>{template.description || "无说明"}</p>
                 </article>
               </List.Item>

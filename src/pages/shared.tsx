@@ -11,7 +11,7 @@ import { WorkerApiError, getWorkerHealth, subscribeToTask } from "../worker-api"
 import type { WorkerTask } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
-import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, MenuOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd";
 import { useEffect, useRef, useState } from "react";
 import "../App.css";
@@ -170,6 +170,12 @@ export function ProjectLayout({
   children: React.ReactNode;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  // 移动端项目侧栏为抽屉：路由变化或点击遮罩时关闭。
+  const [projectNavOpen, setProjectNavOpen] = useState(false);
+  useEffect(() => {
+    setProjectNavOpen(false);
+  }, [location.pathname]);
   const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
   const platformSession = readStoredPlatformSession();
   const workspaceRole = platformSession?.workspaces.find((workspace) => workspace.id === readStoredPlatformWorkspaceId(platformSession))?.role ?? "viewer";
@@ -233,7 +239,7 @@ export function ProjectLayout({
   return (
     <div className="app-shell">
       <WorkspaceSide compact />
-      <aside className="project-side">
+      <aside className={`project-side ${projectNavOpen ? "open" : ""}`}>
         <button
           className="project-switcher"
           onClick={() => navigate("/projects")}
@@ -268,9 +274,24 @@ export function ProjectLayout({
           <span>项目数据已隔离</span>
         </div>
       </aside>
+      {projectNavOpen && (
+        <button
+          type="button"
+          className="project-side-mask"
+          aria-label="关闭项目菜单"
+          onClick={() => setProjectNavOpen(false)}
+        />
+      )}
       <main className="project-main">
         <header className="project-topbar">
           <div className="breadcrumb">
+            <Button
+              type="text"
+              className="topbar-menu-button"
+              icon={<MenuOutlined />}
+              aria-label="打开项目菜单"
+              onClick={() => setProjectNavOpen(true)}
+            />
             <Link to="/projects">项目</Link>
             <span>/</span>
             <strong>{sectionMeta[section].label}</strong>

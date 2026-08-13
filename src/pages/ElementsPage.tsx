@@ -210,6 +210,7 @@ export function ElementsPage({ project }: { project: Project }) {
             <Tooltip title="验证元素">
               <Button
                 type="text"
+                size="small"
                 icon={<ExperimentOutlined />}
                 aria-label={`验证元素 ${item.name}`}
                 onClick={() => startValidation(item)}
@@ -220,6 +221,7 @@ export function ElementsPage({ project }: { project: Project }) {
             <Tooltip title="编辑">
               <Button
                 type="text"
+                size="small"
                 icon={<EditOutlined />}
                 aria-label={`编辑元素 ${item.name}`}
                 onClick={() => setEditor(item)}
@@ -241,6 +243,7 @@ export function ElementsPage({ project }: { project: Project }) {
               <Tooltip title="删除">
                 <Button
                   type="text"
+                  size="small"
                   danger
                   icon={<DeleteOutlined />}
                   aria-label={`删除元素 ${item.name}`}

@@ -1,8 +1,4 @@
 @media (max-width: 780px) {
-  .app-shell .project-side {
-    display: none;
-  }
-
   .app-shell .workspace-side.compact {
     background: var(--nav-bg);
     z-index: 2;

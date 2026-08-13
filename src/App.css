@@ -422,8 +422,18 @@
 .breadcrumb {
   display: flex;
   gap: var(--space-2);
+  align-items: center;
   color: var(--muted);
   font-size: var(--text-footnote);
+}
+/* 移动端项目菜单开关（桌面端隐藏） */
+.topbar-menu-button {
+  display: none;
+}
+@media (max-width: 780px) {
+  .topbar-menu-button {
+    display: inline-flex;
+  }
 }
 .breadcrumb a {
   color: var(--muted);
@@ -1901,6 +1911,18 @@
     transform: translateX(-100%);
     width: 220px;
     box-shadow: 4px 0 14px #0a1b161a;
+    transition: transform var(--dur-fast) var(--ease-standard);
+  }
+  .project-side.open {
+    transform: translateX(0);
+  }
+  .project-side-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    border: 0;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.4);
   }
   .project-main {
     grid-column: 2;
@@ -2111,4 +2133,53 @@
   .metric-grid {
     grid-template-columns: 1fr;
   }
+}
+/* 深色模式：彩色图标底纹收敛为柔和深色调，避免亮块突兀 */
+:root[data-theme="dark"] .project-icon {
+  background: rgba(10, 132, 255, 0.16);
+  color: #3a9bff;
+}
+:root[data-theme="dark"] .flow-glyph {
+  background: rgba(10, 132, 255, 0.14);
+  color: #4d9fbf;
+}
+:root[data-theme="dark"] .element-glyph {
+  background: rgba(224, 166, 60, 0.14);
+  color: #e0a63c;
+}
+:root[data-theme="dark"] .var-glyph {
+  background: rgba(76, 209, 142, 0.12);
+  color: #4cd18e;
+}
+:root[data-theme="dark"] .resource-icon.element {
+  background: rgba(224, 166, 60, 0.14);
+  color: #e0a63c;
+}
+:root[data-theme="dark"] .resource-icon.variable {
+  background: rgba(76, 209, 142, 0.12);
+  color: #4cd18e;
+}
+:root[data-theme="dark"] .artifact-icon.screenshot {
+  background: rgba(76, 209, 142, 0.12);
+  color: #4cd18e;
+}
+:root[data-theme="dark"] .artifact-icon.trace {
+  background: rgba(144, 122, 216, 0.16);
+  color: #a892e0;
+}
+:root[data-theme="dark"] .artifact-icon.video {
+  background: rgba(224, 150, 90, 0.14);
+  color: #e0965a;
+}
+:root[data-theme="dark"] .template-mark {
+  background: rgba(76, 209, 142, 0.12);
+  color: #4cd18e;
+}
+:root[data-theme="dark"] .metric-icon {
+  background: rgba(255, 255, 255, 0.08);
+  color: #98989d;
+}
+:root[data-theme="dark"] .metric-icon.info {
+  background: rgba(10, 132, 255, 0.14);
+  color: #4d9fbf;
 }

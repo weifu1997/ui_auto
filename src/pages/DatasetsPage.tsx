@@ -93,9 +93,9 @@ export function DatasetsPage({ project }: { project: Project }) {
       title: "",
       width: 150,
       render: (_, item) => <Space size={2}>
-        <Tooltip title="预览冻结版本"><Button icon={<FileSearchOutlined />} aria-label={`预览 ${item.name} 冻结版本`} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
-        <Tooltip title="导入新版本"><Button icon={<ReloadOutlined />} aria-label={`导入 ${item.name} 新版本`} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
-        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button danger aria-label={`归档数据集 ${item.name}`} icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
+        <Tooltip title="预览冻结版本"><Button size="small" icon={<FileSearchOutlined />} aria-label={`预览 ${item.name} 冻结版本`} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
+        <Tooltip title="导入新版本"><Button size="small" icon={<ReloadOutlined />} aria-label={`导入 ${item.name} 新版本`} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
+        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button size="small" danger aria-label={`归档数据集 ${item.name}`} icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
       </Space>,
     },
   ];
