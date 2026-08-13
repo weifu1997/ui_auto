@@ -588,10 +588,10 @@ export function getPlatformNotificationChannels(token: string, workspaceId: stri
   );
 }
 
-export function createPlatformNotificationChannel(token: string, workspaceId: string, input: { name: string; type: PlatformNotificationChannel["type"]; url: string }) {
+export function createPlatformNotificationChannel(token: string, workspaceId: string, input: { name: string; type: PlatformNotificationChannel["type"]; url: string; keyword?: string }) {
   return request<{ channel: PlatformNotificationChannel }>(
     `/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels`,
-    { method: "POST", body: JSON.stringify({ name: input.name, type: input.type, config: { url: input.url } }) },
+    { method: "POST", body: JSON.stringify({ name: input.name, type: input.type, config: { url: input.url, ...(input.keyword?.trim() ? { keyword: input.keyword.trim() } : {}) } }) },
     token,
   );
 }

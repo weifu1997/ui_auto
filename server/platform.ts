@@ -491,7 +491,7 @@ function createPlatformServices(dataDirectory: string) {
   }
 
   function postNotification(target: ValidatedNotificationTarget, headers: Record<string, string>, body: string) {
-    return new Promise<{ status: number }>((resolve, reject) => {
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
       const transport = target.url.protocol === "https:" ? httpsRequest : httpRequest;
       const request = transport({
         protocol: target.url.protocol,
@@ -504,8 +504,18 @@ function createPlatformServices(dataDirectory: string) {
         lookup: (_hostname, _options, callback) => callback(null, target.address, isIP(target.address)),
         timeout: 10_000,
       }, (response) => {
-        response.resume();
-        resolve({ status: response.statusCode ?? 0 });
+        // 收集响应体（限量）：飞书/钉钉/企微 webhook 对业务拒绝（如自定义关键词不匹配）
+        // 也返回 HTTP 200，需读取 body 中的 code 字段才能判断真实送达。
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on("data", (chunk) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += buffer.length;
+          if (size <= 2_048) chunks.push(buffer);
+        });
+        response.on("end", () => {
+          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8").slice(0, 2_048) });
+        });
       });
       request.once("timeout", () => request.destroy(new Error("NOTIFICATION_TIMEOUT")));
       request.once("error", reject);
@@ -918,8 +928,11 @@ function createPlatformServices(dataDirectory: string) {
     void deliverPendingNotifications().catch((error) => console.error("deliverPendingNotifications failed", error));
   }
 
-  function formatNotificationBody(channelType: NotificationChannelType, payload: Record<string, unknown>) {
-    const content = `AutoFlow ${String(payload.status)}: ${String(payload.runId)} (${String(payload.environmentId)})`;
+  function formatNotificationBody(channelType: NotificationChannelType, payload: Record<string, unknown>, keyword?: string) {
+    // 自定义关键词前置：满足飞书/钉钉/企微机器人「自定义关键词」安全校验。
+    const content = keyword
+      ? `${keyword} AutoFlow ${String(payload.status)}: ${String(payload.runId)} (${String(payload.environmentId)})`
+      : `AutoFlow ${String(payload.status)}: ${String(payload.runId)} (${String(payload.environmentId)})`;
     if (channelType === "feishu") return { msg_type: "text", content: { text: content } };
     if (channelType === "dingtalk") return { msgtype: "text", text: { content } };
     if (channelType === "wecom") return { msgtype: "text", text: { content } };
@@ -951,14 +964,24 @@ function createPlatformServices(dataDirectory: string) {
           const endpoint = typeof config.url === "string" ? config.url : "";
           const target = await notificationTarget(endpoint);
           const headers = asRecord(config.headers);
+          const keyword = typeof config.keyword === "string" && config.keyword.trim() ? config.keyword.trim() : undefined;
           const response = await postNotification(
             target,
             { "content-type": "application/json", ...Object.fromEntries(Object.entries(headers).filter(([, value]) => typeof value === "string").map(([key, value]) => [key, String(value)])) },
-            json(formatNotificationBody(delivery.channel_type, parseJson<Record<string, unknown>>(delivery.payload, {}))),
+            json(formatNotificationBody(delivery.channel_type, parseJson<Record<string, unknown>>(delivery.payload, {}), keyword)),
           );
           responseCode = response.status;
           status = response.status >= 200 && response.status < 300 ? "delivered" : "failed";
           error = status === "delivered" ? null : `HTTP_${response.status}`;
+          // 飞书/钉钉/企微 webhook 对业务拒绝（如自定义关键词不匹配）也返回 HTTP 200：
+          // 响应体含数字 code 且非 0 时判为送达失败，避免误报成功。
+          if (status === "delivered" && response.body) {
+            const bodyCode = parseJson<{ code?: unknown }>(response.body, {}).code;
+            if (typeof bodyCode === "number" && bodyCode !== 0) {
+              status = "failed";
+              error = `NOTIFICATION_REJECTED_${bodyCode}`;
+            }
+          }
         } catch (reason) {
           error = reason instanceof Error ? reason.name === "TimeoutError" ? "NOTIFICATION_TIMEOUT" : reason.message.slice(0, 200) : "NOTIFICATION_DELIVERY_FAILED";
         }

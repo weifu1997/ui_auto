@@ -993,7 +993,8 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           } catch {
             throw new PlatformError(400, "NOTIFICATION_URL_INVALID");
           }
-          const encrypted = services.encrypt(json({ url: endpoint.url.toString(), headers: asRecord(body.config.headers) }));
+          const keyword = typeof body.config.keyword === "string" && body.config.keyword.trim() ? body.config.keyword.trim() : undefined;
+          const encrypted = services.encrypt(json({ url: endpoint.url.toString(), headers: asRecord(body.config.headers), ...(keyword ? { keyword } : {}) }));
           const channel = { id: randomUUID(), createdAt: now() };
           try {
             services.database.prepare(`INSERT INTO notification_channels (id, workspace_id, name, channel_type, config_iv, config_tag, config_ciphertext, enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`)
