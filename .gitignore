@@ -31,3 +31,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.tmp
+
+server/selftest-deploy-loop-log.txt
