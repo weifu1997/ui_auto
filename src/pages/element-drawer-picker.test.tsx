@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import type { ElementAsset, Environment, Project } from "../mock-data";
 
 vi.mock("../antd-feedback", () => ({
@@ -137,5 +138,34 @@ describe("ElementDrawer 从页面获取（统一本地通道）", () => {
       expect(screen.getByLabelText("所属页面路径")).toHaveValue("/login");
     });
     expect(message.warning).toHaveBeenCalledWith("元素库中已存在相同定位器，保存后可能产生重复元素");
+  });
+
+  it("新建抽屉关闭后重新打开不残留上次输入的名称", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>open-drawer</button>
+          <button type="button" onClick={() => setOpen(false)}>close-drawer</button>
+          <ElementDrawer
+            open={open}
+            element={undefined}
+            project={project}
+            environments={[environment]}
+            elements={[]}
+            onClose={() => setOpen(false)}
+            onSave={() => setOpen(false)}
+          />
+        </>
+      );
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "open-drawer" }));
+    await waitFor(() => expect(screen.getByLabelText("元素名称")).toBeTruthy(), { timeout: 4_000 });
+    fireEvent.change(screen.getByLabelText("元素名称"), { target: { value: "上次的名称" } });
+    expect(screen.getByLabelText("元素名称")).toHaveValue("上次的名称");
+    fireEvent.click(screen.getByRole("button", { name: "close-drawer" }));
+    fireEvent.click(screen.getByRole("button", { name: "open-drawer" }));
+    await waitFor(() => expect(screen.getByLabelText("元素名称")).toHaveValue(""), { timeout: 4_000 });
   });
 });

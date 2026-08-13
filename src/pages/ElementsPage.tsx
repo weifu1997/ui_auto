@@ -382,6 +382,8 @@ export function ElementDrawer({
   const selectedEnvironment = Form.useWatch("environment", form);
   useEffect(() => {
     if (!open) return;
+    // 先清空上次表单内容，避免新建时残留上一次输入的名称/定位值。
+    form.resetFields();
     form.setFieldsValue(
       element ?? {
         method: "testid",

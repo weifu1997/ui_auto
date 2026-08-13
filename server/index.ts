@@ -990,7 +990,14 @@ async function executeValidation(task: Task, request: ValidationRequest) {
     const target = environmentUrl(environment.baseUrl, element.path);
     await page.goto(target, { waitUntil: "domcontentloaded", timeout: environment.timeout * 1000 });
     const locator = locatorFor(page!, element, environment.testIdAttribute);
-    const count = await locator.count();
+    // SPA 页面在 domcontentloaded 后仍需 JS 渲染，等待定位器出现再统计匹配数。
+    let count = 0;
+    try {
+      await locator.first().waitFor({ state: "attached", timeout: environment.timeout * 1000 });
+      count = await locator.count();
+    } catch {
+      count = 0;
+    }
     const screenshotId = await saveArtifact(
       task,
       `validation-${element.id}.png`,
