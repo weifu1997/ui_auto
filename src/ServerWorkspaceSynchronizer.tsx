@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import type { ElementAsset, Environment, Flow, Variable } from "./mock-data";
+import type { ElementAsset, Environment, Flow, FlowStep, Variable } from "./mock-data";
 import {
   PlatformApiError,
   archivePlatformResource,
   createPlatformResource,
+  createPlatformRevision,
   getPlatformResources,
   getPlatformSettings,
   getWorkspaceProjects,
@@ -24,6 +25,29 @@ type LoadedProject = {
   resources: Record<PlatformResourceType, Array<PlatformResource<ResourceData>>>;
   settings: { data: Record<string, unknown>; version: number };
 };
+
+// 快照构建辅助：与 src/pages/shared.tsx 中的实现保持一致。
+// 内联在此处，避免同步器反向引用懒加载页面模块造成循环依赖。
+function variableReference(variable: Variable) {
+  return `${variable.scope === "环境" ? "env" : "project"}.${variable.name}`;
+}
+
+function requiredSecretVariables(variables: Variable[], steps: FlowStep[]) {
+  return variables.filter((variable) => {
+    if (!variable.secret || (variable.scope !== "环境" && variable.scope !== "项目")) return false;
+    const reference = variableReference(variable).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const token = new RegExp(`{{\\s*${reference}\\s*}}`);
+    return steps.some((step) => token.test(step.value));
+  });
+}
+
+function snapshotVariables(variables: Variable[]) {
+  return Object.fromEntries(
+    variables
+      .filter((variable) => !variable.secret && (variable.scope === "项目" || variable.scope === "环境"))
+      .map((variable) => [variableReference(variable), variable.value]),
+  );
+}
 
 const resourceTypes: PlatformResourceType[] = ["flows", "elements", "variables", "environments"];
 export const platformConflictActionEvent = "autoflow-platform-conflict-action";
@@ -260,6 +284,7 @@ export function ServerWorkspaceSynchronizer() {
           }
           useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "synced");
           useWorkspaceStore.getState().setPlatformSyncError(projectId);
+          schedule(`${projectId}:snapshot`, () => syncSnapshot(projectId));
         } catch (error) {
           failSync(projectId, error);
         }
@@ -267,6 +292,37 @@ export function ServerWorkspaceSynchronizer() {
         inFlightSyncs.current.delete(syncKey);
         if (pendingSyncs.current.delete(syncKey)) {
           schedule(syncKey, () => syncResources(projectId, type));
+        }
+      }
+    };
+
+    // 保存即快照：资源同步完成后，为每个有步骤的流程自动创建 published 版本。
+    // 服务端按 checksum 幂等去重（无变化不产生新版本），失败静默由下次保存重试。
+    const syncSnapshot = async (projectId: string) => {
+      const state = useWorkspaceStore.getState();
+      const flows = state.flowsByProject[projectId] ?? [];
+      const variables = state.variablesByProject[projectId] ?? [];
+      const elements = state.elementsByProject[projectId] ?? [];
+      const environments = state.environmentsByProject[projectId] ?? [];
+      const environment = environments.find((item) => item.id === state.activeEnvironmentByProject[projectId]) ?? environments[0];
+      if (!environment) return;
+      for (const flow of flows) {
+        if (!flow.definition?.length) continue;
+        try {
+          await createPlatformRevision(session.token, projectId, {
+            flow: {
+              id: flow.id,
+              name: flow.name,
+              description: flow.description,
+              steps: flow.definition,
+              variables: snapshotVariables(variables),
+            },
+            environment,
+            elements: elements.filter((item) => !item.environment || item.environment === environment.id),
+            secretNames: requiredSecretVariables(variables, flow.definition).map(variableReference),
+          });
+        } catch {
+          // 快照失败不阻断保存，下次同步成功后自动重试。
         }
       }
     };

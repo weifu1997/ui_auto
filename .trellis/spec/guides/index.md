@@ -51,6 +51,20 @@ These guides help you **ask the right questions before coding**.
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
 
+### When Backing Up / Resetting a Local SQLite Database
+
+- [ ] Copy **all three files** (`x.sqlite` + `x.sqlite-wal` + `x.sqlite-shm`) into the timestamped backup dir — a live DB keeps most recent data in the WAL; copying only the main file is NOT recoverable (real case 2026-08-10: `platform.sqlite` was 4 KB while 1.7 MB lived in the WAL)
+- [ ] Only delete the DB the task authorizes (e.g. `platform.sqlite`), never `autoflow.sqlite` or unrelated worktree changes; never delete the backup dir
+- [ ] Reset is the only recovery for a lost Platform account — password hashes are unrecoverable and there is no delete-account API; test accounts created during verification stay in the local DB
+- [ ] Restart the service, then verify the full closure before declaring done: `POST /api/auth/register` (201) → session restore via cookie (200) → `GET /health` (online)
+
+### When Removing a Feature / Subsystem
+
+- [ ] Grep every reference (API functions, types, routes, UI labels, tests, docs) before deleting — `AgentRecord`/`debug-*`/`lease` style symbol names spread across server, src, tests (real case 2026-08-13: Agent 远程执行裁剪扫出 20+ 引用文件)
+- [ ] Delete in dependency order: child tables before parent tables; client modules before their consumers
+- [ ] Keep shared kernels that other paths still use (e.g. `runner-core` / `picker-core` stay even when the agent protocol dies); check reverse references (`platform-core.safeArtifactName` used by legacy worker)
+- [ ] Run the full gate (`build / lint / test:unit / test:platform / test:managed / test:worker / test:e2e / test:production / test:windows`) and fix every dead-code lint/TS error, then update README/docs in the same batch
+
 ### When Verifying AI Cross-Review Results
 
 - [ ] Reviewer claims "user input can be malicious" → Check the actual data source (internal manifest? user config? external API?)

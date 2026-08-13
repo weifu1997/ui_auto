@@ -23,6 +23,9 @@ import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { message, modal } from "./antd-feedback";
 import { localWorkerRunRequest } from "./local-worker-run";
+import { PlatformApiError, createPlatformRun, savePlatformSecret } from "./platform-api";
+import { platformProjectContext } from "./platform-context";
+import { platformRunAsRun } from "./pages/shared";
 import { createRun } from "./worker-api";
 import { actionOptions } from "./mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "./mock-data";
@@ -223,6 +226,28 @@ export default function FlowEditorPage() {
       setRunToStep(false);
       return;
     }
+    const platformContext = platformProjectContext(project.id);
+    if (platformContext) {
+      try {
+        for (const variable of requiredSecretVariables(variables, stepsToRun)) {
+          const value = secretValues[variable.id];
+          if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
+        }
+        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: environment.id, upToStepId });
+        result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+        message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
+        if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
+      } catch (error) {
+        if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
+          message.error("当前项目还没有版本快照，请先保存流程");
+        } else {
+          message.error("创建平台运行失败，请检查执行服务与运行环境");
+        }
+      } finally {
+        setRunToStep(false);
+      }
+      return;
+    }
     try {
       const request = localWorkerRunRequest({
         environment,
@@ -259,117 +284,6 @@ export default function FlowEditorPage() {
       setRunToStep(false);
     }
     return;
-    /* Remote execution remains available only from the Platform page.
-    let revisionId: string | undefined;
-    let publishedStepCount: number | undefined;
-    let platformReady = false;
-    if (platformContext) {
-      try {
-        const [{ revisions }, { bindings }] = await Promise.all([
-          getPlatformRevisions(platformContext.session.token, platformContext.projectId),
-          getAgentBindings(platformContext.session.token, platformContext.projectId),
-        ]);
-        const revision = revisions.find((item) => (
-          item.status === "published" &&
-          item.flowId === flow.id &&
-          item.environmentId === environment.id
-        ));
-        revisionId = revision?.id;
-        publishedStepCount = revision?.stepCount;
-        platformReady = Boolean(
-          revision && bindings.some((binding) => (
-            binding.environmentId === environment.id && binding.agent.status === "online"
-          )),
-        );
-      } catch {
-        // A local Worker can execute drafts when the optional Platform is unavailable.
-      }
-    }
-    const secretValues = await requestRunSecrets(
-      project.id,
-      variables,
-      stepsToRun,
-      sessionSecretValues,
-      setSecretValues,
-    );
-    if (!secretValues) {
-      setRunToStep(false);
-      return;
-    }
-    try {
-      const workerSecretVariables = requiredSecretVariables(variables, stepsToRun);
-      if (!platformContext || !platformReady || !revisionId) {
-        const request = localWorkerRunRequest({
-          environment,
-          flow: { id: flow.id, name: flow.name },
-          steps,
-          elements,
-          variables,
-          secretValues,
-          secretVariables: workerSecretVariables,
-          upToStepId,
-        });
-        const { runId } = await createRun(project.id, request);
-        const totalSteps = upToStepId
-          ? steps.findIndex((step) => step.id === upToStepId) + 1
-          : steps.length;
-        upsertRun(project.id, {
-          id: runId,
-          flowName: flow.name,
-          status: "queued",
-          environment: environment.name,
-          progress: 0,
-          completedSteps: 0,
-          totalSteps,
-          startedAt: "刚刚",
-          duration: "排队中",
-          screenshots: 0,
-          retries: 0,
-          request,
-        });
-        message.info("平台没有可用的已绑定在线 Agent，已改用本机 Playwright Worker");
-        navigate(`/project/${project.id}/runs/${runId}`);
-        return;
-      }
-      const platformSecretVariables = requiredSecretVariables(variables, steps);
-      await Promise.all(
-        platformSecretVariables.flatMap((variable) => {
-          const value = secretValues[variable.id];
-          return value ? [savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value })] : [];
-        }),
-      );
-      const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, {
-        revisionId,
-        environmentId: environment.id,
-        upToStepId,
-      });
-      const runId = result.runIds[0];
-      if (!runId) throw new Error("PLATFORM_RUN_NOT_CREATED");
-      const totalSteps = upToStepId
-        ? steps.findIndex((step) => step.id === upToStepId) + 1
-        : publishedStepCount ?? steps.length;
-      upsertRun(project.id, {
-        id: runId,
-        flowName: flow?.name ?? "临时流程",
-        status: "queued",
-        environment: environment.name,
-        progress: 0,
-        completedSteps: 0,
-        totalSteps,
-        startedAt: "刚刚",
-        duration: "排队中",
-        screenshots: 0,
-        retries: 0,
-      });
-      message.success("已创建已发布版本的 Agent 运行");
-      navigate(`/project/${project.id}/runs`);
-    } catch {
-      message.error("创建 Agent 运行失败，请确认密钥、版本和环境绑定配置");
-    } finally {
-      setRunToStep(false);
-    }
-  };
-    */
   };
   return (
     <div className="editor-page">
@@ -407,6 +321,7 @@ export default function FlowEditorPage() {
               <Button
                 type="text"
                 icon={<PlusOutlined />}
+                aria-label="新增步骤"
                 onClick={() => addStep()}
               />
             </Tooltip>
@@ -466,7 +381,7 @@ export default function FlowEditorPage() {
                   ],
                 }}
               >
-                <Button type="text" icon={<MoreOutlined />} />
+                <Button type="text" icon={<MoreOutlined />} aria-label={`步骤 ${selectedStep?.title} 操作`} />
               </Dropdown>
             )}
           </div>
@@ -490,6 +405,7 @@ export default function FlowEditorPage() {
             <Button
               type="text"
               icon={<PlusOutlined />}
+              aria-label="前往元素库"
               onClick={() => navigate(`/project/${project.id}/elements`)}
             />
           </div>
@@ -646,6 +562,7 @@ function SortableStep({
         <Button
           type="text"
           icon={<MoreOutlined />}
+          aria-label={`步骤 ${step.title} 操作`}
           onClick={(event) => event.stopPropagation()}
         />
       </Dropdown>

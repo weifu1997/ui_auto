@@ -64,14 +64,6 @@ test("persists managed assets, settings, and project archival", async ({ page })
   await page.reload();
   await expect(page.getByLabel("项目名称")).toHaveValue("已更新的管理项目");
 
-  await page.getByRole("button", { name: "添加成员" }).click();
-  await page.getByLabel("成员姓名").fill("测试协作者");
-  await page.getByLabel("成员邮箱").fill("collaborator@example.test");
-  await page.getByRole("button", { name: "添加成员" }).last().click();
-  await expect(page.getByText("测试协作者", { exact: true })).toBeVisible();
-  await page.reload();
-  await expect(page.getByText("collaborator@example.test", { exact: true })).toBeVisible();
-
   await page.getByRole("button", { name: "归档项目" }).click();
   await page.getByRole("button", { name: "归档项目", exact: true }).click();
   await expect(page).toHaveURL(/\/projects$/);
@@ -109,5 +101,6 @@ test("assembles a flow-list Platform run with its active environment and variabl
   await expect(page).toHaveURL(/\/project\/project\/runs$/);
   await expect(page.getByText("从列表运行的流程", { exact: true })).toBeVisible();
   expect(calls.revisions).toHaveLength(0);
-  expect(calls.runs).toHaveLength(0);
+  expect(calls.runs).toHaveLength(1);
+  expect(calls.runs[0]).not.toHaveProperty("revisionId");
 });

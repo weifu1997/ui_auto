@@ -111,7 +111,7 @@ function platformTaskAsRun(task: PlatformRun, fallback?: Run): Run {
     startedAt: new Date(task.createdAt).toLocaleString(),
     duration: isTerminalStatus(status) ? "Finished" : "In progress",
     screenshots: task.artifacts.filter((artifact) => artifact.contentType.startsWith("image/")).length,
-    retries: Math.max(0, (task.lease?.attempt ?? 1) - 1),
+    retries: 0,
   };
 }
 
@@ -133,7 +133,7 @@ function platformEventAsLog(event: PlatformRun["events"][number]): ReportLog {
     id: String(event.id),
     time: eventTime(event.at),
     level: failed ? "error" : completed ? "success" : "info",
-    step: Number.isFinite(index) ? `${index + 1}. ${title}` : "Agent",
+    step: Number.isFinite(index) ? `${index + 1}. ${title}` : "平台",
     message,
     duration: durationFromMilliseconds(event.data.durationMs),
   };
@@ -402,7 +402,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
         });
         const nextRunId = created.runIds[0];
         if (!nextRunId) throw new Error("PLATFORM_RUN_NOT_CREATED");
-        message.success("已重新提交给 Agent");
+        message.success("已重新提交运行");
         navigate(`/project/${project.id}/runs/${nextRunId}`);
       } catch {
         message.error("重新提交平台运行失败");
@@ -438,7 +438,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
       try {
         const response = await cancelPlatformRun(context.session.token, context.platformProjectId, runId);
         setPlatformTask(response.run);
-        message.info("已向 Agent 发送取消请求。");
+        message.info("已发送取消请求。");
       } catch {
         message.error("取消平台运行失败");
       } finally {
@@ -520,7 +520,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
             <div><Statistic title="截图" value={run.screenshots} /></div>
             <div><Statistic title="重试次数" value={run.retries} /></div>
             {workerTask && <div><Statistic title="浏览器" value={browserState} /></div>}
-            {platformTask && <div><Statistic title="执行节点" value={platformTask.agent?.name ?? "Agent"} /></div>}
+            {platformTask && <div><Statistic title="执行节点" value="部署机本机" /></div>}
             {workerTask?.queue?.position && (
               <div><Statistic title="队列位置" value={`第 ${workerTask.queue.position} 位`} /></div>
             )}

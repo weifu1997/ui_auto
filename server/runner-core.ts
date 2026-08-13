@@ -83,7 +83,14 @@ export async function executeElementValidation(input: ElementValidationInput, ho
     });
     if (hooks.signal.aborted) throw new Error("RUN_CANCELED");
     const locator = locatorFor(page, input.element, input.environment.testIdAttribute);
-    const count = await locator.count();
+    // SPA 页面在 domcontentloaded 后仍需 JS 渲染，等待定位器出现再统计匹配数。
+    let count = 0;
+    try {
+      await locator.first().waitFor({ state: "attached", timeout: 15_000 });
+      count = await locator.count();
+    } catch {
+      count = 0;
+    }
     const firstMatch = count > 0
       ? await locator.first().evaluate((node) => node.outerHTML.slice(0, 1_000)).catch(() => undefined)
       : undefined;

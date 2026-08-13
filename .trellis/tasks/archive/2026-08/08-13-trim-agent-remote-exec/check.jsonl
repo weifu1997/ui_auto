@@ -1,0 +1,2 @@
+{"file": "docs/决策-内网部署形态与平台裁剪.md", "reason": "验收对照：裁剪范围与保留能力边界"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查裁剪后共享内核（runner-core/picker-core）复用与残留"}

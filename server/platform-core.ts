@@ -6,7 +6,6 @@ import {
 import { basename, join, resolve } from "node:path";
 import { isIP } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { PlatformError } from "./http-utils";
 import { notificationHostAllowed as hostAllowed } from "./platform-automations";
@@ -21,10 +20,10 @@ export type { Capability, Role } from "./platform-workspaces";
 
 export { PlatformError, readBody, readJson, sendError, sendJson } from "./http-utils";
 
+// 保存即发布后，新快照只会产生 published/superseded/deprecated；
+// draft/pending_review/rejected 仅用于兼容历史数据读取。
 export type RevisionStatus = "draft" | "pending_review" | "published" | "rejected" | "deprecated" | "superseded";
 export type PlatformRunStatus = "queued" | "dispatched" | "running" | "success" | "failed" | "canceled";
-export type LeaseStatus = "offered" | "leased" | "expired" | "completed" | "canceled";
-export type DebugSessionStatus = "requested" | "active" | "paused" | "ending" | "ended" | "failed" | "expired";
 export type NotificationChannelType = "webhook" | "feishu" | "dingtalk" | "wecom" | "email";
 export type DeliveryStatus = "pending" | "retrying" | "delivering" | "delivered" | "failed";
 export type ValidatedNotificationTarget = { url: URL; address: string };
@@ -44,18 +43,6 @@ export type ElementValidation = {
 };
 
 export type AuthUser = { id: string; email: string; name: string };
-export type AgentRecord = {
-  id: string;
-  workspaceId: string;
-  name: string;
-  status: "online" | "offline" | "disabled";
-  browserVersion: string;
-  os: string;
-  maxConcurrency: number;
-  currentTask: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-};
 export type PlatformRun = {
   id: string;
   projectId: string;
@@ -69,37 +56,6 @@ export type PlatformRun = {
   cancellationRequested: boolean;
   createdAt: string;
   updatedAt: string;
-};
-export type Lease = {
-  id: string;
-  runId: string;
-  agentId: string;
-  status: LeaseStatus;
-  expiresAt: string;
-  attempt: number;
-};
-export type DebugSession = {
-  id: string;
-  projectId: string;
-  revisionId: string;
-  environmentId: string;
-  agentId: string;
-  status: DebugSessionStatus;
-  snapshot: Record<string, unknown>;
-  currentStep: number;
-  currentUrl: string | null;
-  browserContextId: string | null;
-  idleExpiresAt: string;
-  maxExpiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-};
-export type LocatorCandidate = {
-  method: "testid" | "role" | "label" | "text" | "css";
-  value: string;
-  count: number;
-  score: number;
-  label: string;
 };
 
 export type ProjectDocument = {
@@ -131,17 +87,12 @@ export type PublishedRevision = {
 
 export type PlatformApi = {
   handle: (request: IncomingMessage, response: ServerResponse, url: URL) => Promise<boolean>;
-  handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
 };
 
 export const jsonContentType = { "content-type": "application/json; charset=utf-8" };
 export const platformArtifactDirectory = resolve(
   process.env.PLATFORM_ARTIFACT_DIRECTORY ?? join("server", ".platform-artifacts"),
 );
-export const agentLeaseDurationMs = Number(process.env.AGENT_LEASE_DURATION_MS ?? 45_000);
-export const agentOfflineAfterMs = Number(process.env.AGENT_OFFLINE_AFTER_MS ?? 45_000);
-export const debugIdleTimeoutMs = Number(process.env.DEBUG_IDLE_TIMEOUT_MS ?? 15 * 60_000);
-export const debugMaxDurationMs = Number(process.env.DEBUG_MAX_DURATION_MS ?? 2 * 60 * 60_000);
 export const webhookTimestampToleranceMs = Number(process.env.WEBHOOK_TIMESTAMP_TOLERANCE_MS ?? 5 * 60_000);
 export const webhookRateLimitPerMinute = Number(process.env.WEBHOOK_RATE_LIMIT_PER_MINUTE ?? 10);
 export const webhookMaxRuns = Number(process.env.WEBHOOK_MAX_RUNS ?? 100);
@@ -191,31 +142,9 @@ export function authorization(request: IncomingMessage) {
   return cookie?.[1] ? decodeURIComponent(cookie[1]) : undefined;
 }
 
-export function leaseExpiresAt() {
-  return new Date(Date.now() + agentLeaseDurationMs).toISOString();
-}
-
 export function safeArtifactName(value: string) {
   const filename = basename(value).replace(/[^a-zA-Z0-9._-]/g, "_");
   return filename || "artifact.bin";
-}
-
-export function normalizeLocatorCandidates(value: unknown) {
-  if (!Array.isArray(value)) return [] as LocatorCandidate[];
-  const supportedMethods = new Set<LocatorCandidate["method"]>(["testid", "role", "label", "text", "css"]);
-  return value.flatMap((item) => {
-    const candidate = asRecord(item);
-    const method = candidate.method;
-    const locatorValue = candidate.value;
-    if (typeof method !== "string" || !supportedMethods.has(method as LocatorCandidate["method"]) || typeof locatorValue !== "string" || !locatorValue.trim()) return [];
-    return [{
-      method: method as LocatorCandidate["method"],
-      value: locatorValue.slice(0, 500),
-      count: typeof candidate.count === "number" && Number.isFinite(candidate.count) ? Math.max(0, Math.floor(candidate.count)) : 0,
-      score: typeof candidate.score === "number" && Number.isFinite(candidate.score) ? Math.max(0, Math.min(100, Math.round(candidate.score))) : 0,
-      label: typeof candidate.label === "string" ? candidate.label.slice(0, 160) : locatorValue.slice(0, 160),
-    } satisfies LocatorCandidate];
-  }).slice(0, 12);
 }
 
 export function failureCategory(message: unknown) {

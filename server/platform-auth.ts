@@ -21,11 +21,13 @@ export function passwordMatches(password: string, encoded: string) {
 }
 
 export function setSessionCookie(response: ServerResponse, token: string, expiresAt: string) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  // Secure 只在实际加密连接（HTTPS/反向代理 TLS）上设置；http 部署（内网/本机）不设置，
+  // 否则浏览器会拒绝 cookie 导致登录后会话无法恢复（生产模式 + http 的真实案例 2026-08-13）。
+  const secure = (response.req.socket as NodeJS.Socket & { encrypted?: boolean }).encrypted || process.env.AUTOFLOW_COOKIE_SECURE === "1" ? "; Secure" : "";
   response.setHeader("set-cookie", `autoflow_session=${encodeURIComponent(token)}; Path=/api; HttpOnly; SameSite=Strict; Expires=${new Date(expiresAt).toUTCString()}${secure}`);
 }
 
 export function clearSessionCookie(response: ServerResponse) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = (response.req.socket as NodeJS.Socket & { encrypted?: boolean }).encrypted || process.env.AUTOFLOW_COOKIE_SECURE === "1" ? "; Secure" : "";
   response.setHeader("set-cookie", `autoflow_session=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
 }

@@ -4,19 +4,6 @@ export function platformApiOrigin() {
   return new URL(apiBase, window.location.origin).origin;
 }
 
-export type PlatformAgent = {
-  id: string;
-  workspaceId: string;
-  name: string;
-  status: "online" | "offline" | "disabled";
-  browserVersion: string;
-  os: string;
-  maxConcurrency: number;
-  currentTask: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-};
-
 export type PlatformSession = {
   token: string;
   user: { id: string; email: string; name: string };
@@ -79,29 +66,10 @@ export type PlatformRun = {
   cancellationRequested: boolean;
   createdAt: string;
   updatedAt: string;
-  lease?: { id: string; runId: string; agentId: string; status: string; expiresAt: string; attempt: number; expired: boolean };
   agent?: { id: string; name: string; browserVersion: string; os: string; maxConcurrency: number; lastSeenAt: string | null };
   artifacts: Array<{ id: string; name: string; contentType: string; createdAt: string }>;
   events: Array<{ id: number; kind: string; data: Record<string, unknown>; at: string }>;
   flowOutputs: Array<{ name: string; value: string; source: string; createdAt: string }>;
-};
-
-export type PlatformDebugSession = {
-  id: string;
-  projectId: string;
-  revisionId: string;
-  environmentId: string;
-  agentId: string;
-  status: "requested" | "active" | "paused" | "ending" | "ended" | "failed" | "expired";
-  currentStep: number;
-  currentUrl: string | null;
-  idleExpiresAt: string;
-  maxExpiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-  agent?: { id: string; name: string; browserVersion: string; os: string; lastSeenAt: string | null };
-  artifacts: Array<{ id: string; name: string; contentType: string; createdAt: string }>;
-  events: Array<{ id: number; kind: string; data: Record<string, unknown>; at: string }>;
 };
 
 export type PlatformElementValidation = {
@@ -115,22 +83,6 @@ export type PlatformElementValidation = {
   error?: string;
   createdAt: string;
   updatedAt: string;
-};
-
-export type PlatformPickerCapture = {
-  id: string;
-  sessionId: string;
-  target: string;
-  status: "pending" | "confirmed";
-  capturedAt: string;
-  confirmedAt: string | null;
-  candidates: Array<{
-    method: "testid" | "role" | "label" | "text" | "css";
-    value: string;
-    count: number;
-    score: number;
-    label: string;
-  }>;
 };
 
 export type PlatformElement = {
@@ -230,8 +182,6 @@ export type PlatformAnalytics = {
   elementImpact: Array<{ elementId: string; name: string; runCount: number; flowCount: number; failedRuns: number; lastUsedAt: string }>;
 };
 
-export type PlatformMemberRole = "owner" | "admin" | "publisher" | "product" | "tester" | "operations" | "editor" | "viewer";
-export type PlatformMember = { id: string; email: string; name: string; role: PlatformMemberRole; enabled: boolean; credentialConfigured: boolean };
 export type PlatformAuditEvent = { id: string; actorType: string; actorId: string; action: string; targetType: string; targetId: string; detail: Record<string, unknown>; createdAt: string };
 
 export class PlatformApiError extends Error {
@@ -283,7 +233,7 @@ export async function loginPlatform(input: { email: string; password: string; na
   return { ...session, token: "cookie" } satisfies PlatformSession;
 }
 
-export async function registerPlatform(input: { email: string; password: string; name?: string; invitationToken?: string }) {
+export async function registerPlatform(input: { email: string; password: string; name?: string }) {
   await request<{ token: string; user: PlatformSession["user"] }>("/auth/register", {
     method: "POST",
     body: JSON.stringify(input),
@@ -299,35 +249,6 @@ export function logoutPlatform() {
 export async function restorePlatformSession() {
   const session = await request<Omit<PlatformSession, "token">>("/auth/session");
   return { ...session, token: "cookie" } satisfies PlatformSession;
-}
-
-export function getPlatformAgents(token: string, workspaceId: string) {
-  return request<{ agents: PlatformAgent[] }>(`/agents?workspaceId=${encodeURIComponent(workspaceId)}`, {}, token);
-}
-
-export function createAgentRegistrationToken(token: string, workspaceId: string) {
-  return request<{ registrationToken: string; expiresAt: string }>(
-    "/agent-tokens",
-    { method: "POST", body: JSON.stringify({ workspaceId, expiresInMinutes: 30 }) },
-    token,
-  );
-}
-
-export function getAgentBindings(token: string, projectId: string) {
-  return request<{
-    bindings: Array<{
-      environmentId: string;
-      agent: Pick<PlatformAgent, "id" | "name" | "status" | "browserVersion" | "lastSeenAt">;
-    }>;
-  }>(`/platform/projects/${encodeURIComponent(projectId)}/agent-bindings`, {}, token);
-}
-
-export function bindAgent(token: string, projectId: string, environmentId: string, agentId: string) {
-  return request<{ projectId: string; environmentId: string; agentId: string }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/agent-bindings`,
-    { method: "PUT", body: JSON.stringify({ environmentId, agentId }) },
-    token,
-  );
 }
 
 export function importLocalWorkspace(
@@ -494,20 +415,6 @@ export function publishPlatformRevision(token: string, projectId: string, revisi
   );
 }
 
-export function submitPlatformRevision(token: string, projectId: string, revisionId: string, note?: string) {
-  return request<{ revisionId: string; status: "pending_review" }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/submit`,
-    { method: "POST", body: JSON.stringify({ note }) }, token,
-  );
-}
-
-export function rejectPlatformRevision(token: string, projectId: string, revisionId: string, note: string) {
-  return request<{ revisionId: string; status: "rejected" }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/reject`,
-    { method: "POST", body: JSON.stringify({ note }) }, token,
-  );
-}
-
 export function rollbackPlatformRevision(token: string, projectId: string, revisionId: string, note?: string) {
   return request<{ revisionId: string; sourceRevisionId: string; status: "published" }>(
     `/platform/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/rollback`,
@@ -515,7 +422,7 @@ export function rollbackPlatformRevision(token: string, projectId: string, revis
   );
 }
 
-export function createPlatformRun(token: string, projectId: string, input: { revisionId: string; environmentId: string; datasetVersionId?: string; upToStepId?: string }) {
+export function createPlatformRun(token: string, projectId: string, input: { revisionId?: string; environmentId: string; datasetVersionId?: string; upToStepId?: string }) {
   return request<{ run?: PlatformRun; runs: PlatformRun[]; runIds: string[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs`,
     { method: "POST", body: JSON.stringify(input) },
@@ -587,93 +494,6 @@ export async function fetchPlatformArtifact(token: string, artifactId: string) {
   } finally {
     window.clearTimeout(timeout);
   }
-}
-
-export function getDebugSessions(token: string, projectId: string) {
-  return request<{ sessions: PlatformDebugSession[] }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions`,
-    {},
-    token,
-  );
-}
-
-export function createDebugSession(
-  token: string,
-  projectId: string,
-  input: { revisionId: string; environmentId: string; startStep?: number },
-) {
-  return request<{ session: PlatformDebugSession }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions`,
-    { method: "POST", body: JSON.stringify(input) },
-    token,
-  );
-}
-
-export function sendDebugCommand(
-  token: string,
-  projectId: string,
-  sessionId: string,
-  command: "start" | "continue" | "runCurrent" | "skip" | "pause" | "retry" | "stop",
-) {
-  return request<{ session: PlatformDebugSession }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/commands`,
-    { method: "POST", body: JSON.stringify({ command }) },
-    token,
-  );
-}
-
-export function debugArtifactUrl(artifactId: string) {
-  return `${apiBase}/platform/debug-artifacts/${encodeURIComponent(artifactId)}`;
-}
-
-export async function fetchDebugArtifact(token: string, artifactId: string) {
-  const response = await fetch(debugArtifactUrl(artifactId), {
-    credentials: "include",
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new PlatformApiError(response.status, body.error ?? "DEBUG_ARTIFACT_FETCH_FAILED");
-  }
-  return response.blob();
-}
-
-export function enableElementPicker(token: string, projectId: string, sessionId: string) {
-  return request<{ session: PlatformDebugSession }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker/enable`,
-    { method: "POST" },
-    token,
-  );
-}
-
-export function getPickerCaptures(token: string, projectId: string, sessionId: string) {
-  return request<{ captures: PlatformPickerCapture[] }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures`,
-    {},
-    token,
-  );
-}
-
-export function previewPickerCandidate(token: string, projectId: string, sessionId: string, captureId: string, candidateIndex: number) {
-  return request<{ candidateIndex: number }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/preview`,
-    { method: "POST", body: JSON.stringify({ candidateIndex }) },
-    token,
-  );
-}
-
-export function confirmPickerCandidate(
-  token: string,
-  projectId: string,
-  sessionId: string,
-  captureId: string,
-  input: { candidateIndex: number; target: "element" | "step"; name?: string; flowId?: string; stepId?: string },
-) {
-  return request<{ element: PlatformElement; documentVersion: number; target: "element" | "step" }>(
-    `/platform/projects/${encodeURIComponent(projectId)}/debug-sessions/${encodeURIComponent(sessionId)}/picker-captures/${encodeURIComponent(captureId)}/confirm`,
-    { method: "POST", body: JSON.stringify(input) },
-    token,
-  );
 }
 
 export function getPlatformDatasets(token: string, projectId: string) {
@@ -800,34 +620,10 @@ export function getPlatformDeliveries(token: string, projectId: string) {
   return request<{ deliveries: PlatformDelivery[] }>(`/platform/projects/${encodeURIComponent(projectId)}/deliveries`, {}, token);
 }
 
-export function getPlatformAnalytics(token: string, projectId: string) {
-  return request<{ analytics: PlatformAnalytics }>(`/platform/projects/${encodeURIComponent(projectId)}/analytics`, {}, token);
-}
-
 export function getPlatformAuditEvents(token: string, projectId: string) {
   return request<{ events: PlatformAuditEvent[] }>(`/platform/projects/${encodeURIComponent(projectId)}/audit-events`, {}, token);
 }
 
-export function getWorkspaceMembers(token: string, workspaceId: string) {
-  return request<{ members: PlatformMember[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {}, token);
-}
-
-export function addWorkspaceMember(token: string, workspaceId: string, input: { email: string; name?: string; role: PlatformMember["role"] }) {
-  return request<{ member: PlatformMember; invitationToken?: string; invitationExpiresAt?: string }>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, { method: "POST", body: JSON.stringify(input) }, token);
-}
-
-export function updateWorkspaceMember(token: string, workspaceId: string, memberId: string, role: PlatformMember["role"]) {
-  return request<{ memberId: string; role: PlatformMember["role"] }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`, { method: "PATCH", body: JSON.stringify({ role }) }, token);
-}
-
-export function removeWorkspaceMember(token: string, workspaceId: string, memberId: string) {
-  return request<{ memberId: string; removed: boolean }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }, token);
-}
-
-export function setWorkspaceMemberEnabled(token: string, workspaceId: string, memberId: string, enabled: boolean) {
-  return request<{ memberId: string; enabled: boolean }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}/account`, { method: "PATCH", body: JSON.stringify({ enabled }) }, token);
-}
-
-export function resetWorkspaceMemberPassword(token: string, workspaceId: string, memberId: string, password: string) {
-  return request<{ memberId: string; passwordReset: boolean }>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}/reset-password`, { method: "POST", body: JSON.stringify({ password }) }, token);
+export function getPlatformAnalytics(token: string, projectId: string) {
+  return request<{ analytics: PlatformAnalytics }>(`/platform/projects/${encodeURIComponent(projectId)}/analytics`, {}, token);
 }

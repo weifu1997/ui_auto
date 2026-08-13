@@ -1,0 +1,2 @@
+export const environmentNameOptions = ["开发环境", "测试环境", "正式环境"].map((value) => ({ value }));
+export const testIdAttributeOptions = ["data-testid", "data-test", "data-cy", "data-qa", "name", "id"].map((value) => ({ value }));

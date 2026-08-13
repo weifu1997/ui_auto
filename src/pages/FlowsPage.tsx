@@ -1,10 +1,12 @@
 import { message } from "../antd-feedback";
 import { localWorkerRunRequest } from "../local-worker-run";
 import type { Flow, Project, Run } from "../mock-data";
+import { PlatformApiError, createPlatformRun, savePlatformSecret } from "../platform-api";
+import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, requestRunSecrets, requiredSecretVariables, statusTag, watchWorkerRun } from "./shared";
+import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, variableReference, watchWorkerRun } from "./shared";
 import { createRun } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
@@ -75,6 +77,26 @@ export function FlowsPage({ project }: { project: Project }) {
       setSecretValues,
     );
     if (!secretValues) return;
+    const platformContext = platformProjectContext(project.id);
+    if (platformContext) {
+      try {
+        for (const variable of requiredSecretVariables(variables, steps)) {
+          const value = secretValues[variable.id];
+          if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
+        }
+        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: activeEnvironment.id });
+        result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+        message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
+        navigate(`/project/${project.id}/runs`);
+      } catch (error) {
+        if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
+          message.error("当前项目还没有版本快照，请先在编排器中保存流程");
+          return;
+        }
+        message.error("创建平台运行失败，请检查执行服务与运行环境");
+      }
+      return;
+    }
     try {
       const secretVariables = requiredSecretVariables(variables, steps);
       if (secretVariables.length > 0 && production) {
@@ -111,113 +133,6 @@ export function FlowsPage({ project }: { project: Project }) {
       message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
     }
     return;
-    /* Legacy remote execution is intentionally unreachable from the default action.
-    const platformContext = platformProjectContext(project.id);
-    let revision: PlatformRevision | undefined;
-    let platformReady = false;
-    if (platformContext) {
-      try {
-        const [{ revisions }, { bindings }] = await Promise.all([
-          getPlatformRevisions(platformContext.session.token, platformContext.projectId),
-          getAgentBindings(platformContext.session.token, platformContext.projectId),
-        ]);
-        revision = revisions.find((item) => (
-          item.status === "published" &&
-          item.flowId === flow.id &&
-          item.environmentId === activeEnvironment.id
-        ));
-        platformReady = Boolean(
-          revision && bindings.some((binding) => (
-            binding.environmentId === activeEnvironment.id && binding.agent.status === "online"
-          )),
-        );
-      } catch {
-        // Platform is optional for local development. The Worker path remains available.
-      }
-    }
-    const secretValues = await requestRunSecrets(
-      project.id,
-      variables,
-      steps,
-      sessionSecretValues,
-      setSecretValues,
-    );
-    if (!secretValues) return;
-    const secretVariables = requiredSecretVariables(variables, steps);
-    if (!platformContext || !platformReady || !revision) {
-      try {
-        if (secretVariables.length > 0 && production) {
-          message.error("生产环境已禁用本机 Worker 明文密钥路径，请通过平台运行");
-          return;
-        }
-        const request = localWorkerRunRequest({
-          environment: activeEnvironment,
-          flow: { id: flow.id, name: flow.name },
-          steps,
-          elements,
-          variables,
-          secretValues,
-          secretVariables,
-        });
-        const { runId } = await createRun(project.id, request);
-        const run: Run = {
-          id: runId,
-          flowName: flow.name,
-          status: "queued",
-          environment: activeEnvironment.name,
-          progress: 0,
-          completedSteps: 0,
-          totalSteps: steps.length,
-          startedAt: "刚刚",
-          duration: "排队中",
-          screenshots: 0,
-          retries: 0,
-        };
-        upsertRun(project.id, run);
-        watchCleanups.current.push(watchWorkerRun(project.id, run, upsertRun));
-        message.info("平台没有可用的已绑定在线 Agent，已改用本机 Playwright Worker");
-        navigate(`/project/${project.id}/runs`);
-      } catch {
-        message.error("创建本机 Worker 运行失败，请确认本机服务正在运行");
-      }
-      return;
-    }
-    try {
-      await Promise.all(
-        secretVariables.flatMap((variable) => {
-          const value = secretValues[variable.id];
-          return value
-            ? [savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value })]
-            : [];
-        }),
-      );
-      const created = await createPlatformRun(platformContext.session.token, platformContext.projectId, {
-        revisionId: revision.id,
-        environmentId: activeEnvironment.id,
-      });
-      const runId = created.runIds[0];
-      if (!runId) throw new Error("PLATFORM_RUN_NOT_CREATED");
-      const run: Run = {
-        id: runId,
-        flowName: flow.name,
-        status: "queued",
-        environment: activeEnvironment.name,
-        progress: 0,
-        completedSteps: 0,
-        totalSteps: revision.stepCount ?? steps.length,
-        startedAt: "刚刚",
-        duration: "排队中",
-        screenshots: 0,
-        retries: 0,
-      };
-      upsertRun(project.id, run);
-      message.success("已创建已发布版本的 Agent 运行");
-      navigate(`/project/${project.id}/runs`);
-    } catch {
-      message.error("创建 Agent 运行失败，请确认密钥、版本和环境绑定配置");
-    }
-  };
-    */
   };
   const columns: TableColumnsType<Flow> = [
     {
@@ -270,6 +185,7 @@ export function FlowsPage({ project }: { project: Project }) {
             <Tooltip title="运行流程">
               <Button
                 type="text"
+                size="small"
                 icon={<PlayCircleFilled />}
                 aria-label={`运行流程 ${flow.name}`}
                 onClick={() => void runFlow(flow)}
@@ -281,6 +197,7 @@ export function FlowsPage({ project }: { project: Project }) {
               <Tooltip title="复制流程">
                 <Button
                   type="text"
+                  size="small"
                   icon={<CopyOutlined />}
                   aria-label={`复制流程 ${flow.name}`}
                   onClick={() => {
@@ -308,6 +225,7 @@ export function FlowsPage({ project }: { project: Project }) {
                 <Tooltip title="删除流程">
                   <Button
                     type="text"
+                    size="small"
                     danger
                     icon={<DeleteOutlined />}
                     aria-label={`删除流程 ${flow.name}`}
@@ -361,6 +279,7 @@ export function FlowsPage({ project }: { project: Project }) {
           columns={columns}
           dataSource={filtered}
           pagination={{ pageSize: 8, showSizeChanger: false }}
+          scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty description="尚无流程" /> }}
         />
       </section>

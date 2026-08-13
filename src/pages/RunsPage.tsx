@@ -209,6 +209,7 @@ export function RunsPage({ project }: { project: Project }) {
               <Tooltip title="取消运行">
                 <Button
                   type="text"
+                  size="small"
                   danger
                   icon={<StopOutlined />}
                   aria-label={`取消运行 ${run.flowName}`}
@@ -220,6 +221,7 @@ export function RunsPage({ project }: { project: Project }) {
               <Tooltip title="重新运行">
                 <Button
                   type="text"
+                  size="small"
                   icon={<ReloadOutlined />}
                   aria-label={`重新运行 ${run.flowName}`}
                   loading={updatingRunId === run.id}
@@ -271,6 +273,7 @@ export function RunsPage({ project }: { project: Project }) {
           columns={columns}
           dataSource={filtered}
           pagination={{ pageSize: 8, showSizeChanger: false }}
+          scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty description="尚无真实运行任务" /> }}
         />
       </section>

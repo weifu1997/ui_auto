@@ -1,7 +1,7 @@
 :root {
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  color: #17221f;
-  background: #f4f6f5;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -22,4 +22,14 @@ button,
 input,
 textarea {
   font: inherit;
+}
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+/* 全站统一焦点环；antd 控件自带焦点样式，不叠加。 */
+:where(a, button, [role="button"], [tabindex]):focus-visible:not(.ant-btn):not(.ant-input):not(.ant-select-selector) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

@@ -4,9 +4,10 @@ import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements,
 import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
+import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
-import { CheckCircleFilled, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
-import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
+import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
+import { Alert, Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useRef, useState } from "react";
 
@@ -174,7 +175,7 @@ export function ElementsPage({ project }: { project: Project }) {
             color={
               item.method === "CSS" || item.method === "XPath"
                 ? "warning"
-                : "cyan"
+                : "processing"
             }
           >
             {item.method}
@@ -202,13 +203,14 @@ export function ElementsPage({ project }: { project: Project }) {
     {
       title: "",
       key: "actions",
-      width: 105,
+      width: 140,
       render: (_, item) => (
         <Space size={0}>
           {canRunValidation && (
             <Tooltip title="验证元素">
               <Button
                 type="text"
+                size="small"
                 icon={<ExperimentOutlined />}
                 aria-label={`验证元素 ${item.name}`}
                 onClick={() => startValidation(item)}
@@ -219,11 +221,35 @@ export function ElementsPage({ project }: { project: Project }) {
             <Tooltip title="编辑">
               <Button
                 type="text"
+                size="small"
                 icon={<EditOutlined />}
                 aria-label={`编辑元素 ${item.name}`}
                 onClick={() => setEditor(item)}
               />
             </Tooltip>
+          )}
+          {canManageElement && (
+            <Popconfirm
+              title="删除元素"
+              description={`确定删除元素「${item.name}」？此操作会同步删除平台上的元素。`}
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => {
+                updateItems((list) => list.filter((candidate) => candidate.id !== item.id));
+                message.success("元素已删除");
+              }}
+            >
+              <Tooltip title="删除">
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={`删除元素 ${item.name}`}
+                />
+              </Tooltip>
+            </Popconfirm>
           )}
         </Space>
       ),
@@ -270,12 +296,16 @@ export function ElementsPage({ project }: { project: Project }) {
           columns={columns}
           dataSource={filtered}
           pagination={{ pageSize: 8, showSizeChanger: false }}
+          scroll={{ x: "max-content" }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建元素" /> }}
         />
       </section>
       <ElementDrawer
         open={editor !== null}
         element={editor === "new" ? undefined : editor}
+        project={project}
         environments={environments}
+        elements={items}
         onClose={() => setEditor(null)}
         onSave={(element) => {
           updateItems((list) => {
@@ -311,11 +341,12 @@ export function ElementsPage({ project }: { project: Project }) {
         />
       </Modal>
       <Modal
+        title="元素验证"
         open={validating !== null}
         footer={null}
         closable={false}
         centered
-        width={380}
+        width={440}
       >
         <div className="validation-progress">
           <Spin size="large" />
@@ -331,23 +362,31 @@ export function ElementsPage({ project }: { project: Project }) {
   );
 }
 
-function ElementDrawer({
+export function ElementDrawer({
   open,
   element,
+  project,
   environments,
+  elements,
   onClose,
   onSave,
 }: {
   open: boolean;
   element?: ElementAsset | null;
+  project: Project;
   environments: Environment[];
+  elements: ElementAsset[];
   onClose: () => void;
   onSave: (element: ElementAsset) => void;
 }) {
   const [form] = Form.useForm();
+  const [pickerOpen, setPickerOpen] = useState(false);
   const method = Form.useWatch("method", form);
+  const selectedEnvironment = Form.useWatch("environment", form);
   useEffect(() => {
     if (!open) return;
+    // 先清空上次表单内容，避免新建时残留上一次输入的名称/定位值。
+    form.resetFields();
     form.setFieldsValue(
       element ?? {
         method: "testid",
@@ -356,6 +395,24 @@ function ElementDrawer({
       },
     );
   }, [element, environments, form, open]);
+  const applyPickerSelection = (selection: { candidate: { method: string; value: string }; path: string; environmentId: string; suggestedName: string }) => {
+    const method = selection.candidate.method === "css" ? "CSS" : selection.candidate.method;
+    form.setFieldsValue({
+      method,
+      value: selection.candidate.value,
+      path: selection.path,
+      environment: selection.environmentId,
+      name: form.getFieldValue("name") || selection.suggestedName,
+    });
+    const duplicate = elements.some((item) =>
+      item.method.toLowerCase() === method.toLowerCase() && item.value === selection.candidate.value,
+    );
+    if (duplicate) {
+      message.warning("元素库中已存在相同定位器，保存后可能产生重复元素");
+    }
+    setPickerOpen(false);
+    message.success("已回填定位信息");
+  };
   return (
     <Drawer
       title={element ? "编辑元素" : "新建元素"}
@@ -388,6 +445,25 @@ function ElementDrawer({
         </Button>
       }
     >
+      <div className="element-picker-toolbar">
+        <Button
+          icon={<FileSearchOutlined />}
+          onClick={() => {
+            const environmentValue = typeof form.getFieldValue("environment") === "string"
+              ? form.getFieldValue("environment")
+              : selectedEnvironment;
+            if (!environmentValue) {
+              message.warning("请先在表单中选择默认验证环境");
+              return;
+            }
+            // 采集统一走本地通道（部署机本机 headed Chromium + 截图反馈）。
+            setPickerOpen(true);
+          }}
+        >
+          从页面获取
+        </Button>
+        <span className="table-secondary">在调试浏览器中点击元素，自动生成并回填定位器</span>
+      </div>
       <Form form={form} layout="vertical">
         <Form.Item
           name="name"
@@ -450,6 +526,21 @@ function ElementDrawer({
           <Input.TextArea rows={3} placeholder="说明元素用途及使用注意事项" />
         </Form.Item>
       </Form>
+      <Modal
+        title="从页面获取元素（本地通道）"
+        open={pickerOpen}
+        width={720}
+        footer={null}
+        onCancel={() => setPickerOpen(false)}
+      >
+        <div className="element-picker-modal-body">
+          <LocalElementPickerPanel
+            project={project}
+            preferredEnvironmentId={selectedEnvironment}
+            onSelectCandidate={(selection) => applyPickerSelection(selection)}
+          />
+        </div>
+      </Modal>
     </Drawer>
   );
 }
@@ -483,7 +574,7 @@ function ValidationModal({
       }
       onCancel={onClose}
       title="元素验证结果"
-      width={670}
+      width={640}
     >
       <div
         className={`validation-result ${

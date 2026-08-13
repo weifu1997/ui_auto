@@ -1,10 +1,6 @@
 @media (max-width: 780px) {
-  .app-shell .project-side {
-    display: none;
-  }
-
   .app-shell .workspace-side.compact {
-    background: #172522;
+    background: var(--nav-bg);
     z-index: 2;
   }
 
@@ -38,9 +34,9 @@
 }
 
 .validation-target {
-  margin: 0 0 12px;
-  color: #526660;
-  font-size: 13px;
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-body);
 }
 
 .validation-environment-select {
@@ -48,7 +44,7 @@
 }
 
 .validation-result.not-found .result-icon {
-  color: #c44343;
+  color: var(--error);
 }
 
 .step-item {
@@ -64,14 +60,14 @@
   height: 28px;
   padding: 0;
   border: 0;
-  color: #98a49f;
+  color: var(--text-tertiary);
   background: transparent;
   cursor: grab;
 }
 
 .step-drag-handle:hover,
 .step-drag-handle:focus-visible {
-  color: #147a73;
+  color: var(--accent);
   outline: none;
 }
 
@@ -84,5 +80,5 @@
   width: 100%;
   max-height: 320px;
   object-fit: contain;
-  background: #f8fbfa;
+  background: var(--surface-2);
 }

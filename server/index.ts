@@ -12,6 +12,7 @@ import type { ElementAsset, Environment, FlowStep } from "../src/mock-data";
 import { createPlatformApi } from "./platform.ts";
 import { applyCors, readJson, routeHandler, sendJson } from "./http-utils";
 import { captureOutput, interpolate } from "./runner-core";
+import { buildPickerCandidates, pickerInjectionScript, previewPickerCandidate, type PickerCandidate } from "./picker-core.ts";
 import { safeArtifactName } from "./platform-core";
 
 const port = Number(process.env.PORT ?? 8787);
@@ -573,6 +574,152 @@ async function saveArtifact(
   return id;
 }
 
+// ---- 本地交互式元素选取通道（未连接平台时的「从页面获取」降级能力） ----
+type LocalPickerSession = {
+  id: string;
+  projectId: string;
+  environmentId: string;
+  environmentName: string;
+  baseUrl: string;
+  testIdAttribute: string;
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+  currentUrl: string;
+  captures: Array<{ id: string; sessionId: string; target: string; candidates: PickerCandidate[]; capturedAt: string }>;
+  screenshotBuffer?: Buffer;
+  screenshotTimer?: ReturnType<typeof setInterval>;
+  controller: AbortController;
+  lastActivityAt: number;
+  expiresAt: number;
+};
+const localPickerSessions = new Map<string, LocalPickerSession>();
+const localPickerPending = new Map<string, Promise<LocalPickerSession>>();
+const localPickerIdleMs = 15 * 60_000;
+const localPickerMaxMs = 2 * 60 * 60_000;
+const localPickerHeadless = process.env.WORKER_PICKER_HEADLESS === "1";
+const localPickerRemoteDebugPort = process.env.WORKER_PICKER_REMOTE_DEBUG_PORT;
+
+function localPickerSessionById(projectId: string, sessionId: string) {
+  const session = localPickerSessions.get(sessionId);
+  if (!session || session.projectId !== projectId) throw new Error("PICKER_SESSION_NOT_FOUND");
+  return session;
+}
+
+function localPickerSessionResponse(session: LocalPickerSession) {
+  return {
+    id: session.id,
+    projectId: session.projectId,
+    environmentId: session.environmentId,
+    environmentName: session.environmentName,
+    currentUrl: session.currentUrl,
+    status: "active",
+    captureCount: session.captures.length,
+    hasScreenshot: Boolean(session.screenshotBuffer),
+  };
+}
+
+async function endLocalPickerSession(session: LocalPickerSession) {
+  localPickerSessions.delete(session.id);
+  clearInterval(session.screenshotTimer);
+  session.controller.abort();
+  await session.context?.close().catch(() => undefined);
+  await session.browser?.close().catch(() => undefined);
+}
+
+function touchLocalPickerSession(session: LocalPickerSession) {
+  session.lastActivityAt = Date.now();
+}
+
+function expireLocalPickerSessions() {
+  const nowMs = Date.now();
+  for (const session of [...localPickerSessions.values()]) {
+    if (session.lastActivityAt + localPickerIdleMs < nowMs || session.expiresAt < nowMs) {
+      void endLocalPickerSession(session);
+    }
+  }
+}
+setInterval(expireLocalPickerSessions, 60_000).unref?.();
+
+async function createLocalPickerSession(projectId: string, environment: Environment, startUrl?: string) {
+  projectOrThrow(projectId);
+  if (!environment || environment.browser !== "Chromium") throw new Error("PICKER_ENVIRONMENT_UNSUPPORTED");
+  const baseUrl = String(environment.baseUrl ?? "");
+  const testIdAttribute = String(environment.testIdAttribute ?? "data-testid");
+  if (!/^[a-zA-Z_][\w:-]*$/.test(testIdAttribute)) throw new Error("INVALID_TEST_ID_ATTRIBUTE");
+  // 复用已完成会话；对同一（项目, 环境）的并发创建去重，避免打开多个浏览器。
+  const existing = [...localPickerSessions.values()].find((item) => item.projectId === projectId && item.environmentId === environment.id);
+  if (existing) return existing;
+  const pendingKey = `${projectId}:${environment.id}`;
+  const pending = localPickerPending.get(pendingKey);
+  if (pending) return pending;
+  const promise = (async () => {
+    try {
+      return await launchLocalPickerSession(projectId, environment, baseUrl, testIdAttribute, startUrl);
+    } finally {
+      localPickerPending.delete(pendingKey);
+    }
+  })();
+  localPickerPending.set(pendingKey, promise);
+  return promise;
+}
+
+async function launchLocalPickerSession(projectId: string, environment: Environment, baseUrl: string, testIdAttribute: string, startUrl?: string) {
+  const id = `picker_${randomUUID()}`;
+  const browser = await chromium.launch({
+    headless: localPickerHeadless,
+    args: localPickerRemoteDebugPort ? [`--remote-debugging-port=${localPickerRemoteDebugPort}`] : [],
+  });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const target = environmentUrl(baseUrl, startUrl ?? "/");
+  await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const session: LocalPickerSession = {
+    id,
+    projectId,
+    environmentId: environment.id,
+    environmentName: environment.name,
+    baseUrl,
+    testIdAttribute,
+    browser,
+    context,
+    page,
+    currentUrl: page.url(),
+    captures: [],
+    controller: new AbortController(),
+    lastActivityAt: Date.now(),
+    expiresAt: Date.now() + localPickerMaxMs,
+  };
+  await page.exposeBinding("autoflowDebugPickerCapture", async (_source: unknown, payload: unknown) => {
+    try {
+      const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+      // 本地通道为内存态（不落库）：候选即时生成，无持久化密钥泄露面。
+      const candidates = await buildPickerCandidates(page, raw, testIdAttribute, []);
+      if (candidates.length === 0) return;
+      session.captures.unshift({
+        id: randomUUID(),
+        sessionId: session.id,
+        target: typeof raw.target === "string" ? raw.target : "",
+        candidates,
+        capturedAt: now(),
+      });
+      touchLocalPickerSession(session);
+    } catch {
+      // 页面脚本回传解析失败不中断会话。
+    }
+  });
+  session.screenshotTimer = setInterval(() => {
+    void page.screenshot({ type: "png" })
+      .then((buffer) => {
+        session.screenshotBuffer = buffer;
+        touchLocalPickerSession(session);
+      })
+      .catch(() => undefined);
+  }, 5_000);
+  localPickerSessions.set(id, session);
+  return session;
+}
+
 async function executeStep(
   page: Page,
   step: FlowStep,
@@ -843,7 +990,14 @@ async function executeValidation(task: Task, request: ValidationRequest) {
     const target = environmentUrl(environment.baseUrl, element.path);
     await page.goto(target, { waitUntil: "domcontentloaded", timeout: environment.timeout * 1000 });
     const locator = locatorFor(page!, element, environment.testIdAttribute);
-    const count = await locator.count();
+    // SPA 页面在 domcontentloaded 后仍需 JS 渲染，等待定位器出现再统计匹配数。
+    let count = 0;
+    try {
+      await locator.first().waitFor({ state: "attached", timeout: environment.timeout * 1000 });
+      count = await locator.count();
+    } catch {
+      count = 0;
+    }
     const screenshotId = await saveArtifact(
       task,
       `validation-${element.id}.png`,
@@ -966,6 +1120,105 @@ const server = createServer(routeHandler(async (request, response, url) => {
     createReadStream(artifact.path).pipe(response);
     return;
   }
+      // ---- 本地元素选取通道（本地调试/采集会话） ----
+      const localPickerRoot = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions$/);
+      if (localPickerRoot) {
+        const projectId = decodeURIComponent(localPickerRoot[1]);
+        projectOrThrow(projectId);
+        if (request.method === "GET") {
+          sendJson(response, 200, { sessions: [...localPickerSessions.values()].filter((item) => item.projectId === projectId).map(localPickerSessionResponse) });
+          return true;
+        }
+        if (request.method === "POST") {
+          const body = await readJson<{ environment?: Environment; startUrl?: string }>(request);
+          if (!body.environment) throw new Error("ENVIRONMENT_REQUIRED");
+          const session = await createLocalPickerSession(projectId, body.environment, body.startUrl);
+          sendJson(response, 201, { session: localPickerSessionResponse(session) });
+          return true;
+        }
+      }
+
+      const localPickerEnable = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions\/([^/]+)\/picker\/enable$/);
+      if (localPickerEnable && request.method === "POST") {
+        const session = localPickerSessionById(decodeURIComponent(localPickerEnable[1]), decodeURIComponent(localPickerEnable[2]));
+        await session.page.evaluate(pickerInjectionScript(session.testIdAttribute));
+        touchLocalPickerSession(session);
+        sendJson(response, 202, { session: localPickerSessionResponse(session) });
+        return true;
+      }
+
+      const localPickerCaptures = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions\/([^/]+)\/picker-captures$/);
+      if (localPickerCaptures && request.method === "GET") {
+        const session = localPickerSessionById(decodeURIComponent(localPickerCaptures[1]), decodeURIComponent(localPickerCaptures[2]));
+        touchLocalPickerSession(session);
+        sendJson(response, 200, { captures: session.captures });
+        return true;
+      }
+
+      const localPickerPreview = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions\/([^/]+)\/picker-captures\/([^/]+)\/preview$/);
+      if (localPickerPreview && request.method === "POST") {
+        const session = localPickerSessionById(decodeURIComponent(localPickerPreview[1]), decodeURIComponent(localPickerPreview[2]));
+        const captureId = decodeURIComponent(localPickerPreview[3]);
+        const body = await readJson<{ candidateIndex?: number }>(request);
+        const capture = session.captures.find((item) => item.id === captureId);
+        const candidate = capture?.candidates[Number(body.candidateIndex)];
+        if (!capture || !candidate) throw new Error("PICKER_CANDIDATE_INVALID");
+        const count = await previewPickerCandidate(session.page, candidate, session.testIdAttribute);
+        touchLocalPickerSession(session);
+        sendJson(response, 200, { captureId, candidateIndex: Number(body.candidateIndex), count });
+        return true;
+      }
+
+      const localPickerConfirm = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions\/([^/]+)\/picker-captures\/([^/]+)\/confirm$/);
+      if (localPickerConfirm && request.method === "POST") {
+        const session = localPickerSessionById(decodeURIComponent(localPickerConfirm[1]), decodeURIComponent(localPickerConfirm[2]));
+        const captureId = decodeURIComponent(localPickerConfirm[3]);
+        const body = await readJson<{ candidateIndex?: number; name?: string }>(request);
+        const capture = session.captures.find((item) => item.id === captureId);
+        const candidate = capture?.candidates[Number(body.candidateIndex)];
+        if (!capture || !candidate) throw new Error("PICKER_CANDIDATE_INVALID");
+        let path = "/";
+        try {
+          path = session.page.url() ? new URL(session.page.url()).pathname || "/" : "/";
+        } catch {
+          path = "/";
+        }
+        const suggestedName = body.name?.trim().slice(0, 160) || capture.target || candidate.label;
+        touchLocalPickerSession(session);
+        // 本地通道仅回填不落库：元素写入由前端抽屉保存链路完成。
+        sendJson(response, 200, {
+          target: "fillback",
+          candidate: { method: candidate.method, value: candidate.value, count: candidate.count, score: candidate.score, label: candidate.label },
+          path,
+          environmentId: session.environmentId,
+          suggestedName,
+        });
+        return true;
+      }
+
+      const localPickerCommand = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions\/([^/]+)\/commands$/);
+      if (localPickerCommand && request.method === "POST") {
+        const session = localPickerSessionById(decodeURIComponent(localPickerCommand[1]), decodeURIComponent(localPickerCommand[2]));
+        const body = await readJson<{ command?: string }>(request);
+        if (body.command !== "stop") throw new Error("PICKER_COMMAND_INVALID");
+        await endLocalPickerSession(session);
+        sendJson(response, 200, { ended: true });
+        return true;
+      }
+
+      const localPickerScreenshot = url.pathname.match(/^\/api\/projects\/([^/]+)\/local-picker\/sessions\/([^/]+)\/screenshot$/);
+      if (localPickerScreenshot && request.method === "GET") {
+        const session = localPickerSessionById(decodeURIComponent(localPickerScreenshot[1]), decodeURIComponent(localPickerScreenshot[2]));
+        if (!session.screenshotBuffer) {
+          sendJson(response, 404, { error: "PICKER_SCREENSHOT_NOT_READY" });
+          return true;
+        }
+        touchLocalPickerSession(session);
+        response.writeHead(200, { "content-type": "image/png" });
+        response.end(session.screenshotBuffer);
+        return true;
+      }
+
     const runRoute = parseProjectRoute(url.pathname, "runs");
     if (runRoute) {
       const [, encodedProjectId, taskId, action] = runRoute;
@@ -1059,10 +1312,6 @@ const server = createServer(routeHandler(async (request, response, url) => {
     }
     sendJson(response, 404, { error: "NOT_FOUND" });
   }, { errorResponse: { exposeMessage: localListenHosts.has(listenHost), internalCode: "PLATFORM_INTERNAL_ERROR" } }));
-
-server.on("upgrade", (request, socket, head) => {
-  if (!platform.handleUpgrade(request, socket, head)) socket.destroy();
-});
 
 server.listen(port, listenHost, () => {
   console.log(`AutoFlow Worker API listening on http://${listenHost}:${port}`);

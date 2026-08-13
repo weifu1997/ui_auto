@@ -3,7 +3,8 @@ import type { Environment, Project } from "../mock-data";
 import { PageHeading, emptyEnvironments } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { GlobalOutlined, MoreOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Drawer, Dropdown, Form, Input, Select } from "antd";
+import { AutoComplete, Button, Drawer, Dropdown, Empty, Form, Input, Select } from "antd";
+import { environmentNameOptions, testIdAttributeOptions } from "./environment-form-options";
 import { useEffect, useState } from "react";
 
 export function EnvironmentsPage({ project }: { project: Project }) {
@@ -35,7 +36,12 @@ export function EnvironmentsPage({ project }: { project: Project }) {
         }
       />
       <section className="environment-grid">
-        {items.map((environment) => (
+        {items.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="尚未创建环境，点击右上角“新建环境”开始"
+          />
+        ) : items.map((environment) => (
           <article className="environment-card" key={environment.id}>
             <div className="environment-card-top">
               <span className={`environment-color ${environment.color}`} />
@@ -120,7 +126,7 @@ export function EnvironmentsPage({ project }: { project: Project }) {
   );
 }
 
-function EnvironmentDrawer({
+export function EnvironmentDrawer({
   open,
   environment,
   onClose,
@@ -183,7 +189,11 @@ function EnvironmentDrawer({
           label="环境名称"
           rules={[{ required: true, message: "请输入环境名称" }]}
         >
-          <Input placeholder="例如：测试环境" />
+          <AutoComplete
+            options={environmentNameOptions}
+            placeholder="例如：测试环境"
+            filterOption={(inputValue, option) => (option?.value ?? "").toUpperCase().includes(inputValue.toUpperCase())}
+          />
         </Form.Item>
         <Form.Item
           name="baseUrl"
@@ -214,7 +224,11 @@ function EnvironmentDrawer({
           label="测试属性名"
           rules={[{ required: true, message: "请输入测试属性名" }]}
         >
-          <Input placeholder="data-testid" />
+          <AutoComplete
+            options={testIdAttributeOptions}
+            placeholder="data-testid"
+            filterOption={(inputValue, option) => (option?.value ?? "").toUpperCase().includes(inputValue.toUpperCase())}
+          />
         </Form.Item>
         <Form.Item name="description" label="说明">
           <Input.TextArea rows={3} />

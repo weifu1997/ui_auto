@@ -3,7 +3,7 @@ import type { Project, Variable } from "../mock-data";
 import { PageHeading, emptyVariables } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Drawer, Form, Input, Popconfirm, Select, Switch, Table, Tag } from "antd";
+import { Alert, Button, Drawer, Empty, Form, Input, Popconfirm, Select, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useState } from "react";
 
@@ -138,6 +138,8 @@ export function VariablesPage({ project }: { project: Project }) {
           columns={columns}
           dataSource={filtered}
           pagination={false}
+          scroll={{ x: "max-content" }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建变量" /> }}
         />
       </section>
       <VariableDrawer
