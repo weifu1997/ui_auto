@@ -3,14 +3,14 @@ import type { Project } from "../mock-data";
 import { archivePlatformNotificationChannel, archivePlatformSchedule, archivePlatformWebhookTrigger, createPlatformNotificationChannel, createPlatformSchedule, createPlatformWebhookTrigger, getPlatformDatasets, getPlatformDeliveries, getPlatformNotificationChannels, getPlatformNotificationSubscriptions, getPlatformRevisions, getPlatformSchedules, getPlatformWebhookTriggers, platformApiOrigin, savePlatformNotificationSubscription, scheduleAction, webhookTriggerAction } from "../platform-api";
 import type { PlatformDataset, PlatformDelivery, PlatformNotificationChannel, PlatformNotificationSubscription, PlatformRevision, PlatformSchedule, PlatformSession, PlatformWebhookTrigger } from "../platform-api";
 import { readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
-import { PageHeading, PlatformProjectRequired } from "./shared";
+import { PageHeading, PlatformProjectRequired, emptyEnvironments } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { DeleteOutlined, PlayCircleFilled, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 export function AutomationsPage({ project }: { project: Project }) {
-  const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? []);
+  const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? emptyEnvironments);
   const [platformSession] = useState<PlatformSession | undefined>(readStoredPlatformSession);
   const [platformProjectMap] = useState<Record<string, string>>(readPlatformProjectMap);
   const [revisions, setRevisions] = useState<PlatformRevision[]>([]);

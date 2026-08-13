@@ -13,6 +13,7 @@ import {
 } from "../worker-api";
 import type { LocalPickerCapture, LocalPickerSession as WorkerLocalPickerSession } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
+import { emptyEnvironments } from "./shared";
 import { CheckCircleFilled, FileSearchOutlined, PlusOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Space, Spin, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";
@@ -43,7 +44,7 @@ export function LocalElementPickerPanel({
   createOpen?: boolean;
   onCreateOpenChange?: (open: boolean) => void;
 }) {
-  const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? []);
+  const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? emptyEnvironments);
   const [workerState, setWorkerState] = useState<"checking" | "online" | "offline">("checking");
   const [sessions, setSessions] = useState<WorkerLocalPickerSession[]>([]);
   const [captures, setCaptures] = useState<LocalPickerCapture[]>([]);

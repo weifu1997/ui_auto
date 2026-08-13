@@ -62,6 +62,7 @@ export const emptyFlows: Flow[] = [];
 export const emptyElements: ElementAsset[] = [];
 export const emptyVariables: Variable[] = [];
 export const emptyEnvironments: Environment[] = [];
+export const emptyMembers: Array<{ id: string; name: string; email: string; role: string }> = [];
 export const emptySecretValues: Record<string, string> = {};
 
 export function statusTag(status: Run["status"]) {

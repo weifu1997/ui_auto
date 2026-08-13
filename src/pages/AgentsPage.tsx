@@ -5,7 +5,7 @@ import type { PlatformRevision, PlatformSession } from "../platform-api";
 import { disconnectPlatformProject as clearPlatformProjectMap, notifyPlatformContextChanged, platformSessionStorageKey, readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformDocumentVersion, storePlatformProjectMap, storePlatformWorkspaceId } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
-import { PageHeading, platformRunAsRun, platformVariables, requestRunSecrets, requiredSecretVariables, variableReference } from "./shared";
+import { PageHeading, emptyElements, emptyEnvironments, emptyFlows, emptyVariables, platformRunAsRun, platformVariables, requestRunSecrets, requiredSecretVariables, variableReference } from "./shared";
 import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
 import { PlayCircleFilled, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
@@ -16,11 +16,11 @@ const emptySecretValues: Record<string, string> = {};
 
 export function AgentsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
-  const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? []);
+  const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? emptyEnvironments);
   const activeEnvironmentId = useWorkspaceStore((state) => state.activeEnvironmentByProject[project.id]);
-  const flows = useWorkspaceStore((state) => state.flowsByProject[project.id] ?? []);
-  const elements = useWorkspaceStore((state) => state.elementsByProject[project.id] ?? []);
-  const variables = useWorkspaceStore((state) => state.variablesByProject[project.id] ?? []);
+  const flows = useWorkspaceStore((state) => state.flowsByProject[project.id] ?? emptyFlows);
+  const elements = useWorkspaceStore((state) => state.elementsByProject[project.id] ?? emptyElements);
+  const variables = useWorkspaceStore((state) => state.variablesByProject[project.id] ?? emptyVariables);
   const upsertRun = useRunStore((state) => state.upsertRun);
   const enablePlatformProject = useWorkspaceStore((state) => state.enablePlatformProject);
   const disconnectPlatformProject = useWorkspaceStore((state) => state.disconnectPlatformProject);

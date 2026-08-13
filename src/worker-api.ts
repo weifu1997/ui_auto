@@ -77,7 +77,8 @@ async function request<T>(path: string, init?: RequestInit) {
 }
 
 export async function getWorkerHealth(signal?: AbortSignal) {
-  const response = await fetch(`${new URL(apiBase).origin}/health`, { signal });
+  // 生产模式 apiBase 是相对路径 /api，必须带 base 构造 origin（否则 new URL 抛 TypeError，健康检查恒失败）。
+  const response = await fetch(`${new URL(apiBase, window.location.origin).origin}/health`, { signal });
   if (!response.ok) throw new WorkerApiError(response.status, `WORKER_HEALTH_${response.status}`);
   return (await response.json()) as WorkerHealth;
 }

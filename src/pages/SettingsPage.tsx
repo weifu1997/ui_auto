@@ -1,7 +1,7 @@
 import { message } from "../antd-feedback";
 import type { Project } from "../mock-data";
 import { useNavigate } from "../router";
-import { PageHeading } from "./shared";
+import { PageHeading, emptyMembers } from "./shared";
 import { updatePlatformProject } from "../platform-api";
 import { readStoredPlatformSession } from "../platform-context";
 import { useQueryClient } from "@tanstack/react-query";
@@ -18,7 +18,7 @@ export function SettingsPage({ project }: { project: Project }) {
   const updateProject = useWorkspaceStore((state) => state.updateProject);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const members = useWorkspaceStore(
-    (state) => state.membersByProject[project.id] ?? [],
+    (state) => state.membersByProject[project.id] ?? emptyMembers,
   );
   const addMember = useWorkspaceStore((state) => state.addMember);
   const [form] = Form.useForm();
