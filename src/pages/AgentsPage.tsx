@@ -261,7 +261,7 @@ export function AgentsPage({ project }: { project: Project }) {
         <Alert
           type="error"
           showIcon
-          title="Platform synchronization failed"
+          title="平台同步失败"
           description={syncError}
         />
       )}
@@ -277,11 +277,11 @@ export function AgentsPage({ project }: { project: Project }) {
           options={session.workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
         />
         <Space>
-          <Tooltip title="刷新版本列表"><Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadRevisions()} /></Tooltip>
+          <Tooltip title="刷新版本列表"><Button icon={<ReloadOutlined />} aria-label="刷新版本列表" loading={loading} onClick={() => void loadRevisions()} /></Tooltip>
         </Space>
       </div>
       <Space>
-        <Tag color={syncStatus === "synced" ? "green" : syncStatus === "failed" ? "red" : "blue"}>
+        <Tag color={syncStatus === "synced" ? "success" : syncStatus === "failed" ? "error" : "processing"}>
           {syncStatus === "synced" ? "已同步" : syncStatus === "retrying" ? "待重试" : syncStatus === "failed" ? "同步失败" : "同步中"}
         </Tag>
         <Button danger onClick={stopSync}>停止同步</Button>
@@ -299,9 +299,9 @@ export function AgentsPage({ project }: { project: Project }) {
           dataSource={revisions}
           columns={[
             { title: "版本", dataIndex: "revisionNumber", width: 90, render: (value: number) => `v${value}` },
-            { title: "状态", dataIndex: "status", width: 110, render: (status: PlatformRevision["status"]) => <Tag color={status === "published" ? "green" : "default"}>{status === "published" ? "已发布" : status}</Tag> },
+            { title: "状态", dataIndex: "status", width: 110, render: (status: PlatformRevision["status"]) => <Tag color={status === "published" ? "success" : "default"}>{status === "published" ? "已发布" : status}</Tag> },
             { title: "创建时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() },
-            { title: "", width: 72, render: (_, revision: PlatformRevision) => <Tooltip title="使用当前环境执行"><Button size="small" icon={<PlayCircleFilled />} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip> },
+            { title: "", width: 72, render: (_, revision: PlatformRevision) => <Tooltip title="使用当前环境执行"><Button size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip> },
           ]}
           locale={{ emptyText: <Empty description="发布当前流程后将显示可执行版本" /> }}
         />

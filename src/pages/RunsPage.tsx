@@ -271,6 +271,7 @@ export function RunsPage({ project }: { project: Project }) {
           columns={columns}
           dataSource={filtered}
           pagination={{ pageSize: 8, showSizeChanger: false }}
+          scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty description="尚无真实运行任务" /> }}
         />
       </section>

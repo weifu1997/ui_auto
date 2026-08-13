@@ -276,7 +276,7 @@ export function ProjectsPage() {
         </Form>
       </Modal>
       <Modal title="归档项目" open={archiveOpen} footer={<Button onClick={() => setArchiveOpen(false)}>关闭</Button>} onCancel={() => setArchiveOpen(false)}>
-        <List loading={archiveLoading} dataSource={archivedProjects} locale={{ emptyText: "暂无归档项目" }} renderItem={(project) => <List.Item actions={[<Button key="restore" icon={<UndoOutlined />} onClick={() => void restoreProject(project)}>恢复</Button>]}><List.Item.Meta title={project.name} description={project.description || "无说明"} /></List.Item>} />
+        <List loading={archiveLoading} dataSource={archivedProjects} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无归档项目" /> }} renderItem={(project) => <List.Item actions={[<Button key="restore" icon={<UndoOutlined />} onClick={() => void restoreProject(project)}>恢复</Button>]}><List.Item.Meta title={project.name} description={project.description || "无说明"} /></List.Item>} />
       </Modal>
     </div>
   );

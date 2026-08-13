@@ -6,8 +6,10 @@ import { updatePlatformProject } from "../platform-api";
 import { readStoredPlatformSession } from "../platform-context";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceStore } from "../workspace-store";
+import { useThemeStore } from "../theme-mode";
+import type { ThemeMode } from "../theme-mode";
 import { PauseCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Avatar, Button, Form, Input, Modal, Popconfirm, Select, Tag } from "antd";
+import { Avatar, Button, Form, Input, Modal, Popconfirm, Segmented, Select, Tag } from "antd";
 import { useEffect, useState } from "react";
 
 const serverWorkspaceEnabled = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
@@ -15,6 +17,8 @@ const serverWorkspaceEnabled = import.meta.env.PROD || import.meta.env.VITE_AUTH
 export function SettingsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const themeMode = useThemeStore((state) => state.mode);
+  const setThemeMode = useThemeStore((state) => state.setMode);
   const updateProject = useWorkspaceStore((state) => state.updateProject);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const members = useWorkspaceStore(
@@ -70,29 +74,44 @@ export function SettingsPage({ project }: { project: Project }) {
         </div>
         <div className="surface settings-section">
           <div>
+            <h2>外观</h2>
+            <p>选择界面明暗模式，跟随系统将自动适配。</p>
+          </div>
+          <Segmented
+            value={themeMode}
+            onChange={(value) => setThemeMode(value as ThemeMode)}
+            options={[
+              { value: "system", label: "跟随系统" },
+              { value: "light", label: "浅色" },
+              { value: "dark", label: "深色" },
+            ]}
+          />
+        </div>
+        <div className="surface settings-section">
+          <div>
             <h2>成员与权限</h2>
             <p>权限在项目边界内独立管理。</p>
           </div>
           <div className="member-row">
-            <Avatar style={{ background: "#ddeeea", color: "#147a73" }}>
+            <Avatar className="member-avatar">
               R
             </Avatar>
             <span>
               <strong>Rui Chen</strong>
               <small>rui@example.com</small>
             </span>
-            <Tag color="green">管理员</Tag>
+            <Tag color="success">管理员</Tag>
           </div>
           {members.map((member) => (
             <div className="member-row" key={member.id}>
-              <Avatar style={{ background: "#e8ecff", color: "#38529b" }}>
+              <Avatar className="member-avatar member-avatar-alt">
                 {member.name.slice(0, 1).toUpperCase()}
               </Avatar>
               <span>
                 <strong>{member.name}</strong>
                 <small>{member.email}</small>
               </span>
-              <Tag color={member.role === "管理员" ? "green" : "blue"}>
+              <Tag color={member.role === "管理员" ? "success" : "processing"}>
                 {member.role}
               </Tag>
             </div>

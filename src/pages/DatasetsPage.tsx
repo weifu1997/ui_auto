@@ -93,16 +93,16 @@ export function DatasetsPage({ project }: { project: Project }) {
       title: "",
       width: 150,
       render: (_, item) => <Space size={2}>
-        <Tooltip title="预览冻结版本"><Button icon={<FileSearchOutlined />} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
-        <Tooltip title="导入新版本"><Button icon={<ReloadOutlined />} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
-        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button danger icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
+        <Tooltip title="预览冻结版本"><Button icon={<FileSearchOutlined />} aria-label={`预览 ${item.name} 冻结版本`} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
+        <Tooltip title="导入新版本"><Button icon={<ReloadOutlined />} aria-label={`导入 ${item.name} 新版本`} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
+        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button danger aria-label={`归档数据集 ${item.name}`} icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
       </Space>,
     },
   ];
 
   return (
     <>
-      <PageHeading title="数据集" description="导入后生成不可变版本；参数化执行时每行独立创建一个运行快照。" actions={<Space><Tooltip title="刷新数据集"><Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadDatasets()} /></Tooltip><Button type="primary" icon={<PlusOutlined />} onClick={() => { importForm.resetFields(); setImportFile(undefined); setImportOpen(true); }}>导入数据集</Button></Space>} />
+      <PageHeading title="数据集" description="导入后生成不可变版本；参数化执行时每行独立创建一个运行快照。" actions={<Space><Tooltip title="刷新数据集"><Button icon={<ReloadOutlined />} aria-label="刷新数据集" loading={loading} onClick={() => void loadDatasets()} /></Tooltip><Button type="primary" icon={<PlusOutlined />} onClick={() => { importForm.resetFields(); setImportFile(undefined); setImportOpen(true); }}>导入数据集</Button></Space>} />
       <section className="surface project-table">
         <Table rowKey="id" columns={columns} dataSource={datasets} loading={loading} pagination={false} locale={{ emptyText: <Empty description="尚未导入数据集" /> }} />
       </section>
@@ -118,7 +118,7 @@ export function DatasetsPage({ project }: { project: Project }) {
       <Modal title={`导入 ${versionTarget?.name ?? ""} 的新版本`} open={Boolean(versionTarget)} confirmLoading={submitting} okText="创建版本" onCancel={() => setVersionTarget(undefined)} onOk={() => versionTarget && void upload(versionTarget)}>
         <Form layout="vertical"><Form.Item label="CSV 或 Excel" required extra="既有版本不会被覆盖。"><Input type="file" accept=".csv,.xlsx" onChange={(event) => setVersionFile(event.target.files?.[0])} /></Form.Item></Form>
       </Modal>
-      <Modal title={preview ? `版本 ${preview.version.versionNumber} 预览` : "数据预览"} open={Boolean(preview)} footer={<Button onClick={() => setPreview(undefined)}>关闭</Button>} onCancel={() => setPreview(undefined)} width={900}>
+      <Modal title={preview ? `版本 ${preview.version.versionNumber} 预览` : "数据预览"} open={Boolean(preview)} footer={<Button onClick={() => setPreview(undefined)}>关闭</Button>} onCancel={() => setPreview(undefined)} width={760}>
         {preview && <Table size="small" rowKey="rowNumber" pagination={false} scroll={{ x: true, y: 360 }} dataSource={preview.rows.map((row) => ({ key: row.rowNumber, ...row.data }))} columns={preview.version.columns.map((column) => ({ title: column, dataIndex: column, width: 180 }))} />}
         {preview?.truncated && <Alert className="dataset-preview-alert" type="info" showIcon title="预览仅显示前 100 行。" />}
       </Modal>

@@ -7,7 +7,7 @@ import { platformProjectContext } from "../platform-context";
 import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
-import { Alert, Button, Drawer, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
+import { Alert, Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useRef, useState } from "react";
 
@@ -175,7 +175,7 @@ export function ElementsPage({ project }: { project: Project }) {
             color={
               item.method === "CSS" || item.method === "XPath"
                 ? "warning"
-                : "cyan"
+                : "processing"
             }
           >
             {item.method}
@@ -293,6 +293,8 @@ export function ElementsPage({ project }: { project: Project }) {
           columns={columns}
           dataSource={filtered}
           pagination={{ pageSize: 8, showSizeChanger: false }}
+          scroll={{ x: "max-content" }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建元素" /> }}
         />
       </section>
       <ElementDrawer
@@ -336,11 +338,12 @@ export function ElementsPage({ project }: { project: Project }) {
         />
       </Modal>
       <Modal
+        title="元素验证"
         open={validating !== null}
         footer={null}
         closable={false}
         centered
-        width={380}
+        width={440}
       >
         <div className="validation-progress">
           <Spin size="large" />
@@ -521,7 +524,7 @@ export function ElementDrawer({
       <Modal
         title="从页面获取元素（本地通道）"
         open={pickerOpen}
-        width={760}
+        width={720}
         footer={null}
         onCancel={() => setPickerOpen(false)}
       >
@@ -566,7 +569,7 @@ function ValidationModal({
       }
       onCancel={onClose}
       title="元素验证结果"
-      width={670}
+      width={640}
     >
       <div
         className={`validation-result ${

@@ -210,12 +210,11 @@ export function LocalElementPickerPanel({
             value={selectedSession?.id}
             onChange={setManagedSessionId}
             placeholder="选择会话"
-            style={{ width: 180 }}
             options={sessions.map((session) => ({ value: session.id, label: `${session.environmentName} #${session.id.slice(0, 6)}` }))}
           />
           <Tooltip title="新建本地调试会话"><Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新建会话</Button></Tooltip>
           <Tooltip title={selectedSession ? "在调试浏览器中启用一次选取" : "等待浏览器初始化"}>
-            <Button icon={<FileSearchOutlined />} disabled={!selectedSession} onClick={() => void enablePicker()} />
+            <Button icon={<FileSearchOutlined />} aria-label="启用元素选取" disabled={!selectedSession} onClick={() => void enablePicker()} />
           </Tooltip>
           {selectedSession && <Button size="small" danger onClick={() => void stopSession()}>结束</Button>}
         </Space>
@@ -258,9 +257,9 @@ export function LocalElementPickerPanel({
                 <small>{candidate.count === 1 ? "唯一匹配" : `${candidate.count} 个匹配`}</small>
               </div>
               <Space size={2}>
-                <Tooltip title="在浏览器中高亮"><Button size="small" icon={<FileSearchOutlined />} onClick={() => void previewCandidate(latestCapture, index)} /></Tooltip>
+                <Tooltip title="在浏览器中高亮"><Button size="small" icon={<FileSearchOutlined />} aria-label={`高亮候选 ${candidate.method} ${candidate.value}`} onClick={() => void previewCandidate(latestCapture, index)} /></Tooltip>
                 <Tooltip title="选中并回填到表单（不写入元素库）">
-                  <Button size="small" type="primary" icon={<CheckCircleFilled />} onClick={() => void confirmCandidate(latestCapture, index)} />
+                  <Button size="small" type="primary" icon={<CheckCircleFilled />} aria-label={`选中候选 ${candidate.method} ${candidate.value}`} onClick={() => void confirmCandidate(latestCapture, index)} />
                 </Tooltip>
               </Space>
             </div>

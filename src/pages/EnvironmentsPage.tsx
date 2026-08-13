@@ -3,7 +3,7 @@ import type { Environment, Project } from "../mock-data";
 import { PageHeading, emptyEnvironments } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { GlobalOutlined, MoreOutlined, PlusOutlined } from "@ant-design/icons";
-import { AutoComplete, Button, Drawer, Dropdown, Form, Input, Select } from "antd";
+import { AutoComplete, Button, Drawer, Dropdown, Empty, Form, Input, Select } from "antd";
 import { environmentNameOptions, testIdAttributeOptions } from "./environment-form-options";
 import { useEffect, useState } from "react";
 
@@ -36,7 +36,12 @@ export function EnvironmentsPage({ project }: { project: Project }) {
         }
       />
       <section className="environment-grid">
-        {items.map((environment) => (
+        {items.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="尚未创建环境，点击右上角“新建环境”开始"
+          />
+        ) : items.map((environment) => (
           <article className="environment-card" key={environment.id}>
             <div className="environment-card-top">
               <span className={`environment-color ${environment.color}`} />

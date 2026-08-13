@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "./router";
-import { App as AntdApp, ConfigProvider, Spin } from "antd";
+import { App as AntdApp, ConfigProvider, Spin, theme as antdTheme } from "antd";
 import { useFlowStore } from "./flow-store";
 import { useWorkspaceStore } from "./workspace-store";
+import { applyTheme, themePalettes, useThemeStore } from "./theme-mode";
 import type { PlatformWorkspaceProject } from "./workspace-store";
 import {
   PlatformApiError,
@@ -52,22 +53,64 @@ const routeFallback = (
 );
 const syncMessage = { warning: (_value: unknown) => undefined, error: (_value: unknown) => undefined };
 
-function App() {
+// 主题宿主：跟随系统或手动模式，同步 antd 算法与 <html data-theme>。
+function ThemeHost({ children }: { children: React.ReactNode }) {
+  const [resolved, setResolved] = useState<"light" | "dark">(() =>
+    applyTheme(useThemeStore.getState().mode),
+  );
+
+  useEffect(() => {
+    const sync = () => setResolved(applyTheme(useThemeStore.getState().mode));
+    sync();
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => useThemeStore.subscribe((state) => setResolved(applyTheme(state.mode))), []);
+
+  const palette = themePalettes[resolved];
   return (
     <ConfigProvider
       theme={{
+        algorithm: resolved === "dark" ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
-          colorPrimary: "#147a73",
-          colorInfo: "#147a73",
-          colorSuccess: "#227a52",
-          colorWarning: "#c68418",
-          colorError: "#c44343",
-          borderRadius: 6,
-          fontFamily:
-            'Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
+          colorPrimary: palette.colorPrimary,
+          colorInfo: palette.colorInfo,
+          colorSuccess: palette.colorSuccess,
+          colorWarning: palette.colorWarning,
+          colorError: palette.colorError,
+          colorTextBase: palette.colorTextBase,
+          colorBgBase: palette.colorBgBase,
+          colorBgLayout: palette.colorBgLayout,
+          colorBgContainer: palette.colorBgBase,
+          colorBgElevated: palette.colorBgBase,
+          borderRadius: 8,
+          controlHeight: 36,
+          fontFamily: "var(--font-sans)",
+          // 0.2s：比 antd 默认 0.3s 更干脆；同时避免抽屉/弹层关闭动画与顶栏交互重叠（时序竞态）。
+          motionDurationSlow: "0.2s",
+        },
+        components: {
+          Table: {
+            headerBg: palette.surface2,
+            headerSplitColor: palette.separator,
+            rowHoverBg: palette.surface2,
+            cellPaddingBlock: 12,
+          },
+          Modal: { contentBg: palette.colorBgBase, headerBg: palette.colorBgBase },
+          Drawer: { colorBgElevated: palette.colorBgBase },
         },
       }}
     >
+      {children}
+    </ConfigProvider>
+  );
+}
+
+function App() {
+  return (
+    <ThemeHost>
       <AntdApp>
         <AntdFeedbackBridge />
         <ApplicationSessionGate>
@@ -111,7 +154,7 @@ function App() {
           </Routes>
         </ApplicationSessionGate>
       </AntdApp>
-    </ConfigProvider>
+    </ThemeHost>
   );
 }
 

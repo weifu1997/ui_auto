@@ -110,10 +110,7 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
       </nav>
       <div className="side-spacer" />
       <div className="side-profile">
-        <Avatar
-          size={28}
-          style={{ background: "#ddeeea", color: "#147a73", fontWeight: 700 }}
-        >
+        <Avatar className="side-avatar" size={28}>
           {session?.user.name.slice(0, 1).toUpperCase() ?? "A"}
         </Avatar>
         {!compact && (
@@ -261,7 +258,7 @@ export function ProjectLayout({
               {sectionMeta[key].icon}
               <span>{sectionMeta[key].label}</span>
               {key === "runs" && (
-                <Badge count={runningRunCount} size="small" color="#147a73" />
+                <Badge count={runningRunCount} size="small" color="var(--accent)" />
               )}
             </Link>
             ))}

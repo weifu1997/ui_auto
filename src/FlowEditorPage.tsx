@@ -296,6 +296,7 @@ export default function FlowEditorPage() {
               <Button
                 type="text"
                 icon={<PlusOutlined />}
+                aria-label="新增步骤"
                 onClick={() => addStep()}
               />
             </Tooltip>
@@ -355,7 +356,7 @@ export default function FlowEditorPage() {
                   ],
                 }}
               >
-                <Button type="text" icon={<MoreOutlined />} />
+                <Button type="text" icon={<MoreOutlined />} aria-label={`步骤 ${selectedStep?.title} 操作`} />
               </Dropdown>
             )}
           </div>
@@ -379,6 +380,7 @@ export default function FlowEditorPage() {
             <Button
               type="text"
               icon={<PlusOutlined />}
+              aria-label="前往元素库"
               onClick={() => navigate(`/project/${project.id}/elements`)}
             />
           </div>
@@ -535,6 +537,7 @@ function SortableStep({
         <Button
           type="text"
           icon={<MoreOutlined />}
+          aria-label={`步骤 ${step.title} 操作`}
           onClick={(event) => event.stopPropagation()}
         />
       </Dropdown>
