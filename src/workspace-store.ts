@@ -8,13 +8,6 @@ type NewProjectInput = {
   description?: string;
 };
 
-export type ProjectMember = {
-  id: string;
-  name: string;
-  email: string;
-  role: "成员" | "管理员";
-};
-
 export type PlatformWorkspaceProject = {
   platformProjectId: string;
   sourceProjectId: string;
@@ -33,7 +26,6 @@ type WorkspaceStore = {
   variablesByProject: Record<string, Variable[]>;
   environmentsByProject: Record<string, Environment[]>;
   activeEnvironmentByProject: Record<string, string>;
-  membersByProject: Record<string, ProjectMember[]>;
   projectModesById: Record<string, ProjectMode>;
   platformProjectIdsById: Record<string, string>;
   platformSyncStatusById: Record<string, PlatformSyncStatus>;
@@ -47,7 +39,6 @@ type WorkspaceStore = {
   setVariables: (projectId: string, variables: Variable[]) => void;
   setEnvironments: (projectId: string, environments: Environment[]) => void;
   setActiveEnvironment: (projectId: string, environmentId: string) => void;
-  addMember: (projectId: string, member: Omit<ProjectMember, "id">) => void;
   enablePlatformProject: (projectId: string, platformProjectId: string) => void;
   disconnectPlatformProject: (projectId: string) => void;
   setPlatformSyncStatus: (projectId: string, status: PlatformSyncStatus) => void;
@@ -81,7 +72,6 @@ function removeRetiredDemoProjects(value: unknown) {
     variablesByProject: withoutDemoKeys(state.variablesByProject),
     environmentsByProject: withoutDemoKeys(state.environmentsByProject),
     activeEnvironmentByProject: withoutDemoKeys(state.activeEnvironmentByProject),
-    membersByProject: withoutDemoKeys(state.membersByProject),
   };
 }
 
@@ -103,7 +93,6 @@ function addSauceDemoSeed(value: unknown) {
       ...(state.activeEnvironmentByProject ?? {}),
       [seed.project.id]: seed.environment.id,
     },
-    membersByProject: { ...(state.membersByProject ?? {}), [seed.project.id]: [] },
   };
 }
 
@@ -164,7 +153,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       variablesByProject: import.meta.env.PROD ? {} as Record<string, Variable[]> : { "sauce-demo": initialSauceDemoSeed.variables },
       environmentsByProject: import.meta.env.PROD ? {} as Record<string, Environment[]> : { "sauce-demo": [initialSauceDemoSeed.environment] },
       activeEnvironmentByProject: import.meta.env.PROD ? {} as Record<string, string> : { "sauce-demo": "sauce-demo-web" },
-      membersByProject: import.meta.env.PROD ? {} as Record<string, ProjectMember[]> : { "sauce-demo": [] },
       projectModesById: import.meta.env.PROD ? {} as Record<string, ProjectMode> : { "sauce-demo": "local" },
       platformProjectIdsById: {},
       platformSyncStatusById: {},
@@ -185,7 +173,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             ...state.activeEnvironmentByProject,
             [project.id]: "",
           },
-          membersByProject: { ...state.membersByProject, [project.id]: [] },
           projectModesById: { ...state.projectModesById, [project.id]: "local" },
         }));
         return project;
@@ -204,7 +191,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             state.activeEnvironmentByProject,
             projectId,
           ),
-          membersByProject: withoutProject(state.membersByProject, projectId),
           projectModesById: withoutProject(state.projectModesById, projectId),
           platformProjectIdsById: withoutProject(state.platformProjectIdsById, projectId),
           platformSyncStatusById: withoutProject(state.platformSyncStatusById, projectId),
@@ -251,16 +237,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             [projectId]: environmentId,
           },
         })),
-      addMember: (projectId, member) =>
-        set((state) => ({
-          membersByProject: {
-            ...state.membersByProject,
-            [projectId]: [
-              ...(state.membersByProject[projectId] ?? []),
-              { ...member, id: `member-${Date.now()}` },
-            ],
-          },
-        })),
       enablePlatformProject: (projectId, platformProjectId) =>
         set((state) => ({
           projectModesById: { ...state.projectModesById, [projectId]: "platform-enabled" },
@@ -300,7 +276,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           const nextVariables = { ...state.variablesByProject };
           const nextEnvironments = { ...state.environmentsByProject };
           const nextActiveEnvironments = { ...state.activeEnvironmentByProject };
-          const nextMembers = { ...state.membersByProject };
           for (const platformProject of platformProjects) {
             const { sourceProjectId, document } = platformProject;
             nextFlows[sourceProjectId] = documentArray<Flow>(
@@ -331,11 +306,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             )
               ? activeEnvironmentId
               : nextEnvironments[sourceProjectId][0]?.id ?? "";
-            nextMembers[sourceProjectId] = documentArray<ProjectMember>(
-              document,
-              "members",
-              state.membersByProject[sourceProjectId] ?? [],
-            );
           }
           return {
             projects: [...mappedProjects, ...retainedProjects],
@@ -344,7 +314,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             variablesByProject: nextVariables,
             environmentsByProject: nextEnvironments,
             activeEnvironmentByProject: nextActiveEnvironments,
-            membersByProject: nextMembers,
             projectModesById: {
               ...state.projectModesById,
               ...Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "platform-enabled"])),
@@ -361,7 +330,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           };
         }),
       replaceServerWorkspace: (platformProjects) =>
-        set((state) => ({
+        set(() => ({
           projects: platformProjects.map((item) => ({ id: item.sourceProjectId, name: item.name, description: item.description })),
           flowsByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, documentArray<Flow>(item.document, "flows", [])])),
           elementsByProject: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, documentArray<ElementAsset>(item.document, "elements", [])])),
@@ -372,7 +341,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             const selected = typeof item.document.activeEnvironmentId === "string" ? item.document.activeEnvironmentId : "";
             return [item.sourceProjectId, environments.some((environment) => environment.id === selected) ? selected : environments[0]?.id ?? ""];
           })),
-          membersByProject: state.membersByProject,
           projectModesById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "platform-enabled" as const])),
           platformProjectIdsById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, item.platformProjectId])),
           platformSyncStatusById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "synced" as const])),
@@ -423,7 +391,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         ),
         environmentsByProject: state.environmentsByProject,
         activeEnvironmentByProject: state.activeEnvironmentByProject,
-        membersByProject: state.membersByProject,
         projectModesById: state.projectModesById,
         platformProjectIdsById: state.platformProjectIdsById,
         platformSyncStatusById: state.platformSyncStatusById,

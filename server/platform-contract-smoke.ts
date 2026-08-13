@@ -135,7 +135,7 @@ try {
     throw new Error("Platform accepted a browser engine without a Chromium implementation");
   }
 
-  const revision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
+  const revision = await api<{ revision: { id: string; status: string } }>(`/api/platform/projects/${projectId}/revisions`, {
     method: "POST",
     headers: headers(token),
     body: JSON.stringify({
@@ -148,13 +148,12 @@ try {
   });
   const revisionId = revision.body.revision?.id;
   if (!revision.response.ok || !revisionId) throw new Error(`Revision creation failed: ${JSON.stringify(revision.body)}`);
+  if (revision.body.revision.status !== "published") throw new Error(`Save-as-snapshot revision was not published: ${JSON.stringify(revision.body)}`);
   await api(`/api/platform/projects/${projectId}/secrets`, {
     method: "POST",
     headers: headers(token),
     body: JSON.stringify({ name: "login_password", value: "never-log-this" }),
   });
-  const publish = await api(`/api/platform/projects/${projectId}/revisions/${revisionId}/publish`, { method: "POST", headers: headers(token) });
-  if (!publish.response.ok) throw new Error("Revision publish failed");
   const secondaryRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
     method: "POST",
     headers: headers(token),
@@ -166,8 +165,6 @@ try {
   });
   const secondaryRevisionId = secondaryRevision.body.revision?.id;
   if (!secondaryRevision.response.ok || !secondaryRevisionId) throw new Error("Secondary revision creation failed");
-  const secondaryPublish = await api(`/api/platform/projects/${projectId}/revisions/${secondaryRevisionId}/publish`, { method: "POST", headers: headers(token) });
-  if (!secondaryPublish.response.ok) throw new Error("Secondary revision publish failed");
   const publishedRevisions = await api<{ revisions: Array<{ id: string; flowId?: string; flowName?: string; environmentId?: string; status: string }> }>(`/api/platform/projects/${projectId}/revisions`, { headers: headers(token) });
   const primaryPublished = publishedRevisions.body.revisions.find((item) => item.id === revisionId);
   const secondaryPublished = publishedRevisions.body.revisions.find((item) => item.id === secondaryRevisionId);
@@ -181,12 +178,23 @@ try {
     throw new Error(`Published revisions were not isolated by flow and environment: ${JSON.stringify(publishedRevisions.body)}`);
   }
 
-  const reviewDraft = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: headers(token), body: JSON.stringify({ flow: { id: "review-flow", name: "Review flow", steps: [] }, environment: internalEnvironment, elements: [] }) });
-  const reviewId = reviewDraft.body.revision.id;
-  const submitted = await api<{ status: string }>(`/api/platform/projects/${projectId}/revisions/${reviewId}/submit`, { method: "POST", headers: headers(token), body: JSON.stringify({ note: "Ready" }) });
-  const rejected = await api<{ status: string }>(`/api/platform/projects/${projectId}/revisions/${reviewId}/reject`, { method: "POST", headers: headers(token), body: JSON.stringify({ note: "Add an assertion" }) });
-  const resubmitted = await api<{ status: string }>(`/api/platform/projects/${projectId}/revisions/${reviewId}/submit`, { method: "POST", headers: headers(token), body: JSON.stringify({ note: "Assertion added" }) });
-  if (submitted.body.status !== "pending_review" || rejected.body.status !== "rejected" || resubmitted.body.status !== "pending_review") throw new Error("Revision review state machine failed");
+  // 保存即快照：相同内容重复保存不产生新版本（checksum 幂等）。
+  const reviewSnapshot = { flow: { id: "review-flow", name: "Review flow", steps: [{ id: "open", action: "wait", value: "1" }] }, environment: internalEnvironment, elements: [] };
+  const idempotentFirst = await api<{ revision: { id: string; status: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: headers(token), body: JSON.stringify(reviewSnapshot) });
+  const idempotentSecond = await api<{ revision: { id: string; status: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: headers(token), body: JSON.stringify(reviewSnapshot) });
+  if (!idempotentFirst.response.ok || idempotentFirst.body.revision.status !== "published") throw new Error("Save-as-snapshot failed for review flow");
+  if (!idempotentSecond.response.ok || idempotentSecond.body.revision.id !== idempotentFirst.body.revision.id) {
+    throw new Error(`Identical snapshot was saved twice: ${JSON.stringify(idempotentSecond.body)}`);
+  }
+  // 回滚：从历史版本生成新的 published 快照，旧版本置 superseded。
+  const rollback = await api<{ revisionId: string; status: string }>(`/api/platform/projects/${projectId}/revisions/${revisionId}/rollback`, { method: "POST", headers: headers(token) });
+  if (!rollback.response.ok || rollback.body.status !== "published") throw new Error(`Rollback failed: ${JSON.stringify(rollback.body)}`);
+  const afterRollback = await api<{ revisions: Array<{ id: string; status: string }> }>(`/api/platform/projects/${projectId}/revisions`, { headers: headers(token) });
+  const rolledBackSource = afterRollback.body.revisions.find((item) => item.id === revisionId);
+  const rollbackLatest = afterRollback.body.revisions.find((item) => item.id === rollback.body.revisionId);
+  if (rolledBackSource?.status !== "superseded" || rollbackLatest?.status !== "published") {
+    throw new Error(`Rollback did not supersede the source revision: ${JSON.stringify(afterRollback.body)}`);
+  }
 
   const templatePublished = await api<{ template: { id: string } }>(`/api/platform/templates?workspaceId=${workspaceId}`, { method: "POST", headers: headers(token), body: JSON.stringify({ projectId, revisionId: secondaryRevisionId, name: "Contract template", category: "Smoke" }) });
   const templateId = templatePublished.body.template?.id;
@@ -218,8 +226,6 @@ try {
   });
   const fixtureRevisionId = fixtureRevision.body.revision?.id;
   if (!fixtureRevision.response.ok || !fixtureRevisionId) throw new Error(`Fixture revision creation failed: ${JSON.stringify(fixtureRevision.body)}`);
-  const fixturePublished = await api(`/api/platform/projects/${projectId}/revisions/${fixtureRevisionId}/publish`, { method: "POST", headers: headers(token) });
-  if (!fixturePublished.response.ok) throw new Error("Fixture revision publish failed");
 
   const createdRun = await api<{ run: { id: string; snapshot: Record<string, unknown> } }>(`/api/platform/projects/${projectId}/runs`, {
     method: "POST",
@@ -242,7 +248,6 @@ try {
   const waitingRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: headers(token), body: JSON.stringify({ flow: waitingFlow, environment: fixtureEnvironment, elements: [] }) });
   const waitingRevisionId = waitingRevision.body.revision?.id;
   if (!waitingRevision.response.ok || !waitingRevisionId) throw new Error("Waiting revision creation failed");
-  await api(`/api/platform/projects/${projectId}/revisions/${waitingRevisionId}/publish`, { method: "POST", headers: headers(token) });
   const waitingRun = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: headers(token), body: JSON.stringify({ revisionId: waitingRevisionId, environmentId: "fixture" }) });
   const waitingRunId = waitingRun.body.runIds[0];
   if (!waitingRun.response.ok || !waitingRunId) throw new Error("Waiting run creation failed");
@@ -277,8 +282,6 @@ try {
   });
   const dataRevisionId = dataRevision.body.revision?.id;
   if (!dataRevision.response.ok || !dataRevisionId) throw new Error("Dataset revision creation failed");
-  const dataPublished = await api(`/api/platform/projects/${projectId}/revisions/${dataRevisionId}/publish`, { method: "POST", headers: headers(token) });
-  if (!dataPublished.response.ok) throw new Error("Dataset revision publish failed");
 
   const channel = await api<{ channel: { id: string; name: string }; config?: unknown }>(`/api/platform/workspaces/${workspaceId}/notification-channels`, {
     method: "POST",
@@ -347,78 +350,29 @@ try {
   if (!analytics.response.ok || analytics.body.analytics.summary.totalRuns < 1) {
     throw new Error(`Analytics aggregation failed: ${JSON.stringify(analytics.body)}`);
   }
-  const viewerRegistration = await api<{ token: string }>("/api/auth/register", {
+  // 成员/角色已收敛：登录即全权限（角色细分移除），但工作空间隔离保留。
+  const strangerRegistration = await api<{ token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ email: "viewer@example.test", name: "Viewer", password: "viewer-password" }),
+    body: JSON.stringify({ email: "stranger@example.test", name: "Stranger", password: "stranger-password" }),
   });
-  if (!viewerRegistration.response.ok || !viewerRegistration.body.token) throw new Error("Viewer registration failed");
-  const addedMember = await api<{ member: { id: string; role: string } }>(`/api/workspaces/${workspaceId}/members`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ email: "viewer@example.test", name: "Viewer", role: "viewer" }),
-  });
-  if (!addedMember.response.ok || addedMember.body.member.role !== "viewer") throw new Error("Workspace member creation failed");
-  const viewerRead = await api(`/api/platform/projects/${projectId}/revisions`, { headers: headers(viewerRegistration.body.token) });
-  if (!viewerRead.response.ok) throw new Error("Viewer should retain project read access");
-  const viewerPublish = await api<{ error?: string }>(`/api/platform/projects/${projectId}/revisions/${dataRevisionId}/publish`, { method: "POST", headers: headers(viewerRegistration.body.token) });
-  if (viewerPublish.response.status !== 403 || viewerPublish.body.error !== "CAPABILITY_REQUIRED") throw new Error("Viewer was allowed to publish a release");
-  const viewerDraft = await api(`/api/platform/projects/${projectId}/revisions`, {
-    method: "POST",
-    headers: headers(viewerRegistration.body.token),
-    body: JSON.stringify({ flow: { id: "viewer-flow", steps: [] }, environment: { id: "internal" }, elements: [] }),
-  });
-  if (viewerDraft.response.status !== 403) throw new Error("Viewer was allowed to create a draft");
-  const productRegistration = await api<{ token?: string }>("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ email: "product@example.test", name: "Product", password: "product-password" }),
-  });
-  if (!productRegistration.response.ok || !productRegistration.body.token) throw new Error("Product registration failed");
-  const productMember = await api<{ member: { id: string } }>(`/api/workspaces/${workspaceId}/members`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ email: "product@example.test", name: "Product", role: "product" }),
-  });
-  if (!productMember.response.ok) throw new Error("Product member creation failed");
-  const productRun = await api<{ error?: string }>(`/api/platform/projects/${projectId}/runs`, {
-    method: "POST",
-    headers: headers(productRegistration.body.token),
-    body: JSON.stringify({ revisionId: dataRevisionId }),
-  });
-  if (productRun.response.status !== 403 || productRun.body.error !== "CAPABILITY_REQUIRED") throw new Error("Product was allowed to create a run without run.execute");
-  const ownerId = registration.body.token ? (await api<{ members: Array<{ id: string; role: string }> }>(`/api/workspaces/${workspaceId}/members`, { headers: headers(token) })).body.members.find((member) => member.role === "owner")?.id : undefined;
-  const disableLastOwner = await api<{ error?: string }>(`/api/workspaces/${workspaceId}/members/${ownerId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: false }) });
-  if (disableLastOwner.response.status !== 409 || disableLastOwner.body.error !== "LAST_WORKSPACE_OWNER_REQUIRED") throw new Error("Last workspace owner could be disabled");
-
-  const invitedMember = await api<{ member?: { id: string }; invitationToken?: string }>(`/api/workspaces/${workspaceId}/members`, {
-    method: "POST",
-    headers: headers(token),
-    body: JSON.stringify({ email: "invited@example.test", name: "Invited", role: "editor" }),
-  });
-  if (!invitedMember.response.ok || !invitedMember.body.member?.id || !invitedMember.body.invitationToken) {
-    throw new Error("Workspace invitation was not created");
+  if (!strangerRegistration.response.ok || !strangerRegistration.body.token) throw new Error("Stranger registration failed");
+  // 非成员不可见其他工作空间项目（隔离）。
+  const strangerRead = await api<{ error?: string }>(`/api/platform/projects/${projectId}/revisions`, { headers: headers(strangerRegistration.body.token) });
+  if (strangerRead.response.status !== 403 || strangerRead.body.error !== "WORKSPACE_ACCESS_DENIED") {
+    throw new Error(`Cross-workspace project access was not denied: ${strangerRead.response.status} ${JSON.stringify(strangerRead.body)}`);
   }
-  const missingInvitation = await api<{ error?: string }>("/api/auth/register", {
+  // 成员（含仅 open 注册）在自己的工作空间内拥有全权限：建项目 → 建环境 → 保存即快照 → 运行入队。
+  const strangerSession = await api<{ workspaces: Array<{ id: string }> }>("/api/auth/session", { headers: headers(strangerRegistration.body.token) });
+  const strangerWorkspaceId = strangerSession.body.workspaces[0]?.id;
+  if (!strangerWorkspaceId) throw new Error("Stranger workspace missing");
+  const strangerProject = await api<{ project: { id: string } }>(`/api/workspaces/${strangerWorkspaceId}/projects`, { method: "POST", headers: headers(strangerRegistration.body.token), body: JSON.stringify({ name: "Stranger project" }) });
+  if (!strangerProject.response.ok) throw new Error("Stranger could not create a project in their own workspace");
+  const strangerSnapshot = await api(`/api/platform/projects/${strangerProject.body.project.id}/revisions`, {
     method: "POST",
-    body: JSON.stringify({ email: "invited@example.test", name: "Invited", password: "invited-password" }),
+    headers: headers(strangerRegistration.body.token),
+    body: JSON.stringify({ flow: { id: "stranger-flow", name: "Stranger flow", steps: [{ id: "open", action: "wait", value: "1" }] }, environment: { id: "internal", name: "Internal", description: "", baseUrl: `http://127.0.0.1:${port}`, browser: "Chromium", auth: "无认证", timeout: 5, color: "teal", updatedAt: "now" }, elements: [] }),
   });
-  if (missingInvitation.response.status !== 409 || missingInvitation.body.error !== "INVITATION_VERIFICATION_REQUIRED") {
-    throw new Error("Pending member registered without an invitation token");
-  }
-  const acceptedInvitation = await api<{ token?: string }>("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ email: "invited@example.test", name: "Invited", password: "invited-password", invitationToken: invitedMember.body.invitationToken }),
-  });
-  if (!acceptedInvitation.response.ok || !acceptedInvitation.body.token) throw new Error("Valid invitation token was not accepted");
-  const invitedId = invitedMember.body.member.id;
-  const disabledInvited = await api<{ enabled: boolean }>(`/api/workspaces/${workspaceId}/members/${invitedId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: false }) });
-  if (!disabledInvited.response.ok || disabledInvited.body.enabled !== false) throw new Error("Account disable failed");
-  const disabledSession = await api<{ error?: string }>("/api/auth/session", { headers: headers(acceptedInvitation.body.token) });
-  if (disabledSession.response.status !== 401) throw new Error("Disabled account retained an active session");
-  await api(`/api/workspaces/${workspaceId}/members/${invitedId}/account`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ enabled: true }) });
-  const resetPassword = await api(`/api/workspaces/${workspaceId}/members/${invitedId}/reset-password`, { method: "POST", headers: headers(token), body: JSON.stringify({ password: "invited-new-password" }) });
-  if (!resetPassword.response.ok) throw new Error("Administrator password reset failed");
-  const resetLogin = await api<{ token?: string }>("/api/auth/login", { method: "POST", body: JSON.stringify({ email: "invited@example.test", password: "invited-new-password" }) });
-  if (!resetLogin.response.ok || !resetLogin.body.token) throw new Error("Reset password could not be used");
+  if (!strangerSnapshot.response.ok) throw new Error("Stranger full-permission snapshot creation failed");
   const archivedDataset = await api(`/api/platform/projects/${projectId}/datasets/${importedDataset.body.dataset.id}`, { method: "DELETE", headers: headers(token) });
   const archivedSchedule = await api(`/api/platform/projects/${projectId}/schedules/${schedule.body.schedule.id}`, { method: "DELETE", headers: headers(token) });
   const archivedWebhook = await api(`/api/platform/projects/${projectId}/webhook-triggers/${webhook.body.trigger.id}`, { method: "DELETE", headers: headers(token) });

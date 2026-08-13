@@ -1,15 +1,15 @@
 import { message } from "../antd-feedback";
 import type { Project } from "../mock-data";
-import { createPlatformRevision, createPlatformRun, getPlatformProjectDocument, getPlatformRevisions, importLocalWorkspace, loginPlatform, PlatformApiError, publishPlatformRevision, registerPlatform, savePlatformSecret } from "../platform-api";
+import { createPlatformRun, getPlatformProjectDocument, getPlatformRevisions, importLocalWorkspace, loginPlatform, PlatformApiError, registerPlatform, rollbackPlatformRevision, savePlatformSecret } from "../platform-api";
 import type { PlatformRevision, PlatformSession } from "../platform-api";
 import { disconnectPlatformProject as clearPlatformProjectMap, notifyPlatformContextChanged, platformSessionStorageKey, readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformDocumentVersion, storePlatformProjectMap, storePlatformWorkspaceId } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
-import { PageHeading, emptyElements, emptyEnvironments, emptyFlows, emptyVariables, platformRunAsRun, platformVariables, requestRunSecrets, requiredSecretVariables, variableReference } from "./shared";
+import { PageHeading, emptyEnvironments, emptyFlows, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, variableReference } from "./shared";
 import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
-import { PlayCircleFilled, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
-import { Alert, Button, Empty, Form, Input, Modal, Select, Space, Table, Tag, Tooltip } from "antd";
+import { HistoryOutlined, PlayCircleFilled, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { Alert, Button, Empty, Form, Input, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 const emptySecretValues: Record<string, string> = {};
@@ -19,7 +19,6 @@ export function AgentsPage({ project }: { project: Project }) {
   const environments = useWorkspaceStore((state) => state.environmentsByProject[project.id] ?? emptyEnvironments);
   const activeEnvironmentId = useWorkspaceStore((state) => state.activeEnvironmentByProject[project.id]);
   const flows = useWorkspaceStore((state) => state.flowsByProject[project.id] ?? emptyFlows);
-  const elements = useWorkspaceStore((state) => state.elementsByProject[project.id] ?? emptyElements);
   const variables = useWorkspaceStore((state) => state.variablesByProject[project.id] ?? emptyVariables);
   const upsertRun = useRunStore((state) => state.upsertRun);
   const enablePlatformProject = useWorkspaceStore((state) => state.enablePlatformProject);
@@ -33,11 +32,8 @@ export function AgentsPage({ project }: { project: Project }) {
   const [projectMap, setProjectMap] = useState<Record<string, string>>(() => readPlatformProjectMap(readStoredPlatformWorkspaceId(readStoredPlatformSession())));
   const [revisions, setRevisions] = useState<PlatformRevision[]>([]);
   const [loading, setLoading] = useState(false);
-  const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string>();
   const [loginForm] = Form.useForm();
-  const [releaseForm] = Form.useForm();
-  const [releaseOpen, setReleaseOpen] = useState(false);
   const platformProjectId = projectMap[project.id];
   const activeEnvironment = environments.find((environment) => environment.id === activeEnvironmentId) ?? environments[0];
 
@@ -58,37 +54,14 @@ export function AgentsPage({ project }: { project: Project }) {
     void loadRevisions();
   }, [loadRevisions]);
 
-  const publishFlow = async (targetProjectId: string, flowId?: string, environmentId?: string) => {
-    if (!session) return;
-    const flow = flows.find((item) => item.id === (flowId ?? flows[0]?.id));
-    const environment = environments.find((item) => item.id === (environmentId ?? activeEnvironment?.id)) ?? activeEnvironment;
-    if (!flow?.definition?.length || !environment) {
-      message.error("请选择包含步骤的流程和运行环境");
-      return;
-    }
-    setPublishing(true);
+  const rollbackToRevision = async (revision: PlatformRevision) => {
+    if (!session || !platformProjectId) return;
     try {
-      const requiredSecrets = requiredSecretVariables(variables, flow.definition);
-      const revision = await createPlatformRevision(session.token, targetProjectId, {
-        flow: {
-          id: flow.id,
-          name: flow.name,
-          description: flow.description,
-          steps: flow.definition,
-          variables: platformVariables(variables),
-        },
-        environment,
-        elements: elements.filter((item) => !item.environment || item.environment === environment.id),
-        secretNames: requiredSecrets.map(variableReference),
-      });
-      await publishPlatformRevision(session.token, targetProjectId, revision.revision.id);
-      setReleaseOpen(false);
+      await rollbackPlatformRevision(session.token, platformProjectId, revision.id, `回滚到 v${revision.revisionNumber}`);
       await loadRevisions();
-      message.success(`已发布 ${flow.name} 的新版本`);
+      message.success(`已回滚到 v${revision.revisionNumber}，并生成新版本`);
     } catch {
-      message.error("流程版本发布失败");
-    } finally {
-      setPublishing(false);
+      message.error("回滚失败，请稍后重试");
     }
   };
 
@@ -126,7 +99,6 @@ export function AgentsPage({ project }: { project: Project }) {
   const importCurrentWorkspace = async () => {
     if (!session || !workspaceId) return;
     setPublishError(undefined);
-    setPublishing(true);
     try {
       const state = useWorkspaceStore.getState();
       const result = await importLocalWorkspace(session.token, workspaceId, `project-${project.id}`, {
@@ -136,7 +108,6 @@ export function AgentsPage({ project }: { project: Project }) {
         variablesByProject: { [project.id]: state.variablesByProject[project.id] ?? [] },
         environmentsByProject: { [project.id]: state.environmentsByProject[project.id] ?? [] },
         activeEnvironmentByProject: { [project.id]: state.activeEnvironmentByProject[project.id] ?? "" },
-        membersByProject: { [project.id]: state.membersByProject[project.id] ?? [] },
       });
       const nextMap = { ...projectMap, ...Object.fromEntries(result.projects.map((item) => [item.sourceProjectId, item.projectId])) };
       storePlatformProjectMap(nextMap, workspaceId);
@@ -148,7 +119,7 @@ export function AgentsPage({ project }: { project: Project }) {
         storePlatformDocumentVersion(publishedProjectId, document.version, workspaceId);
       }
       notifyPlatformContextChanged();
-      message.success(result.imported ? "本地项目已导入 Platform，请显式发布流程版本" : "本地项目已同步到 Platform，请显式发布流程版本");
+      message.success(result.imported ? "本地项目已导入 Platform，保存流程后自动生成版本" : "本地项目已同步到 Platform，保存流程后自动生成版本");
     } catch (error) {
       if (error instanceof PlatformApiError && error.status === 401) {
         localStorage.removeItem(platformSessionStorageKey);
@@ -162,8 +133,6 @@ export function AgentsPage({ project }: { project: Project }) {
           ? `发布失败：${error.code}`
           : "发布失败，请稍后重试。",
       );
-    } finally {
-      setPublishing(false);
     }
   };
 
@@ -211,9 +180,6 @@ export function AgentsPage({ project }: { project: Project }) {
             </Form.Item>
             <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}>
               <Input.Password autoComplete="current-password" />
-            </Form.Item>
-            <Form.Item name="invitationToken" label="邀请令牌">
-              <Input autoComplete="off" />
             </Form.Item>
             <Space>
               <Button type="primary" htmlType="submit">登录</Button>
@@ -289,7 +255,7 @@ export function AgentsPage({ project }: { project: Project }) {
       <section className="surface settings-section agent-binding-section">
         <div>
           <h2>流程版本</h2>
-          <p>发布会固定当前流程、元素、环境和密钥引用；仅已发布版本可运行或触发持续回归。</p>
+          <p>保存流程后自动生成版本快照；仅已发布版本可运行或触发持续回归，可随时回滚到历史版本。</p>
         </div>
         <Table
           rowKey="id"
@@ -299,31 +265,28 @@ export function AgentsPage({ project }: { project: Project }) {
           dataSource={revisions}
           columns={[
             { title: "版本", dataIndex: "revisionNumber", width: 90, render: (value: number) => `v${value}` },
-            { title: "状态", dataIndex: "status", width: 110, render: (status: PlatformRevision["status"]) => <Tag color={status === "published" ? "success" : "default"}>{status === "published" ? "已发布" : status}</Tag> },
+            { title: "状态", dataIndex: "status", width: 110, render: (status: PlatformRevision["status"]) => <Tag color={status === "published" ? "success" : "default"}>{status === "published" ? "已发布" : status === "superseded" ? "已覆盖" : status}</Tag> },
             { title: "创建时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() },
-            { title: "", width: 72, render: (_, revision: PlatformRevision) => <Tooltip title="使用当前环境执行"><Button size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip> },
+            { title: "", width: 140, render: (_, revision: PlatformRevision) => (
+              <Space size={0}>
+                <Tooltip title="使用当前环境执行"><Button size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip>
+                {revision.status === "published" && (
+                  <Popconfirm
+                    title="回滚到此版本"
+                    description={`将回滚到 v${revision.revisionNumber} 并生成新版本`}
+                    okText="回滚"
+                    cancelText="取消"
+                    onConfirm={() => void rollbackToRevision(revision)}
+                  >
+                    <Tooltip title="回滚到此版本"><Button size="small" icon={<HistoryOutlined />} aria-label={`回滚到版本 v${revision.revisionNumber}`} /></Tooltip>
+                  </Popconfirm>
+                )}
+              </Space>
+            ) },
           ]}
-          locale={{ emptyText: <Empty description="发布当前流程后将显示可执行版本" /> }}
+          locale={{ emptyText: <Empty description="保存流程后将自动生成版本快照" /> }}
         />
-        <Button type="primary" disabled={!platformProjectId || flows.length === 0 || environments.length === 0} icon={<UploadOutlined />} onClick={() => { releaseForm.setFieldsValue({ flowId: flows[0]?.id, environmentId: activeEnvironment?.id ?? environments[0]?.id }); setReleaseOpen(true); }}>发布流程版本</Button>
       </section>
-      <Modal
-        title="发布流程版本"
-        open={releaseOpen}
-        confirmLoading={publishing}
-        onCancel={() => setReleaseOpen(false)}
-        okText="发布"
-        onOk={() => releaseForm.validateFields().then((values) => platformProjectId ? publishFlow(platformProjectId, values.flowId, values.environmentId) : undefined)}
-      >
-        <Form form={releaseForm} layout="vertical">
-          <Form.Item name="flowId" label="流程" rules={[{ required: true, message: "请选择流程" }]}>
-            <Select options={flows.filter((flow) => flow.definition?.length).map((flow) => ({ value: flow.id, label: flow.name }))} />
-          </Form.Item>
-          <Form.Item name="environmentId" label="运行环境" rules={[{ required: true, message: "请选择环境" }]}>
-            <Select options={environments.map((environment) => ({ value: environment.id, label: environment.name }))} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </>
   );
 }

@@ -215,7 +215,6 @@ function workspaceDocumentFor(state: WorkspaceSnapshot, projectId: string) {
     variables: state.variablesByProject[projectId] ?? [],
     environments: state.environmentsByProject[projectId] ?? [],
     activeEnvironmentId: state.activeEnvironmentByProject[projectId] ?? "",
-    members: state.membersByProject[projectId] ?? [],
   } satisfies Record<string, unknown>;
 }
 

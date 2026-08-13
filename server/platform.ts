@@ -19,7 +19,6 @@ import {
   platformArtifactDirectory,
   publicFlowOutputNames,
   publicIpAddress,
-  roleHasCapability,
   safeArtifactName,
   webhookRateLimitPerMinute,
 } from "./platform-core";
@@ -1106,44 +1105,34 @@ function createPlatformServices(dataDirectory: string) {
     const row = database
       .prepare(`SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?`)
       .get(workspaceId, userId) as { role: Role } | undefined;
+    // 成员/角色已收敛：角色细分移除，成员一律按 owner（全权限）放行；
+    // 非成员仍受工作空间隔离保护（open 注册用户不可见其他工作空间项目）。
     if (!row) throw new PlatformError(403, "WORKSPACE_ACCESS_DENIED");
-    return row.role;
+    return "owner";
   }
 
-  function requireProjectRole(projectId: string, userId: string, write = false) {
+  function requireProjectRole(projectId: string, userId: string, _write = false) {
     const project = projectFor(projectId);
-    const role = memberRole(project.workspace_id, userId);
-    if (write && role === "viewer") throw new PlatformError(403, "WORKSPACE_WRITE_DENIED");
-    return { project, role };
+    memberRole(project.workspace_id, userId);
+    return { project, role: "owner" as const };
   }
 
-  function requireProjectAdmin(projectId: string, userId: string) {
-    const { project, role } = requireProjectRole(projectId, userId, true);
-    if (role !== "owner" && role !== "admin") throw new PlatformError(403, "PROJECT_ADMIN_REQUIRED");
-    return { project, role };
+  function requireProjectAdmin(projectId: string, _userId: string) {
+    return requireProjectRole(projectId, _userId, true);
   }
 
-  function requireProjectCapability(projectId: string, userId: string, capability: Capability) {
-    const { project, role } = requireProjectRole(projectId, userId);
-    if (!roleHasCapability(role, capability)) throw new PlatformError(403, "CAPABILITY_REQUIRED");
-    return { project, role };
+  function requireProjectCapability(projectId: string, _userId: string, _capability: Capability) {
+    return requireProjectRole(projectId, _userId);
   }
 
-  function normalizeRole(value: unknown): Role {
-    if (value === "owner" || value === "admin" || value === "publisher" || value === "product" || value === "tester" || value === "operations" || value === "editor" || value === "viewer") return value;
-    throw new PlatformError(400, "WORKSPACE_ROLE_INVALID");
+  function requireWorkspaceRole(workspaceId: string, userId: string, _admin = false) {
+    memberRole(workspaceId, userId);
+    return "owner";
   }
 
-  function requireWorkspaceRole(workspaceId: string, userId: string, admin = false) {
-    const role = memberRole(workspaceId, userId);
-    if (admin && role !== "owner" && role !== "admin") throw new PlatformError(403, "WORKSPACE_ADMIN_REQUIRED");
-    return role;
-  }
-
-  function requireWorkspaceCapability(workspaceId: string, userId: string, capability: Capability) {
-    const role = memberRole(workspaceId, userId);
-    if (!roleHasCapability(role, capability)) throw new PlatformError(403, "CAPABILITY_REQUIRED");
-    return role;
+  function requireWorkspaceCapability(workspaceId: string, userId: string, _capability: Capability) {
+    memberRole(workspaceId, userId);
+    return "owner";
   }
 
   function documentFor(projectId: string): ProjectDocument {
@@ -1270,24 +1259,6 @@ function createPlatformServices(dataDirectory: string) {
     return workspace;
   }
 
-  function createWorkspaceInvitation(workspaceId: string, userId: string, createdBy: string) {
-    const token = `wsi_${randomBytes(32).toString("base64url")}`;
-    const createdAt = now();
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
-    database.prepare(`
-      INSERT INTO workspace_invitations (id, workspace_id, user_id, token_hash, expires_at, accepted_at, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
-      ON CONFLICT(workspace_id, user_id) DO UPDATE SET
-        id = excluded.id,
-        token_hash = excluded.token_hash,
-        expires_at = excluded.expires_at,
-        accepted_at = NULL,
-        created_by = excluded.created_by,
-        created_at = excluded.created_at
-    `).run(randomUUID(), workspaceId, userId, digest(token), expiresAt, createdBy, createdAt);
-    return { token, expiresAt };
-  }
-
   function projectResponse(row: { id: string; workspace_id: string; source_project_id?: string | null; slug: string; name: string; description: string; archived_at: string | null; created_at: string; updated_at: string }) {
     return {
       id: row.id,
@@ -1332,14 +1303,12 @@ function createPlatformServices(dataDirectory: string) {
     createElementValidation,
     createAuthSession,
     createWorkspace,
-    createWorkspaceInvitation,
     datasetRowsFor,
     datasetVersionFor,
     decrypt,
     documentFor,
     elementValidationById,
     encrypt,
-    normalizeRole,
     notificationTarget,
     parseDatasetUpload,
     processDueSchedules,

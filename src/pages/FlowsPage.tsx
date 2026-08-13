@@ -1,10 +1,12 @@
 import { message } from "../antd-feedback";
 import { localWorkerRunRequest } from "../local-worker-run";
 import type { Flow, Project, Run } from "../mock-data";
+import { PlatformApiError, createPlatformRun, savePlatformSecret } from "../platform-api";
+import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, requestRunSecrets, requiredSecretVariables, statusTag, watchWorkerRun } from "./shared";
+import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, variableReference, watchWorkerRun } from "./shared";
 import { createRun } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
@@ -75,6 +77,26 @@ export function FlowsPage({ project }: { project: Project }) {
       setSecretValues,
     );
     if (!secretValues) return;
+    const platformContext = platformProjectContext(project.id);
+    if (platformContext) {
+      try {
+        for (const variable of requiredSecretVariables(variables, steps)) {
+          const value = secretValues[variable.id];
+          if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
+        }
+        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: activeEnvironment.id });
+        result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+        message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
+        navigate(`/project/${project.id}/runs`);
+      } catch (error) {
+        if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
+          message.error("当前项目还没有版本快照，请先在编排器中保存流程");
+          return;
+        }
+        message.error("创建平台运行失败，请检查执行服务与运行环境");
+      }
+      return;
+    }
     try {
       const secretVariables = requiredSecretVariables(variables, steps);
       if (secretVariables.length > 0 && production) {

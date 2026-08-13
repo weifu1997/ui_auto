@@ -81,39 +81,24 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
       }
 
       if (url.pathname === "/api/auth/register" && request.method === "POST") {
-        const body = await readJson<{ email?: string; name?: string; password?: string; invitationToken?: string }>(request);
+        const body = await readJson<{ email?: string; name?: string; password?: string }>(request);
         const email = body.email?.trim().toLowerCase();
         const password = body.password?.trim();
         if (!email || !email.includes("@") || !password || password.length < 8 || password.length > 1024) throw new PlatformError(400, "REGISTER_INPUT_INVALID");
-        let user = services.database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ?`).get(email) as AuthUser | undefined;
-        if (user) {
-          const existingCredential = services.database.prepare(`SELECT user_id FROM platform_user_credentials WHERE user_id = ?`).get(user.id) as { user_id: string } | undefined;
-          if (existingCredential) throw new PlatformError(409, "EMAIL_ALREADY_REGISTERED");
-          const invitationToken = body.invitationToken?.trim();
-          if (!invitationToken) throw new PlatformError(409, "INVITATION_VERIFICATION_REQUIRED");
-          const invitation = services.database.prepare(`
-            SELECT id FROM workspace_invitations
-            WHERE user_id = ? AND token_hash = ? AND accepted_at IS NULL AND expires_at > ?
-          `).get(user.id, digest(invitationToken), now()) as { id: string } | undefined;
-          if (!invitation) throw new PlatformError(409, "INVITATION_TOKEN_INVALID");
+        const existing = services.database.prepare(`SELECT user_id FROM platform_user_credentials WHERE user_id IN (SELECT id FROM platform_users WHERE email = ?)`).get(email) as { user_id: string } | undefined;
+        if (existing) throw new PlatformError(409, "EMAIL_ALREADY_REGISTERED");
+        const user = { id: randomUUID(), email, name: body.name?.trim().slice(0, 100) || email.split("@")[0] };
+        services.database.exec("BEGIN IMMEDIATE");
+        try {
+          services.database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(user.id, user.email, user.name, now());
           const created = now();
           services.database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
             .run(user.id, passwordHash(password), created, created);
-          services.database.prepare(`UPDATE workspace_invitations SET accepted_at = ? WHERE id = ?`).run(created, invitation.id);
-        } else {
-          user = { id: randomUUID(), email, name: body.name?.trim().slice(0, 100) || email.split("@")[0] };
-          services.database.exec("BEGIN IMMEDIATE");
-          try {
-            services.database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(user.id, user.email, user.name, now());
-            const created = now();
-            services.database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
-              .run(user.id, passwordHash(password), created, created);
-            services.createWorkspace(user, `${user.name}'s workspace`);
-            services.database.exec("COMMIT");
-          } catch (error) {
-            services.database.exec("ROLLBACK");
-            throw error;
-          }
+          services.createWorkspace(user, `${user.name}'s workspace`);
+          services.database.exec("COMMIT");
+        } catch (error) {
+          services.database.exec("ROLLBACK");
+          throw error;
         }
         const session = services.createAuthSession(user);
         setSessionCookie(response, session.token, session.expiresAt);
@@ -166,118 +151,6 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         const body = await readJson<{ name?: string }>(request);
         if (!body.name?.trim()) throw new PlatformError(400, "WORKSPACE_NAME_REQUIRED");
         sendJson(response, 201, { workspace: services.createWorkspace(user, body.name) });
-        return true;
-      }
-
-      const workspaceMembers = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/members$/);
-      if (workspaceMembers) {
-        const user = services.sessionUser(request);
-        const workspaceId = decodeURIComponent(workspaceMembers[1]);
-        const actorRole = services.requireWorkspaceRole(workspaceId, user.id, request.method !== "GET");
-        if (request.method === "GET") {
-          const members = services.database.prepare(
-            `SELECT u.id, u.email, u.name, u.enabled, CASE WHEN c.user_id IS NULL THEN 0 ELSE 1 END credential_configured, m.role FROM workspace_members m
-             JOIN platform_users u ON u.id = m.user_id
-             LEFT JOIN platform_user_credentials c ON c.user_id = u.id
-             WHERE m.workspace_id = ? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, u.email`,
-          ).all(workspaceId) as Array<{ id: string; email: string; name: string; enabled: number; credential_configured: number; role: Role }>;
-          sendJson(response, 200, { members: members.map((member) => ({ ...member, enabled: Boolean(member.enabled), credentialConfigured: Boolean(member.credential_configured), credential_configured: undefined })) });
-          return true;
-        }
-        if (request.method === "POST") {
-          const body = await readJson<{ email?: string; name?: string; role?: Role }>(request);
-          const email = body.email?.trim().toLowerCase();
-          const role = services.normalizeRole(body.role ?? "viewer");
-          if (!email || !email.includes("@")) throw new PlatformError(400, "WORKSPACE_MEMBER_EMAIL_INVALID");
-          if (role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-          let member = services.database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ?`).get(email) as AuthUser | undefined;
-          if (!member) {
-            member = { id: randomUUID(), email, name: body.name?.trim().slice(0, 100) || email.split("@")[0] };
-            services.database.prepare(`INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)`).run(member.id, member.email, member.name, now());
-          }
-          const existing = services.database.prepare(`SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?`).get(workspaceId, member.id) as { role: Role } | undefined;
-          if (existing?.role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-          services.database.prepare(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role`).run(workspaceId, member.id, role);
-          const pendingInvitation = services.database.prepare(`SELECT user_id FROM platform_user_credentials WHERE user_id = ?`).get(member.id) as { user_id: string } | undefined;
-          const invitation = pendingInvitation ? undefined : services.createWorkspaceInvitation(workspaceId, member.id, user.id);
-          services.audit(workspaceId, { type: "user", id: user.id }, existing ? "workspace_member.role_changed" : "workspace_member.added", { type: "member", id: member.id }, { email, role });
-          sendJson(response, existing ? 200 : 201, { member: { ...member, role }, invitationToken: invitation?.token, invitationExpiresAt: invitation?.expiresAt });
-          return true;
-        }
-      }
-
-      const workspaceMemberAccount = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/members\/([^/]+)\/(account|reset-password)$/);
-      if (workspaceMemberAccount && (request.method === "PATCH" || request.method === "POST")) {
-        const user = services.sessionUser(request);
-        const workspaceId = decodeURIComponent(workspaceMemberAccount[1]);
-        const memberId = decodeURIComponent(workspaceMemberAccount[2]);
-        const action = workspaceMemberAccount[3];
-        services.requireWorkspaceRole(workspaceId, user.id, true);
-        const member = services.database.prepare("SELECT u.id, u.enabled, m.role FROM platform_users u JOIN workspace_members m ON m.user_id = u.id WHERE u.id = ? AND m.workspace_id = ?")
-          .get(memberId, workspaceId) as { id: string; enabled: number; role: Role } | undefined;
-        if (!member) throw new PlatformError(404, "WORKSPACE_MEMBER_NOT_FOUND");
-        if (action === "account" && request.method === "PATCH") {
-          const body = await readJson<{ enabled?: boolean }>(request);
-          if (typeof body.enabled !== "boolean") throw new PlatformError(400, "ACCOUNT_STATUS_REQUIRED");
-          if (!body.enabled) {
-            const soleOwner = services.database.prepare(`
-              SELECT m.workspace_id FROM workspace_members m
-              WHERE m.user_id = ? AND m.role = 'owner'
-                AND (SELECT COUNT(*) FROM workspace_members owners WHERE owners.workspace_id = m.workspace_id AND owners.role = 'owner') <= 1
-              LIMIT 1
-            `).get(memberId) as { workspace_id: string } | undefined;
-            if (soleOwner) throw new PlatformError(409, "LAST_WORKSPACE_OWNER_REQUIRED");
-          }
-          services.database.prepare("UPDATE platform_users SET enabled = ? WHERE id = ?").run(body.enabled ? 1 : 0, memberId);
-          if (!body.enabled) services.database.prepare("DELETE FROM platform_sessions WHERE user_id = ?").run(memberId);
-          services.audit(workspaceId, { type: "user", id: user.id }, body.enabled ? "account.enabled" : "account.disabled", { type: "user", id: memberId });
-          sendJson(response, 200, { memberId, enabled: body.enabled });
-          return true;
-        }
-        if (action === "reset-password" && request.method === "POST") {
-          const body = await readJson<{ password?: string }>(request);
-          const password = body.password?.trim() ?? "";
-          if (password.length < 8) throw new PlatformError(400, "PASSWORD_TOO_SHORT");
-          const timestamp = now();
-          services.database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at`)
-            .run(memberId, passwordHash(password), timestamp, timestamp);
-          services.database.prepare("DELETE FROM platform_sessions WHERE user_id = ?").run(memberId);
-          services.audit(workspaceId, { type: "user", id: user.id }, "account.password_reset", { type: "user", id: memberId });
-          sendJson(response, 200, { memberId, passwordReset: true });
-          return true;
-        }
-      }
-
-      const workspaceMember = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/members\/([^/]+)$/);
-      if (workspaceMember && (request.method === "PATCH" || request.method === "DELETE")) {
-        const user = services.sessionUser(request);
-        const workspaceId = decodeURIComponent(workspaceMember[1]);
-        const memberId = decodeURIComponent(workspaceMember[2]);
-        const actorRole = services.requireWorkspaceRole(workspaceId, user.id, true);
-        const member = services.database.prepare(`SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?`).get(workspaceId, memberId) as { role: Role } | undefined;
-        if (!member) throw new PlatformError(404, "WORKSPACE_MEMBER_NOT_FOUND");
-        if (member.role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-        if (request.method === "PATCH") {
-          const body = await readJson<{ role?: Role }>(request);
-          const role = services.normalizeRole(body.role);
-          if (role === "owner" && actorRole !== "owner") throw new PlatformError(403, "WORKSPACE_OWNER_REQUIRED");
-          if (member.role === "owner" && role !== "owner") {
-            const owners = services.database.prepare(`SELECT COUNT(*) AS count FROM workspace_members WHERE workspace_id = ? AND role = 'owner'`).get(workspaceId) as { count: number };
-            if (owners.count <= 1) throw new PlatformError(409, "WORKSPACE_OWNER_REQUIRED");
-          }
-          services.database.prepare(`UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?`).run(role, workspaceId, memberId);
-          services.audit(workspaceId, { type: "user", id: user.id }, "workspace_member.role_changed", { type: "member", id: memberId }, { role });
-          sendJson(response, 200, { memberId, role });
-          return true;
-        }
-        if (member.role === "owner") {
-          const owners = services.database.prepare(`SELECT COUNT(*) AS count FROM workspace_members WHERE workspace_id = ? AND role = 'owner'`).get(workspaceId) as { count: number };
-          if (owners.count <= 1) throw new PlatformError(409, "WORKSPACE_OWNER_REQUIRED");
-        }
-        services.database.prepare(`DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?`).run(workspaceId, memberId);
-        services.audit(workspaceId, { type: "user", id: user.id }, "workspace_member.removed", { type: "member", id: memberId });
-        sendJson(response, 200, { memberId, removed: true });
         return true;
       }
 
@@ -687,7 +560,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           return true;
         }
         if (request.method === "POST") {
-          services.requireProjectCapability(projectId, user.id, "release.submit");
+          services.requireProjectCapability(projectId, user.id, "flow.edit");
           const body = await readJson<{ flowId?: string; environmentId?: string; flow?: Record<string, unknown>; environment?: Record<string, unknown>; elements?: unknown; dataset?: unknown; datasetVersionId?: string; secretNames?: unknown }>(request, 5_000_000);
           const resource = (type: string, id: string) => {
             const row = services.database.prepare("SELECT data FROM project_resources WHERE project_id = ? AND resource_type = ? AND resource_id = ? AND archived_at IS NULL").get(projectId, type, id) as { data: string } | undefined;
@@ -731,26 +604,35 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           try {
             const rows = services.database.prepare(`SELECT revision_number FROM flow_revisions WHERE project_id = ?`).all(projectId) as Array<{ revision_number: number }>;
             revision = { id: randomUUID(), number: revisionNumber(rows), checksum: digest(json(snapshot)), createdAt: now() };
-            services.database.prepare(`INSERT INTO flow_revisions (id, project_id, flow_id, flow_name, environment_id, revision_number, status, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`)
-              .run(revision.id, projectId, flowId, flowName || null, environmentId, revision.number, json(snapshot.flow), json(snapshot.environment), json(snapshot.elements), json(snapshot.dataset), revision.checksum, user.id, revision.createdAt);
+            const latest = services.database.prepare(`SELECT id, revision_number, created_at FROM flow_revisions WHERE project_id = ? AND flow_id = ? AND environment_id = ? AND status = 'published' ORDER BY published_at DESC LIMIT 1`).get(projectId, flowId, environmentId) as { id: string; revision_number: number; created_at: string } | undefined;
+            if (latest && (services.database.prepare(`SELECT checksum FROM flow_revisions WHERE id = ?`).get(latest.id) as { checksum: string }).checksum === revision.checksum) {
+              // 内容未变化：不产生新版本（保存即快照的幂等去重）。
+              services.database.exec("COMMIT");
+              sendJson(response, 200, { revision: { id: latest.id, flowId, flowName: flowName || undefined, environmentId, stepCount: flowStepCount, revisionNumber: latest.revision_number, status: "published", checksum: revision.checksum, createdAt: latest.created_at } });
+              return true;
+            }
+            // 保存即快照：直接以 published 落库，同 flow+env 的其他已发布版本置 superseded。
+            services.database.prepare(`UPDATE flow_revisions SET status = 'superseded' WHERE project_id = ? AND flow_id = ? AND environment_id = ? AND status = 'published'`).run(projectId, flowId, environmentId);
+            services.database.prepare(`INSERT INTO flow_revisions (id, project_id, flow_id, flow_name, environment_id, revision_number, status, flow_snapshot, environment_snapshot, element_snapshot, dataset_snapshot, checksum, created_by, created_at, published_at) VALUES (?, ?, ?, ?, ?, ?, 'published', ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(revision.id, projectId, flowId, flowName || null, environmentId, revision.number, json(snapshot.flow), json(snapshot.environment), json(snapshot.elements), json(snapshot.dataset), revision.checksum, user.id, revision.createdAt, revision.createdAt);
             services.database.exec("COMMIT");
           } catch (error) {
             services.database.exec("ROLLBACK");
             throw error;
           }
           services.audit(project.workspace_id, { type: "user", id: user.id }, "flow_revision.created", { type: "flow_revision", id: revision.id }, { revisionNumber: revision.number }, projectId);
-          sendJson(response, 201, { revision: { id: revision.id, flowId, flowName: flowName || undefined, environmentId, stepCount: flowStepCount, revisionNumber: revision.number, status: "draft", checksum: revision.checksum, createdAt: revision.createdAt } });
+          sendJson(response, 201, { revision: { id: revision.id, flowId, flowName: flowName || undefined, environmentId, stepCount: flowStepCount, revisionNumber: revision.number, status: "published", checksum: revision.checksum, createdAt: revision.createdAt } });
           return true;
         }
       }
 
-      const revisionAction = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/revisions\/([^/]+)\/(submit|publish|reject|deprecate|rollback)$/);
+      const revisionAction = url.pathname.match(/^\/api\/platform\/projects\/([^/]+)\/revisions\/([^/]+)\/(publish|rollback)$/);
       if (revisionAction && request.method === "POST") {
         const user = services.sessionUser(request);
         const projectId = decodeURIComponent(revisionAction[1]);
         const revisionId = decodeURIComponent(revisionAction[2]);
         const action = revisionAction[3];
-        const { project, role } = services.requireProjectCapability(projectId, user.id, action === "submit" ? "release.submit" : "release.publish");
+        const { project } = services.requireProjectCapability(projectId, user.id, "release.publish");
         const revision = services.database.prepare(`SELECT * FROM flow_revisions WHERE id = ? AND project_id = ?`).get(revisionId, projectId) as {
           id: string; status: RevisionStatus; flow_id: string | null; flow_name: string | null; environment_id: string | null;
           flow_snapshot: string; environment_snapshot: string; element_snapshot: string; dataset_snapshot: string;
@@ -761,30 +643,8 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         const status = revision.status as RevisionStatus;
         const body = await readJson<{ note?: string }>(request);
         const note = body.note?.trim().slice(0, 2000) ?? "";
-        if (action === "submit") {
-          if (status !== "draft" && status !== "rejected") throw new PlatformError(409, "REVISION_NOT_SUBMITTABLE");
-          services.database.prepare("UPDATE flow_revisions SET status = 'pending_review', submitted_at = ?, review_note = NULL, reviewed_by = NULL WHERE id = ?").run(now(), revisionId);
-          services.audit(project.workspace_id, { type: "user", id: user.id }, "flow_revision.submitted", { type: "flow_revision", id: revisionId }, { note }, projectId);
-          sendJson(response, 200, { revisionId, status: "pending_review" });
-          return true;
-        }
-        if (action === "reject") {
-          if (status !== "pending_review") throw new PlatformError(409, "REVISION_NOT_REVIEWABLE");
-          if (!note) throw new PlatformError(400, "REJECTION_NOTE_REQUIRED");
-          services.database.prepare("UPDATE flow_revisions SET status = 'rejected', reviewed_by = ?, review_note = ? WHERE id = ?").run(user.id, note, revisionId);
-          services.audit(project.workspace_id, { type: "user", id: user.id }, "flow_revision.rejected", { type: "flow_revision", id: revisionId }, { note }, projectId);
-          sendJson(response, 200, { revisionId, status: "rejected" });
-          return true;
-        }
-        if (action === "deprecate") {
-          if (status !== "published") throw new PlatformError(409, "REVISION_NOT_PUBLISHED");
-          services.database.prepare("UPDATE flow_revisions SET status = 'deprecated', reviewed_by = ?, review_note = ? WHERE id = ?").run(user.id, note || null, revisionId);
-          services.audit(project.workspace_id, { type: "user", id: user.id }, "flow_revision.deprecated", { type: "flow_revision", id: revisionId }, { note }, projectId);
-          sendJson(response, 200, { revisionId, status: "deprecated" });
-          return true;
-        }
         if (action === "publish") {
-          if (status !== "pending_review" && !(["owner", "admin"].includes(role) && status === "draft")) throw new PlatformError(409, "REVISION_NOT_REVIEWABLE");
+          // 兼容历史 draft/pending_review 数据：直接发布为最新版本。
           services.database.exec("BEGIN IMMEDIATE");
           try {
             services.database.prepare(`UPDATE flow_revisions SET status = 'superseded' WHERE project_id = ? AND flow_id = ? AND environment_id = ? AND status = 'published'`).run(projectId, revision.flow_id, revision.environment_id);

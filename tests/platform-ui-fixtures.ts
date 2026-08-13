@@ -96,7 +96,24 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
     if (request.method() === "POST") {
       const body = request.postDataJSON() as Record<string, unknown>;
       calls.revisions.push(body);
-      await route.fulfill({ status: 405, contentType: "application/json", body: JSON.stringify({ error: "RUN_MUST_NOT_CREATE_OR_PUBLISH_A_REVISION" }) });
+      // 保存即快照：返回新建的 published 版本（测试不校验幂等，每次都返回新版本）。
+      const flow = body.flow as Record<string, unknown> | undefined;
+      const environment = body.environment as Record<string, unknown> | undefined;
+      const saved = {
+        id: `revision-saved-${calls.revisions.length}`,
+        flowId: typeof flow?.id === "string" ? flow.id : undefined,
+        flowName: typeof flow?.name === "string" ? flow.name : undefined,
+        revisionNumber: revisions.length + calls.revisions.length,
+        status: "published",
+        checksum: `ui-checksum-${calls.revisions.length}`,
+        createdBy: "platform-ui-user",
+        createdAt: "2030-01-01T00:00:00.000Z",
+        publishedAt: "2030-01-01T00:00:00.000Z",
+        environmentId: typeof environment?.id === "string" ? environment.id : undefined,
+        stepCount: Array.isArray(flow?.steps) ? (flow.steps as unknown[]).length : 0,
+      };
+      revisions.push({ id: saved.id, response: saved, flow: flow ?? {}, environment: environment ?? {}, elements: Array.isArray(body.elements) ? body.elements : [] });
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ revision: saved }) });
       return;
     }
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ revisions: revisions.map((revision) => revision.response) }) });
@@ -108,7 +125,8 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
     if (request.method() === "POST" && url.pathname.endsWith("/runs")) {
       const body = request.postDataJSON() as Record<string, unknown>;
       calls.runs.push(body);
-      const revision = revisionById.get(String(body.revisionId));
+      // 运行可不传 revisionId：取最新版本（保存即快照后总有 published 版本）。
+      const revision = body.revisionId ? revisionById.get(String(body.revisionId)) : revisions[0];
       if (!revision) {
         await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "PUBLISHED_REVISION_REQUIRED" }) });
         return;

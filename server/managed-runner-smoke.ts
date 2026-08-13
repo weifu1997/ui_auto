@@ -57,8 +57,8 @@ try {
   const element = { id: "fixture-title", name: "fixture-title", description: "", path: "/__fixture/login", method: "css", value: "h1", environment: environment.id, validation: "unverified", updatedAt: "now" };
   const environmentResource = await api(`/api/platform/projects/${projectId}/resources/environments`, { method: "POST", headers: authenticated(token), body: JSON.stringify({ id: environment.id, data: environment }) });
   if (!environmentResource.response.ok) throw new Error("Managed validation environment setup failed");
-  const revision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: authenticated(token), body: JSON.stringify({ flow, environment, elements: [element] }) });
-  await api(`/api/platform/projects/${projectId}/revisions/${revision.body.revision.id}/publish`, { method: "POST", headers: authenticated(token) });
+  const revision = await api<{ revision: { id: string; status: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: authenticated(token), body: JSON.stringify({ flow, environment, elements: [element] }) });
+  if (!revision.response.ok || revision.body.revision.status !== "published") throw new Error("Managed snapshot was not created as published");
 
   const created = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: authenticated(token), body: JSON.stringify({ revisionId: revision.body.revision.id, environmentId: environment.id }) });
   const completed = await waitForRun(token, projectId, created.body.runIds[0], ["success", "failed"]);
@@ -75,7 +75,6 @@ try {
 
   const waitingFlow = { ...flow, id: "cancel-flow", name: "Cancel flow", steps: [{ id: "wait", title: "Wait", action: "等待", value: "10000", timeout: 10, failurePolicy: "停止流程", status: "pending" }] };
   const waitingRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, { method: "POST", headers: authenticated(token), body: JSON.stringify({ flow: waitingFlow, environment, elements: [] }) });
-  await api(`/api/platform/projects/${projectId}/revisions/${waitingRevision.body.revision.id}/publish`, { method: "POST", headers: authenticated(token) });
   const waitingRun = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: authenticated(token), body: JSON.stringify({ revisionId: waitingRevision.body.revision.id, environmentId: environment.id }) });
   await waitForRun(token, projectId, waitingRun.body.runIds[0], ["running"]);
   await api(`/api/platform/projects/${projectId}/runs/${waitingRun.body.runIds[0]}/cancel`, { method: "POST", headers: authenticated(token) });

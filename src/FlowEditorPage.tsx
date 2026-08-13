@@ -23,6 +23,9 @@ import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { message, modal } from "./antd-feedback";
 import { localWorkerRunRequest } from "./local-worker-run";
+import { PlatformApiError, createPlatformRun, savePlatformSecret } from "./platform-api";
+import { platformProjectContext } from "./platform-context";
+import { platformRunAsRun } from "./pages/shared";
 import { createRun } from "./worker-api";
 import { actionOptions } from "./mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "./mock-data";
@@ -221,6 +224,28 @@ export default function FlowEditorPage() {
     );
     if (!secretValues) {
       setRunToStep(false);
+      return;
+    }
+    const platformContext = platformProjectContext(project.id);
+    if (platformContext) {
+      try {
+        for (const variable of requiredSecretVariables(variables, stepsToRun)) {
+          const value = secretValues[variable.id];
+          if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
+        }
+        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: environment.id, upToStepId });
+        result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+        message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
+        if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
+      } catch (error) {
+        if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
+          message.error("当前项目还没有版本快照，请先保存流程");
+        } else {
+          message.error("创建平台运行失败，请检查执行服务与运行环境");
+        }
+      } finally {
+        setRunToStep(false);
+      }
       return;
     }
     try {

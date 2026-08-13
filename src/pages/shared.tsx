@@ -3,7 +3,7 @@
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
 import type { PlatformRun, PlatformSession } from "../platform-api";
-import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession } from "../platform-context";
+import { readStoredPlatformSession, storePlatformSession } from "../platform-context";
 import { logoutPlatform } from "../platform-api";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
@@ -62,7 +62,6 @@ export const emptyFlows: Flow[] = [];
 export const emptyElements: ElementAsset[] = [];
 export const emptyVariables: Variable[] = [];
 export const emptyEnvironments: Environment[] = [];
-export const emptyMembers: Array<{ id: string; name: string; email: string; role: string }> = [];
 export const emptySecretValues: Record<string, string> = {};
 
 export function statusTag(status: Run["status"]) {
@@ -79,9 +78,6 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   const isProjects = location.pathname === "/projects";
   const isTemplates = location.pathname === "/templates";
   const session = readStoredPlatformSession();
-  const workspaceId = readStoredPlatformWorkspaceId(session);
-  const role = session?.workspaces.find((workspace) => workspace.id === workspaceId)?.role ?? "viewer";
-  const roleLabels: Record<string, string> = { owner: "工作空间所有者", admin: "管理员", publisher: "发布者", product: "产品", tester: "测试", operations: "运营", editor: "编辑者", viewer: "只读成员" };
   return (
     <aside className={`workspace-side ${compact ? "compact" : ""}`}>
       <Link className="brand" to="/projects" aria-label="AutoFlow 工作空间">
@@ -116,7 +112,7 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
         {!compact && (
           <div>
             <strong>{session?.user.name ?? "AutoFlow 用户"}</strong>
-            <span>{roleLabels[role] ?? role}</span>
+            <span>{session?.user.email ?? "未登录"}</span>
           </div>
         )}
         {!compact && session && <Tooltip title="退出登录"><Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logoutPlatform().finally(() => { storePlatformSession(); window.location.assign("/"); })} /></Tooltip>}
@@ -132,32 +128,9 @@ export type Capability =
   | "release.submit" | "release.publish" | "run.execute"
   | "dataset.manage" | "automation.manage" | "member.manage";
 
-const roleCapabilities: Record<Role, Capability[]> = {
-  owner: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage", "member.manage"],
-  admin: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage", "member.manage"],
-  publisher: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage"],
-  product: ["project.view", "project.edit", "flow.edit", "variable.manage", "release.submit"],
-  tester: ["project.view", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "run.execute", "dataset.manage"],
-  operations: ["project.view", "run.execute", "dataset.manage", "automation.manage"],
-  editor: ["project.view", "project.edit", "flow.edit", "element.manage", "variable.manage", "environment.manage", "release.submit", "run.execute", "dataset.manage"],
-  viewer: ["project.view"],
-};
-
-export function roleHasCapability(role: Role, capability: Capability) {
-  return roleCapabilities[role].includes(capability);
-}
-
-export function currentWorkspaceRole(): Role {
-  const session = readStoredPlatformSession();
-  const workspaceId = readStoredPlatformWorkspaceId(session);
-  return (session?.workspaces.find((workspace) => workspace.id === workspaceId)?.role ?? "viewer") as Role;
-}
-
-// 本地开发（无认证）保持全部按钮可见，与 ProjectLayout 的 production 判断一致。
-export function canUseCapability(capability: Capability) {
-  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
-  if (!production) return true;
-  return roleHasCapability(currentWorkspaceRole(), capability);
+// 成员/角色已收敛为「登录即全权限」：能力门禁恒放行，保留签名以兼容调用点。
+export function canUseCapability(_capability: Capability) {
+  return true;
 }
 
 export function ProjectLayout({
@@ -177,18 +150,8 @@ export function ProjectLayout({
     setProjectNavOpen(false);
   }, [location.pathname]);
   const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
-  const platformSession = readStoredPlatformSession();
-  const workspaceRole = platformSession?.workspaces.find((workspace) => workspace.id === readStoredPlatformWorkspaceId(platformSession))?.role ?? "viewer";
-  const sectionsByRole: Record<string, ProjectSection[]> = {
-    product: ["overview", "flows", "variables", "platform"],
-    tester: ["overview", "flows", "elements", "variables", "environments", "data", "runs", "platform"],
-    operations: ["overview", "data", "automations", "runs", "governance"],
-    publisher: ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance"],
-    editor: ["overview", "flows", "elements", "variables", "environments", "data", "runs", "platform"],
-    viewer: ["overview", "runs"],
-  };
   const visibleSections = production
-    ? (sectionsByRole[workspaceRole] ?? (workspaceRole === "owner" || workspaceRole === "admin" ? ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] : sectionsByRole.viewer))
+    ? (["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] as ProjectSection[])
     : (Object.keys(sectionMeta) as ProjectSection[]).filter((key) => !["data", "agents", "automations", "governance"].includes(key));
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],

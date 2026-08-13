@@ -27,8 +27,8 @@ export function TemplatesPage() {
   const projects = useWorkspaceStore((state) => state.projects);
   const [session] = useState(readStoredPlatformSession);
   const workspaceId = readStoredPlatformWorkspaceId(session);
-  const workspaceRole = session?.workspaces.find((workspace) => workspace.id === workspaceId)?.role;
-  const canPublish = ["owner", "admin", "publisher"].includes(workspaceRole ?? "");
+  // 成员/角色已收敛为「登录即全权限」：发布与编辑模板能力恒可用。
+  const canPublish = Boolean(session);
 
   const load = useCallback(async (search: string) => {
     if (!session || !workspaceId) return setLoading(false);
@@ -121,7 +121,7 @@ export function TemplatesPage() {
           )}
         </section>
       </main>
-      <Drawer title={selected?.name} open={Boolean(selected)} onClose={() => setSelected(undefined)} size={480} extra={selected && (selected.createdBy === session?.user.id || ["owner", "admin"].includes(workspaceRole ?? "")) ? <Space><Button aria-label="编辑模板" icon={<EditOutlined />} onClick={() => setEditOpen(true)} /><Popconfirm title="归档该模板？" onConfirm={() => session && deletePlatformTemplate(session.token, selected.id).then(() => { setSelected(undefined); return load(query); }).then(() => message.success("模板已归档")).catch(() => message.error("模板归档失败"))}><Button danger aria-label="归档模板" icon={<DeleteOutlined />} /></Popconfirm></Space> : undefined}>
+      <Drawer title={selected?.name} open={Boolean(selected)} onClose={() => setSelected(undefined)} size={480} extra={selected ? <Space><Button aria-label="编辑模板" icon={<EditOutlined />} onClick={() => setEditOpen(true)} /><Popconfirm title="归档该模板？" onConfirm={() => session && deletePlatformTemplate(session.token, selected.id).then(() => { setSelected(undefined); return load(query); }).then(() => message.success("模板已归档")).catch(() => message.error("模板归档失败"))}><Button danger aria-label="归档模板" icon={<DeleteOutlined />} /></Popconfirm></Space> : undefined}>
         {selected && <div className="template-detail"><Tag>{selected.category}</Tag><p>{selected.description || "无说明"}</p><Select value={targetProjectId} onChange={setTargetProjectId} options={projects.map((project) => ({ value: project.id, label: project.name }))} placeholder="选择目标项目" /><Button type="primary" icon={<AppstoreAddOutlined />} loading={applying} disabled={!targetProjectId || !session} onClick={async () => { if (!session || !targetProjectId) return; setApplying(true); try { await applyPlatformTemplate(session.token, selected.id, targetProjectId); message.success("模板已应用到项目"); } catch { message.error("应用模板失败"); } finally { setApplying(false); } }}>应用模板</Button></div>}
       </Drawer>
       <Modal title="发布内部模板" open={publishOpen} destroyOnHidden afterOpenChange={(open) => { if (open && projects[0]) void loadRevisions(projects[0].id); }} okText="发布模板" okButtonProps={{ disabled: revisions.length === 0 }} onCancel={() => setPublishOpen(false)} onOk={() => form.validateFields().then(publish)}><Form form={form} layout="vertical" initialValues={{ projectId: projects[0]?.id, category: "通用" }}><Form.Item name="projectId" label="来源项目" rules={[{ required: true }]}><Select options={projects.map((project) => ({ value: project.id, label: project.name }))} onChange={(value) => void loadRevisions(value)} /></Form.Item><Form.Item name="revisionId" label="已发布版本" rules={[{ required: true, message: "请选择已发布版本" }]}><Select options={revisions.map((revision) => ({ value: revision.id, label: `${revision.flowName ?? "流程"} · v${revision.revisionNumber}` }))} /></Form.Item><Form.Item name="name" label="模板名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="category" label="分类"><Input /></Form.Item><Form.Item name="description" label="说明"><Input.TextArea rows={3} /></Form.Item></Form></Modal>
