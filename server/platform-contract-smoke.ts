@@ -109,9 +109,18 @@ try {
   const secretVariable = await api<{ resource: { id: string; data: { value?: string }; version: number } }>(`/api/platform/projects/${projectId}/resources/variables`, {
     method: "POST",
     headers: headers(token),
-    body: JSON.stringify({ id: "login-password", data: { id: "login-password", name: "login_password", value: "must-not-persist", secret: true } }),
+    body: JSON.stringify({ id: "login-password", data: { id: "login-password", name: "login_password", value: "", secret: true } }),
   });
   if (!secretVariable.response.ok || secretVariable.body.resource.data.value !== "") throw new Error("Secret variable plaintext entered the resource model");
+  // secret 变量不允许带明文值写路径：带值保存应被明确拒绝（400），而不是静默丢弃。
+  const secretWithValue = await api<{ error?: string }>(`/api/platform/projects/${projectId}/resources/variables`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ id: "login-password-2", data: { id: "login-password-2", name: "login_password_2", value: "must-not-persist", secret: true } }),
+  });
+  if (secretWithValue.response.status !== 400 || secretWithValue.body.error !== "SECRET_VALUE_NOT_PERSISTED") {
+    throw new Error(`Secret variable with plaintext value should be rejected with 400, got ${secretWithValue.response.status}: ${JSON.stringify(secretWithValue.body)}`);
+  }
   const variableUpdate = await api<{ resource: { version: number } }>(`/api/platform/projects/${projectId}/resources/variables/login-password`, {
     method: "PATCH",
     headers: headers(token),
@@ -154,6 +163,31 @@ try {
     headers: headers(token),
     body: JSON.stringify({ name: "login_password", value: "never-log-this" }),
   });
+  // 孤儿 run 回归：引用不存在 secret 的 revision 触发 run 应立即 409，且不留下永久 queued 孤儿 run。
+  const missingSecretRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({
+      flow: { id: "missing-secret-flow", name: "Missing secret flow", steps: [{ id: "uses-missing", action: "wait", value: "{{secret.not_configured}}" }] },
+      environment: internalEnvironment,
+      elements: [],
+      secretNames: ["not_configured"],
+    }),
+  });
+  const missingSecretRevisionId = missingSecretRevision.body.revision?.id;
+  if (!missingSecretRevision.response.ok || !missingSecretRevisionId) throw new Error("Missing-secret revision creation failed");
+  const missingSecretRun = await api<{ runIds: string[]; error?: string }>(`/api/platform/projects/${projectId}/runs`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ revisionId: missingSecretRevisionId, environmentId: "internal" }),
+  });
+  if (missingSecretRun.response.status !== 409 || missingSecretRun.body.error !== "RUN_SECRET_NOT_CONFIGURED") {
+    throw new Error(`Missing-secret run should be rejected with 409, got ${missingSecretRun.response.status}: ${JSON.stringify(missingSecretRun.body)}`);
+  }
+  const orphanCheck = await api<{ runs: Array<{ status: string }> }>(`/api/platform/projects/${projectId}/runs`, { headers: headers(token) });
+  if ((orphanCheck.body.runs ?? []).some((run) => run.status === "queued")) {
+    throw new Error("Missing-secret run left an orphan queued run behind");
+  }
   const secondaryRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
     method: "POST",
     headers: headers(token),
@@ -385,7 +419,29 @@ try {
     api<{ channels: unknown[] }>(`/api/platform/workspaces/${workspaceId}/notification-channels`, { headers: headers(token) }),
   ]);
   if (archivedLists.some((item) => !item.response.ok) || archivedLists.some((item) => Object.values(item.body)[0]?.length !== 0)) throw new Error("Archived governance resources remained visible");
+  // 归档联动回归：归档项目后其 webhook 不再被接受（查询层过滤已归档项目），调度不再到期触发。
+  const archivalWebhook = await api<{ triggerUrl: string; signingSecret: string }>(`/api/platform/projects/${projectId}/webhook-triggers`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({ name: "Archival webhook", revisionId: dataRevisionId, environmentId: "internal" }),
+  });
+  if (!archivalWebhook.response.ok || !archivalWebhook.body.triggerUrl || !archivalWebhook.body.signingSecret) throw new Error("Archival webhook creation failed");
+  const archivalTimestamp = String(Date.now());
+  const archivalSignature = `sha256=${createHmac("sha256", archivalWebhook.body.signingSecret).update(`${archivalTimestamp}.`).digest("hex")}`;
   const projectArchived = await api(`/api/platform/projects/${projectId}`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ archived: true }) });
+  if (!projectArchived.response.ok) throw new Error("Project archival failed");
+  const archivedWebhookHit = await api<{ error?: string }>(archivalWebhook.body.triggerUrl, {
+    method: "POST",
+    headers: {
+      "x-autoflow-timestamp": archivalTimestamp,
+      "x-autoflow-delivery-id": "archival-webhook-delivery",
+      "x-autoflow-signature": archivalSignature,
+    },
+    body: "",
+  });
+  if (archivedWebhookHit.response.status !== 404) {
+    throw new Error(`Webhook fired for an archived project: ${archivedWebhookHit.response.status} ${JSON.stringify(archivedWebhookHit.body)}`);
+  }
   const archivedProjects = await api<{ projects: Array<{ id: string }> }>(`/api/workspaces/${workspaceId}/projects?archived=1`, { headers: headers(token) });
   if (!projectArchived.response.ok || !archivedProjects.body.projects.some((project) => project.id === projectId)) throw new Error("Archived project was not listed for recovery");
   const projectRestored = await api(`/api/platform/projects/${projectId}`, { method: "PATCH", headers: headers(token), body: JSON.stringify({ archived: false }) });

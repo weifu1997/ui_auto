@@ -183,8 +183,11 @@ function ApplicationSessionGate({ children }: { children: React.ReactNode }) {
         });
     };
     const expire = () => {
-      storePlatformSession();
-      setState("anonymous");
+      setState((current) => {
+        if (current === "anonymous") return current;
+        storePlatformSession();
+        return "anonymous";
+      });
     };
     restore();
     window.addEventListener("autoflow-auth-expired", expire);
@@ -463,6 +466,13 @@ function PlatformWorkspaceSynchronizer() {
               draftBlocked.add(item.sourceProjectId);
               message.warning("当前流程有未保存草稿，远端项目更新将在保存或放弃草稿后同步。");
             }
+            continue;
+          }
+
+          // 竞态防护：拉取窗口内本地已保存到更新版本（knownVersion > 快照版本）时，
+          // 该快照已过期——不覆盖本地、不降级版本号，避免后续保存触发 DOCUMENT_VERSION_CONFLICT。
+          if (knownVersion !== undefined && item.document.version < knownVersion) {
+            lastDocuments.set(item.sourceProjectId, localSerialized ?? remoteSerialized);
             continue;
           }
 

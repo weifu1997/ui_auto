@@ -157,7 +157,11 @@ export async function executeBrowserRun(input: RunnerInput, hooks: RunnerHooks) 
   const sensitive = Object.keys(input.secrets).length > 0;
   const outputs: Record<string, string> = {};
   const steps = input.upToStepId
-    ? input.flow.steps.slice(0, input.flow.steps.findIndex((step) => step.id === input.upToStepId) + 1)
+    ? (() => {
+        const index = input.flow.steps.findIndex((step) => step.id === input.upToStepId);
+        if (index === -1) throw new Error("RUN_STEP_NOT_FOUND");
+        return input.flow.steps.slice(0, index + 1);
+      })()
     : input.flow.steps;
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;

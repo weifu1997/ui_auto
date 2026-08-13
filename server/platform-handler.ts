@@ -55,7 +55,7 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         throw new PlatformError(401, "WEBHOOK_TIMESTAMP_INVALID");
       }
       const body = await readBody(request, 1_000_000);
-      const trigger = services.database.prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, enabled, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext FROM webhook_triggers WHERE id = ? AND archived_at IS NULL`).get(triggerId) as { id: string; project_id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; enabled: number; signing_secret_iv: string | null; signing_secret_tag: string | null; signing_secret_ciphertext: string | null } | undefined;
+      const trigger = services.database.prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, enabled, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext FROM webhook_triggers WHERE id = ? AND archived_at IS NULL AND project_id NOT IN (SELECT id FROM platform_projects WHERE archived_at IS NOT NULL)`).get(triggerId) as { id: string; project_id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; enabled: number; signing_secret_iv: string | null; signing_secret_tag: string | null; signing_secret_ciphertext: string | null } | undefined;
       if (!trigger || !trigger.enabled) throw new PlatformError(404, "WEBHOOK_TRIGGER_NOT_FOUND");
       if (!trigger.signing_secret_iv || !trigger.signing_secret_tag || !trigger.signing_secret_ciphertext) throw new PlatformError(409, "WEBHOOK_SIGNING_SECRET_REQUIRED");
       const secret = services.decrypt({ iv: trigger.signing_secret_iv, tag: trigger.signing_secret_tag, ciphertext: trigger.signing_secret_ciphertext });
@@ -283,6 +283,11 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           const name = body.name?.trim().slice(0, 160) || project.name;
           const description = body.description === undefined ? project.description : body.description.trim().slice(0, 1000);
           const archivedAt = body.archived === true ? now() : body.archived === false ? null : project.archived_at;
+          if (body.archived === true) {
+            // 归档联动停用自动化：调度与 webhook 不再触发（恢复时不自动启用，避免误恢复主动禁用的项）。
+            services.database.prepare(`UPDATE schedules SET enabled = 0, updated_at = ? WHERE project_id = ? AND enabled = 1`).run(now(), projectId);
+            services.database.prepare(`UPDATE webhook_triggers SET enabled = 0 WHERE project_id = ? AND enabled = 1`).run(projectId);
+          }
           services.database.prepare(`UPDATE platform_projects SET name = ?, description = ?, archived_at = ?, updated_at = ? WHERE id = ?`).run(name, description, archivedAt, now(), projectId);
           services.audit(project.workspace_id, { type: "user", id: user.id }, "project.updated", { type: "project", id: projectId }, { archived: body.archived }, projectId);
           sendJson(response, 200, { project: services.projectResponse(services.projectFor(projectId)) });
@@ -443,7 +448,11 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         }
         if (request.method === "POST") {
           const body = await readJson<{ id?: string; data?: Record<string, unknown> }>(request, 2_000_000);
-          const data = resourceData(body.data);
+          const rawData = asRecord(body.data);
+          if (rawData.secret === true && typeof rawData.value === "string" && rawData.value.trim() !== "") {
+            throw new PlatformError(400, "SECRET_VALUE_NOT_PERSISTED");
+          }
+          const data = resourceData(rawData);
           const id = body.id?.trim() || (typeof data.id === "string" ? data.id.trim() : "") || randomUUID();
           if (id.length > 240) throw new PlatformError(400, "RESOURCE_ID_INVALID");
           const timestamp = now();
@@ -481,7 +490,11 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           if (!Number.isInteger(body.expectedVersion)) throw new PlatformError(400, "EXPECTED_VERSION_REQUIRED");
           const expectedVersion = Number(body.expectedVersion);
           const previous = parseJson<Record<string, unknown>>(current.data, {});
-          const data = resourceData(request.method === "PATCH" ? { ...previous, ...asRecord(body.data), id: resourceId } : { ...asRecord(body.data), id: resourceId });
+          const merged: Record<string, unknown> = request.method === "PATCH" ? { ...previous, ...asRecord(body.data), id: resourceId } : { ...asRecord(body.data), id: resourceId };
+          if (merged.secret === true && typeof merged.value === "string" && merged.value.trim() !== "") {
+            throw new PlatformError(400, "SECRET_VALUE_NOT_PERSISTED");
+          }
+          const data = resourceData(merged);
           const timestamp = now();
           const archivedAt = body.archived === true ? timestamp : body.archived === false ? null : current.archived_at;
           const result = services.database.prepare(`UPDATE project_resources SET data = ?, version = version + 1, archived_at = ?, updated_at = ?, updated_by = ? WHERE project_id = ? AND resource_type = ? AND resource_id = ? AND version = ?`)
@@ -933,8 +946,8 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           const signingSecret = `whsec_${randomBytes(32).toString("base64url")}`;
           const encryptedSecret = services.encrypt(signingSecret);
           const trigger = { id: randomUUID(), createdAt: now() };
-          services.database.prepare(`INSERT INTO webhook_triggers (id, project_id, revision_id, environment_id, dataset_version_id, name, token_hash, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-            .run(trigger.id, projectId, revision.id, body.environmentId, body.datasetVersionId ?? null, name, digest(randomBytes(32).toString("base64url")), encryptedSecret.iv, encryptedSecret.tag, encryptedSecret.ciphertext, user.id, trigger.createdAt);
+          services.database.prepare(`INSERT INTO webhook_triggers (id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+            .run(trigger.id, projectId, revision.id, body.environmentId, body.datasetVersionId ?? null, name, encryptedSecret.iv, encryptedSecret.tag, encryptedSecret.ciphertext, user.id, trigger.createdAt);
           services.audit(project.workspace_id, { type: "user", id: user.id }, "webhook_trigger.created", { type: "webhook_trigger", id: trigger.id }, { revisionId: revision.id, environmentId: body.environmentId }, projectId);
           sendJson(response, 201, { trigger: { id: trigger.id, name, revisionId: revision.id, environmentId: body.environmentId, datasetVersionId: body.datasetVersionId ?? null, enabled: true, createdAt: trigger.createdAt }, triggerUrl: `/api/platform/webhooks/${encodeURIComponent(trigger.id)}`, signingSecret });
           return true;

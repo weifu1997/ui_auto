@@ -74,7 +74,6 @@ function upgradeLegacyColumns(database: DatabaseSync) {
   ensureColumn(database, "webhook_triggers", "signing_secret_tag", "TEXT");
   ensureColumn(database, "webhook_triggers", "signing_secret_ciphertext", "TEXT");
   ensureColumn(database, "deliveries", "next_attempt_at", "TEXT");
-  ensureColumn(database, "agent_bindings", "is_default", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(database, "platform_projects", "source_project_id", "TEXT");
   ensureColumn(database, "flow_revisions", "flow_id", "TEXT");
   ensureColumn(database, "flow_revisions", "flow_name", "TEXT");
@@ -96,13 +95,6 @@ function upgradeLegacyColumns(database: DatabaseSync) {
   }
 
   database.exec(`
-    UPDATE agent_bindings SET is_default = 0;
-    UPDATE agent_bindings SET is_default = 1
-    WHERE rowid IN (
-      SELECT MAX(rowid) FROM agent_bindings GROUP BY project_id, environment_id
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS agent_bindings_default
-      ON agent_bindings (project_id, environment_id) WHERE is_default = 1;
     CREATE UNIQUE INDEX IF NOT EXISTS platform_projects_workspace_source
       ON platform_projects (workspace_id, source_project_id) WHERE source_project_id IS NOT NULL;
   `);
@@ -176,7 +168,6 @@ function createResourceModel(database: DatabaseSync) {
 function addManagedExecutionAndReview(database: DatabaseSync) {
   ensureColumn(database, "platform_runs", "executor_type", "TEXT NOT NULL DEFAULT 'agent'");
   ensureColumn(database, "platform_runs", "retry_of_run_id", "TEXT");
-  ensureColumn(database, "platform_runs", "interruption_reason", "TEXT");
   ensureColumn(database, "flow_revisions", "submitted_at", "TEXT");
   ensureColumn(database, "flow_revisions", "reviewed_by", "TEXT");
   ensureColumn(database, "flow_revisions", "review_note", "TEXT");
@@ -292,7 +283,69 @@ export function runPlatformMigrations(database: DatabaseSync, bootstrapSchema: s
     { version: 7, name: "managed-validation-artifacts", up: addManagedValidationArtifacts },
     { version: 8, name: "blank-debug-sessions", up: allowBlankDebugSessions, noTransaction: true },
     { version: 9, name: "drop-agent-and-debug-tables", up: dropAgentAndDebugTables },
+    { version: 10, name: "drop-dead-tables-and-columns", up: dropDeadTablesAndColumns },
   ]);
+}
+
+// 清理代码库已无任何读写的死表/死列（老库在 bootstrap 裁剪后仍残留这些对象）。
+function dropDeadTablesAndColumns(database: DatabaseSync) {
+  database.exec("PRAGMA foreign_keys = OFF");
+  try {
+    database.exec(`
+      DROP TABLE IF EXISTS workspace_invitations;
+      DROP TABLE IF EXISTS agent_tokens;
+      DROP TABLE IF EXISTS agent_bindings;
+      DROP TABLE IF EXISTS run_leases;
+      DROP TABLE IF EXISTS debug_sessions;
+      DROP TABLE IF EXISTS debug_session_events;
+      DROP TABLE IF EXISTS debug_artifacts;
+      DROP TABLE IF EXISTS picker_captures;
+    `);
+    const columns = database.prepare(`PRAGMA table_info(webhook_triggers)`).all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "token_hash")) {
+      // SQLite 不允许 DROP 带 UNIQUE 约束的列：重建 webhook_triggers 表（不含 token_hash）。
+      // webhook_deliveries 的 REFERENCES webhook_triggers(id) 在表重建后自动指向新表。
+      database.exec(`
+        CREATE TABLE webhook_triggers_new (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES platform_projects(id),
+          revision_id TEXT NOT NULL REFERENCES flow_revisions(id),
+          environment_id TEXT NOT NULL,
+          dataset_version_id TEXT REFERENCES dataset_versions(id),
+          name TEXT NOT NULL,
+          signing_secret_iv TEXT,
+          signing_secret_tag TEXT,
+          signing_secret_ciphertext TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          last_triggered_at TEXT
+        );
+        INSERT INTO webhook_triggers_new (id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at, last_triggered_at)
+          SELECT id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at, last_triggered_at FROM webhook_triggers;
+        DROP TABLE webhook_triggers;
+        ALTER TABLE webhook_triggers_new RENAME TO webhook_triggers;
+        CREATE INDEX IF NOT EXISTS webhook_triggers_project ON webhook_triggers (project_id, enabled);
+      `);
+    }
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON");
+  }
+  // 高频查询索引（老库补齐，与 bootstrap 保持一致；表/列不存在时跳过，兼容 minimal 测试 schema）。
+  const hasTable = (table: string) => Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+  const hasColumns = (table: string, columns: string[]) => {
+    const found = new Set((database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+    return columns.every((column) => found.has(column));
+  };
+  if (hasTable("audit_events") && hasColumns("audit_events", ["project_id", "created_at"])) {
+    database.exec("CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events (project_id, created_at DESC)");
+  }
+  if (hasTable("platform_run_events") && hasColumns("platform_run_events", ["run_id", "id"])) {
+    database.exec("CREATE INDEX IF NOT EXISTS platform_run_events_run ON platform_run_events (run_id, id)");
+  }
+  if (hasTable("deliveries") && hasColumns("deliveries", ["status", "next_attempt_at"])) {
+    database.exec("CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries (status, next_attempt_at)");
+  }
 }
 
 // 方案C：单机部署移除分布式 Agent 远程执行与远程调试会话（见 docs/决策-内网部署形态与平台裁剪.md）。

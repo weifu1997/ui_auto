@@ -23,7 +23,7 @@ export { PlatformError, readBody, readJson, sendError, sendJson } from "./http-u
 // 保存即发布后，新快照只会产生 published/superseded/deprecated；
 // draft/pending_review/rejected 仅用于兼容历史数据读取。
 export type RevisionStatus = "draft" | "pending_review" | "published" | "rejected" | "deprecated" | "superseded";
-export type PlatformRunStatus = "queued" | "dispatched" | "running" | "success" | "failed" | "canceled";
+export type PlatformRunStatus = "queued" | "running" | "success" | "failed" | "canceled";
 export type NotificationChannelType = "webhook" | "feishu" | "dingtalk" | "wecom" | "email";
 export type DeliveryStatus = "pending" | "retrying" | "delivering" | "delivered" | "failed";
 export type ValidatedNotificationTarget = { url: URL; address: string };

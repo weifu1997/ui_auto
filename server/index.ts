@@ -404,6 +404,16 @@ function taskResponse(task: Task) {
   };
 }
 
+/** Write an SSE frame to a listener, tolerating a closed/destroyed connection. */
+function writeSse(listener: ServerResponse, serialized: string) {
+  if (listener.destroyed || listener.writableEnded) return;
+  try {
+    listener.write(serialized);
+  } catch {
+    // The connection vanished mid-write; the listener is removed on close/error.
+  }
+}
+
 function publish(task: Task, kind: EventKind, data: Record<string, unknown>) {
   const event: TaskEvent = {
     id: task.nextEventId++,
@@ -416,7 +426,7 @@ function publish(task: Task, kind: EventKind, data: Record<string, unknown>) {
   persistEvent(task, event);
   persistTask(task);
   const serialized = formatSse(event);
-  for (const listener of task.listeners) listener.write(serialized);
+  for (const listener of task.listeners) writeSse(listener, serialized);
 }
 
 function setStatus(task: Task, status: TaskStatus) {
@@ -742,7 +752,7 @@ async function executeStep(
     secrets: Object.fromEntries(secretKeys.filter((key) => input.variables[key]).map((key) => [key, input.variables[key] as string])),
   }, outputs);
   const element = step.element
-    ? input.elements.find((item) => item.name === step.element)
+    ? input.elements.find((item) => item.name === step.element || item.id === step.element)
     : undefined;
   const locator = element
     ? locatorFor(page, element, input.environment.testIdAttribute)
@@ -1039,10 +1049,13 @@ function attachSse(request: IncomingMessage, response: ServerResponse, task: Tas
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
   });
-  response.write(": connected\n\n");
-  for (const event of task.events) response.write(formatSse(event));
+  const detach = () => task.listeners.delete(response);
+  response.on("error", detach);
+  response.on("close", detach);
+  request.on("close", detach);
+  writeSse(response, ": connected\n\n");
+  for (const event of task.events) writeSse(response, formatSse(event));
   task.listeners.add(response);
-  request.on("close", () => task.listeners.delete(response));
 }
 
 function parseProjectRoute(pathname: string, resource: "runs" | "validations") {
@@ -1113,11 +1126,18 @@ const server = createServer(routeHandler(async (request, response, url) => {
       sendJson(response, 404, { error: "ARTIFACT_NOT_FOUND" });
       return;
     }
+    if (!existsSync(artifact.path) || !statSync(artifact.path).isFile()) {
+      sendJson(response, 404, { error: "ARTIFACT_FILE_MISSING" });
+      return;
+    }
     response.writeHead(200, {
       "content-type": artifact.contentType,
       "content-disposition": `inline; filename="${safeArtifactName(artifact.name)}"`,
     });
-    createReadStream(artifact.path).pipe(response);
+    const artifactStream = createReadStream(artifact.path);
+    artifactStream.on("error", () => response.destroy());
+    response.on("error", () => artifactStream.destroy());
+    artifactStream.pipe(response);
     return;
   }
       // ---- 本地元素选取通道（本地调试/采集会话） ----
@@ -1306,7 +1326,10 @@ const server = createServer(routeHandler(async (request, response, url) => {
       if (existsSync(path)) {
         const contentTypes: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
         response.writeHead(200, { "content-type": contentTypes[extname(path)] ?? "application/octet-stream", "cache-control": path.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable" });
-        createReadStream(path).pipe(response);
+        const staticStream = createReadStream(path);
+        staticStream.on("error", () => response.destroy());
+        response.on("error", () => staticStream.destroy());
+        staticStream.pipe(response);
         return;
       }
     }

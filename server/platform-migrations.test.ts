@@ -39,6 +39,7 @@ describe("platform database migrations", () => {
       { version: 7, name: "managed-validation-artifacts" },
       { version: 8, name: "blank-debug-sessions" },
       { version: 9, name: "drop-agent-and-debug-tables" },
+      { version: 10, name: "drop-dead-tables-and-columns" },
     ]);
     const columns = database.prepare("PRAGMA table_info(flow_revisions)").all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(["flow_id", "flow_name", "environment_id"]));

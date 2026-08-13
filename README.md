@@ -20,7 +20,7 @@ npm run server
 npm run dev -- --host 127.0.0.1 --port 4173
 ```
 
-打开 [http://127.0.0.1:4173](http://127.0.0.1:4173)。前端默认访问 `http://127.0.0.1:8787/api`；可通过 `VITE_WORKER_API_URL` 覆盖 API 地址。
+打开 [http://127.0.0.1:4173](http://127.0.0.1:4173)。前端默认访问 `http://127.0.0.1:8787/api`；可通过 `VITE_WORKER_API_URL` 覆盖 API 地址（开发时 API 地址须为本机 loopback 端口，页面 CSP 已放行 `127.0.0.1:*` / `localhost:*`）。
 
 只启动前端时，界面会保留本地演示数据和元素验证降级，便于浏览完整工作流。
 
