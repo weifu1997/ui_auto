@@ -212,11 +212,11 @@ export function LocalElementPickerPanel({
             placeholder="选择会话"
             options={sessions.map((session) => ({ value: session.id, label: `${session.environmentName} #${session.id.slice(0, 6)}` }))}
           />
-          <Tooltip title="新建本地调试会话"><Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新建会话</Button></Tooltip>
+          <Tooltip title="新建本地调试会话"><Button icon={<PlusOutlined />} onClick={openCreate}>新建会话</Button></Tooltip>
           <Tooltip title={selectedSession ? "在调试浏览器中启用一次选取" : "等待浏览器初始化"}>
             <Button icon={<FileSearchOutlined />} aria-label="启用元素选取" disabled={!selectedSession} onClick={() => void enablePicker()} />
           </Tooltip>
-          {selectedSession && <Button size="small" danger onClick={() => void stopSession()}>结束</Button>}
+          {selectedSession && <Button danger onClick={() => void stopSession()}>结束</Button>}
         </Space>
       </div>
       <div className="debug-observation-panel">
@@ -241,7 +241,7 @@ export function LocalElementPickerPanel({
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未打开本地调试浏览器">
           <Space direction="vertical">
             <Button type="primary" loading={creating} onClick={() => void openBrowser()}>打开调试浏览器</Button>
-            <Button size="small" onClick={openCreate}>自定义环境 / 起始 URL</Button>
+            <Button onClick={openCreate}>自定义环境 / 起始 URL</Button>
           </Space>
         </Empty>
       ) : !latestCapture ? (
