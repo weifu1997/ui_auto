@@ -15,7 +15,7 @@ import {
 } from "./platform-api";
 import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformSession } from "./platform-api";
 import type { PlatformWorkspaceProject } from "./workspace-store";
-import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "./platform-context";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformProjectMap } from "./platform-context";
 import { useWorkspaceStore } from "./workspace-store";
 import { message } from "./antd-feedback";
 
@@ -205,6 +205,15 @@ export function ServerWorkspaceSynchronizer() {
       }
     }
     useWorkspaceStore.getState().replaceServerWorkspace(replaceItems);
+    // 生产模式项目均为服务端直管（本地 id 与平台 id 一致）：把映射写入 localStorage，
+    // 供 platformProjectContext()（流程运行 / 元素验证走平台通道的判断）读取；
+    // 否则生产模式 UI 运行会错误地落入已禁用的本机 Worker 旁路。
+    if (workspaceId) {
+      storePlatformProjectMap(
+        Object.fromEntries(query.data.map((item) => [item.project.id, item.project.id])),
+        workspaceId,
+      );
+    }
     queueMicrotask(() => {
       for (const projectId of keepLocalProjectIds) {
         useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "syncing");
@@ -233,7 +242,7 @@ export function ServerWorkspaceSynchronizer() {
         resolvingConflicts.current.delete(projectId);
       }
     });
-  }, [query.data]);
+  }, [query.data, workspaceId]);
 
   useEffect(() => {
     if (!session || !workspaceId) return;

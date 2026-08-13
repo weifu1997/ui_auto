@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { readdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
 const port = 8790;
 const server = spawn(process.platform === "win32" ? "cmd.exe" : "sh", process.platform === "win32" ? ["/d", "/s", "/c", "npm run server"] : ["-c", "npm run server"], {
@@ -332,6 +334,70 @@ try {
   if (stoppedDebugRun.status !== "canceled") {
     throw new Error(`Retained browser run was not canceled: ${JSON.stringify(stoppedDebugRun)}`);
   }
+
+  // --- SSE 生命周期：连接建立、事件回放、断连后进程存活（回归：断连竞态不再击穿进程） ---
+  {
+    const controller = new AbortController();
+    const sseResponse = await fetch(
+      `http://127.0.0.1:${port}/api/projects/fixture-project/runs/${runId}/events`,
+      { signal: controller.signal },
+    );
+    if (!sseResponse.ok || !sseResponse.body) throw new Error(`SSE connect failed: ${sseResponse.status}`);
+    const reader = sseResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let received = "";
+    for (let attempt = 0; attempt < 20 && !received.includes("event:"); attempt += 1) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    if (!received.includes("event:")) {
+      throw new Error(`SSE did not replay task events: ${JSON.stringify(received.slice(0, 200))}`);
+    }
+    controller.abort();
+    const sseHealth = await fetch(`http://127.0.0.1:${port}/health`);
+    if (!sseHealth.ok) throw new Error("Worker crashed after SSE disconnect");
+  }
+
+  // --- 双取消：重复 cancel 幂等，不产生重复终态 ---
+  {
+    const response = await fetch(`http://127.0.0.1:${port}/api/projects/fixture-project/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ environment, flow: cancelFlow, elements: [] }),
+    });
+    const { runId: doubleCancelRunId } = (await response.json()) as { runId: string };
+    const first = await fetch(
+      `http://127.0.0.1:${port}/api/projects/fixture-project/runs/${doubleCancelRunId}/cancel`,
+      { method: "POST" },
+    );
+    const second = await fetch(
+      `http://127.0.0.1:${port}/api/projects/fixture-project/runs/${doubleCancelRunId}/cancel`,
+      { method: "POST" },
+    );
+    if (!first.ok || !second.ok) throw new Error("Double cancel was not idempotent");
+    const doubleCanceled = await waitForTask(`/api/projects/fixture-project/runs/${doubleCancelRunId}`);
+    if (doubleCanceled.status !== "canceled") {
+      throw new Error(`Double-canceled run ended as ${doubleCanceled.status}`);
+    }
+  }
+
+  // --- 陈旧产物回归：产物文件缺失时下载返回 404 且进程不崩溃（原 createReadStream 无 error 处理会击穿进程） ---
+  {
+    const artifactDirectory = join(process.cwd(), "server", ".artifacts");
+    const files = readdirSync(artifactDirectory).filter((name) => name.startsWith(`${traceId}.`));
+    if (files.length === 0) throw new Error("Expected Trace artifact file on disk");
+    unlinkSync(join(artifactDirectory, files[0]));
+    const staleResponse = await fetch(
+      `http://127.0.0.1:${port}/api/projects/fixture-project/artifacts/${traceId}`,
+    );
+    if (staleResponse.status !== 404) {
+      throw new Error(`Stale artifact download expected 404, got ${staleResponse.status}`);
+    }
+    const staleHealth = await fetch(`http://127.0.0.1:${port}/health`);
+    if (!staleHealth.ok) throw new Error("Worker crashed after stale artifact download");
+  }
+
   console.log("Worker smoke test passed");
 } finally {
   if (process.platform === "win32") {

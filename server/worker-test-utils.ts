@@ -33,6 +33,7 @@ export async function startWorker(input: {
   const root = input.root ?? (await createWorkerRoot());
   const command = process.platform === "win32" ? "cmd.exe" : "sh";
   const args = process.platform === "win32" ? ["/d", "/s", "/c", "npm run server"] : ["-c", "npm run server"];
+  const stderrChunks: Buffer[] = [];
   const childProcess = spawn(command, args, {
     cwd: process.cwd(),
     env: {
@@ -43,11 +44,20 @@ export async function startWorker(input: {
       WORKER_ARTIFACT_DIRECTORY: join(root, "artifacts"),
       PLATFORM_ARTIFACT_DIRECTORY: join(root, "platform-artifacts"),
     },
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   });
+  childProcess.stderr?.on("data", (chunk: Buffer) => {
+    stderrChunks.push(Buffer.from(chunk));
+    if (Buffer.concat(stderrChunks).length > 16_384) childProcess.stderr?.destroy();
+  });
   const worker = { port: input.port, root, childProcess };
-  await waitForHealth(worker.port);
+  try {
+    await waitForHealth(worker.port);
+  } catch (error) {
+    const stderr = Buffer.concat(stderrChunks).toString("utf8").slice(-4_096);
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nWorker stderr:\n${stderr}`);
+  }
   return worker;
 }
 

@@ -52,6 +52,13 @@ export function FlowsPage({ project }: { project: Project }) {
     environments[0];
   const updateItems = (updater: (flows: Flow[]) => Flow[]) =>
     setFlows(project.id, updater(items));
+  const updateFlowStatus = (flowId: string, status: Flow["lastStatus"]) => {
+    const current = useWorkspaceStore.getState().flowsByProject[project.id] ?? emptyFlows;
+    useWorkspaceStore.getState().setFlows(
+      project.id,
+      current.map((item) => item.id === flowId ? { ...item, lastStatus: status } : item),
+    );
+  };
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
   const [draftOpen, setDraftOpen] = useState(false);
@@ -86,6 +93,7 @@ export function FlowsPage({ project }: { project: Project }) {
         }
         const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: activeEnvironment.id });
         result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+        updateFlowStatus(flow.id, "running");
         message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
         navigate(`/project/${project.id}/runs`);
       } catch (error) {
@@ -127,7 +135,9 @@ export function FlowsPage({ project }: { project: Project }) {
         retries: 0,
       };
       upsertRun(project.id, run);
-      watchCleanups.current.push(watchWorkerRun(project.id, run, upsertRun));
+      watchCleanups.current.push(watchWorkerRun(project.id, run, upsertRun, (status) => {
+        updateFlowStatus(flow.id, status);
+      }));
       navigate(`/project/${project.id}/runs`);
     } catch {
       message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");

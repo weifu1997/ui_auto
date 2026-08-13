@@ -1,6 +1,7 @@
 import { message } from "../antd-feedback";
 import type { Project, Variable } from "../mock-data";
 import { PageHeading, emptyVariables } from "./shared";
+import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Drawer, Empty, Form, Input, Popconfirm, Select, Switch, Table, Tag } from "antd";
@@ -185,17 +186,23 @@ function VariableDrawer({
           onClick={() =>
             form
               .validateFields()
-              .then((values) =>
+              .then((values) => {
+                const id = `var-${Date.now()}`;
+                if (values.secret && typeof values.value === "string" && values.value.trim()) {
+                  // 密钥值不落库：注入当前会话（与运行时注入同一内存存储），刷新后失效。
+                  useSecretStore.getState().setValues(project.id, { [id]: values.value });
+                  message.info("密钥已注入当前会话（刷新后失效），不会保存到存储");
+                }
                 onSave({
-                  id: `var-${Date.now()}`,
+                  id,
                   name: values.name,
                   description: values.description || "项目变量",
                   value: values.secret ? "" : values.value || "",
                   scope: values.scope,
                   secret: values.secret,
                   updatedAt: "刚刚",
-                }),
-              )
+                });
+              })
           }
         >
           保存变量
@@ -226,7 +233,7 @@ function VariableDrawer({
         >
           <Input
             type={secret ? "password" : "text"}
-            placeholder={secret ? "密钥只会在保存时提交" : "输入变量值"}
+            placeholder={secret ? "密钥不会保存：填写后注入当前会话，运行前不再弹出（刷新后失效）" : "输入变量值"}
           />
         </Form.Item>
         <Form.Item name="secret" label="密钥变量" valuePropName="checked">

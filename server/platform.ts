@@ -93,17 +93,6 @@ function createPlatformServices(dataDirectory: string) {
       role TEXT NOT NULL,
       PRIMARY KEY (workspace_id, user_id)
     );
-    CREATE TABLE IF NOT EXISTS workspace_invitations (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-      user_id TEXT NOT NULL REFERENCES platform_users(id),
-      token_hash TEXT NOT NULL UNIQUE,
-      expires_at TEXT NOT NULL,
-      accepted_at TEXT,
-      created_by TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE (workspace_id, user_id)
-    );
     CREATE TABLE IF NOT EXISTS platform_projects (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -171,16 +160,6 @@ function createPlatformServices(dataDirectory: string) {
       detail TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS agent_tokens (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-      token_hash TEXT NOT NULL UNIQUE,
-      expires_at TEXT NOT NULL,
-      used_at TEXT,
-      revoked_at TEXT,
-      created_by TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -194,14 +173,6 @@ function createPlatformServices(dataDirectory: string) {
       last_seen_at TEXT,
       created_at TEXT NOT NULL,
       revoked_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS agent_bindings (
-      project_id TEXT NOT NULL REFERENCES platform_projects(id),
-      environment_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      is_default INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      PRIMARY KEY (project_id, environment_id, agent_id)
     );
     CREATE TABLE IF NOT EXISTS platform_runs (
       id TEXT PRIMARY KEY,
@@ -230,16 +201,6 @@ function createPlatformServices(dataDirectory: string) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS run_leases (
-      id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL REFERENCES platform_runs(id),
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      status TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      attempt INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS platform_run_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id TEXT NOT NULL REFERENCES platform_runs(id),
@@ -255,48 +216,6 @@ function createPlatformServices(dataDirectory: string) {
       content_type TEXT NOT NULL,
       path TEXT NOT NULL,
       created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS debug_sessions (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES platform_projects(id),
-      revision_id TEXT REFERENCES flow_revisions(id),
-      environment_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      status TEXT NOT NULL,
-      snapshot TEXT NOT NULL,
-      current_step INTEGER NOT NULL DEFAULT 0,
-      current_url TEXT,
-      browser_context_id TEXT,
-      idle_expires_at TEXT NOT NULL,
-      max_expires_at TEXT NOT NULL,
-      created_by TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS debug_session_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT NOT NULL REFERENCES debug_sessions(id),
-      kind TEXT NOT NULL,
-      data TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS debug_artifacts (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES debug_sessions(id),
-      project_id TEXT NOT NULL REFERENCES platform_projects(id),
-      name TEXT NOT NULL,
-      content_type TEXT NOT NULL,
-      path TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS picker_captures (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL REFERENCES debug_sessions(id),
-      candidates TEXT NOT NULL,
-      target TEXT NOT NULL,
-      status TEXT NOT NULL,
-      captured_at TEXT NOT NULL,
-      confirmed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS datasets (
       id TEXT PRIMARY KEY,
@@ -359,7 +278,6 @@ function createPlatformServices(dataDirectory: string) {
       environment_id TEXT NOT NULL,
       dataset_version_id TEXT REFERENCES dataset_versions(id),
       name TEXT NOT NULL,
-      token_hash TEXT NOT NULL UNIQUE,
       signing_secret_iv TEXT,
       signing_secret_tag TEXT,
       signing_secret_ciphertext TEXT,
@@ -414,11 +332,6 @@ function createPlatformServices(dataDirectory: string) {
     CREATE INDEX IF NOT EXISTS flow_revisions_project ON flow_revisions (project_id, revision_number DESC);
     CREATE INDEX IF NOT EXISTS agents_workspace ON agents (workspace_id, status, last_seen_at);
     CREATE INDEX IF NOT EXISTS platform_runs_project ON platform_runs (project_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS run_leases_agent ON run_leases (agent_id, status, expires_at);
-    CREATE INDEX IF NOT EXISTS debug_sessions_project ON debug_sessions (project_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS debug_sessions_agent ON debug_sessions (agent_id, status, idle_expires_at);
-    CREATE INDEX IF NOT EXISTS debug_session_events_session ON debug_session_events (session_id, id);
-    CREATE INDEX IF NOT EXISTS picker_captures_session ON picker_captures (session_id, captured_at DESC);
     CREATE INDEX IF NOT EXISTS datasets_project ON datasets (project_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS dataset_versions_dataset ON dataset_versions (dataset_id, version_number DESC);
     CREATE INDEX IF NOT EXISTS dataset_rows_version ON dataset_rows (dataset_version_id, row_number);
@@ -427,6 +340,9 @@ function createPlatformServices(dataDirectory: string) {
     CREATE INDEX IF NOT EXISTS webhook_triggers_project ON webhook_triggers (project_id, enabled);
     CREATE INDEX IF NOT EXISTS webhook_deliveries_received ON webhook_deliveries (received_at);
     CREATE INDEX IF NOT EXISTS deliveries_channel ON deliveries (channel_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS audit_events_project ON audit_events (project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS platform_run_events_run ON platform_run_events (run_id, id);
+    CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries (status, next_attempt_at);
   `);
   const managedRunner = new ManagedRunner(platformArtifactDirectory);
 
@@ -491,8 +407,22 @@ function createPlatformServices(dataDirectory: string) {
   }
 
   function postNotification(target: ValidatedNotificationTarget, headers: Record<string, string>, body: string) {
-    return new Promise<{ status: number }>((resolve, reject) => {
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
       const transport = target.url.protocol === "https:" ? httpsRequest : httpRequest;
+      let settled = false;
+      let totalTimer: NodeJS.Timeout | undefined;
+      const resolveOnce = (value: { status: number; body: string }) => {
+        if (settled) return;
+        settled = true;
+        if (totalTimer) clearTimeout(totalTimer);
+        resolve(value);
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        if (totalTimer) clearTimeout(totalTimer);
+        reject(error);
+      };
       const request = transport({
         protocol: target.url.protocol,
         hostname: target.address,
@@ -504,11 +434,27 @@ function createPlatformServices(dataDirectory: string) {
         lookup: (_hostname, _options, callback) => callback(null, target.address, isIP(target.address)),
         timeout: 10_000,
       }, (response) => {
-        response.resume();
-        resolve({ status: response.statusCode ?? 0 });
+        // 收集响应体（限量）：飞书/钉钉/企微 webhook 对业务拒绝（如自定义关键词不匹配）
+        // 也返回 HTTP 200，需读取 body 中的 code 字段才能判断真实送达。
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on("data", (chunk) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += buffer.length;
+          if (size <= 2_048) chunks.push(buffer);
+        });
+        response.on("end", () => {
+          resolveOnce({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8").slice(0, 2_048) });
+        });
+        // 目标端在响应阶段提前断开时 Promise 必须 settle，否则投递循环会永久卡住
+        // 并被 stale-claim 恢复成并发重复投递。
+        response.on("error", (error) => rejectOnce(error));
+        response.on("aborted", () => rejectOnce(new Error("NOTIFICATION_RESPONSE_ABORTED")));
       });
+      // 整体投递总时长上限：request timeout 只覆盖连接空闲，响应体迟迟不 end 时由它兜底。
+      totalTimer = setTimeout(() => request.destroy(new Error("NOTIFICATION_TIMEOUT")), 15_000);
       request.once("timeout", () => request.destroy(new Error("NOTIFICATION_TIMEOUT")));
-      request.once("error", reject);
+      request.once("error", (error) => rejectOnce(error));
       request.end(body);
     });
   }
@@ -670,6 +616,9 @@ function createPlatformServices(dataDirectory: string) {
             continue;
           }
         }
+        const snapshotSecretNames = secretNames.filter((name) => requiredSecretNames.has(name));
+        const missing = missingSecretNames(input.projectId, snapshotSecretNames);
+        if (missing.length > 0) throw new PlatformError(409, "RUN_SECRET_NOT_CONFIGURED");
         const run = { id: randomUUID(), projectId: input.projectId, revisionId: revision.id, agentId: agent.id, environmentId, createdAt: now() };
         const snapshot = {
           flowRevisionId: revision.id,
@@ -680,7 +629,7 @@ function createPlatformServices(dataDirectory: string) {
           elements: parseJson<unknown[]>(revision.element_snapshot, []),
           dataset: datasetVersion ? { datasetId: datasetVersion.datasetId, versionId: datasetVersion.id, versionNumber: datasetVersion.versionNumber, checksum: datasetVersion.checksum, columns: datasetVersion.columns } : null,
           datasetRow: row.data ? { number: row.rowNumber, data: row.data } : null,
-          secretNames: secretNames.filter((name) => requiredSecretNames.has(name)),
+          secretNames: snapshotSecretNames,
           upToStepId: input.upToStepId ?? null,
           executor: { type: executorType, id: agent.id, name: agent.name, browserVersion: agent.browserVersion },
           trigger: input.source,
@@ -818,8 +767,10 @@ function createPlatformServices(dataDirectory: string) {
         const safeResult = redactRunValue(currentRun, result) as Record<string, unknown>;
         const requestedStatus = result.status === "success" || result.status === "failed" ? result.status : "failed";
         const status: PlatformRunStatus = currentRun.cancellationRequested ? "canceled" : requestedStatus;
-        database.prepare(`UPDATE platform_runs SET status = ?, result = ?, updated_at = ? WHERE id = ?`)
+        // 仅在 run 仍处于活动状态时收尾：已被看门狗/重启中断终态化的 run 不允许状态回跳。
+        const updated = database.prepare(`UPDATE platform_runs SET status = ?, result = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
           .run(status, json(safeResult), now(), run.id);
+        if (updated.changes !== 1) return;
         persistFlowOutputs(currentRun, safeResult);
         appendRunEvent(run.id, "run.complete", { status, result: safeResult, executorType: "managed" });
         queueRunDeliveries(runById(run.id), status);
@@ -918,8 +869,21 @@ function createPlatformServices(dataDirectory: string) {
     void deliverPendingNotifications().catch((error) => console.error("deliverPendingNotifications failed", error));
   }
 
-  function formatNotificationBody(channelType: NotificationChannelType, payload: Record<string, unknown>) {
-    const content = `AutoFlow ${String(payload.status)}: ${String(payload.runId)} (${String(payload.environmentId)})`;
+  /** 中断/看门狗统一收尾：终态化 + 失败事件 + 通知投递（与正常 completed 一致，不再静默）。 */
+  function finalizeRunAsInterrupted(runId: string, reason: string) {
+    const updated = database.prepare(`UPDATE platform_runs SET status = 'failed', result = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
+      .run(json({ error: reason, interrupted: true }), now(), runId);
+    if (updated.changes !== 1) return;
+    appendRunEvent(runId, "run.interrupted", { reason });
+    appendRunEvent(runId, "run.failed", { reason, interrupted: true });
+    queueRunDeliveries(runById(runId), "failed");
+  }
+
+  function formatNotificationBody(channelType: NotificationChannelType, payload: Record<string, unknown>, keyword?: string) {
+    // 自定义关键词前置：满足飞书/钉钉/企微机器人「自定义关键词」安全校验。
+    const content = keyword
+      ? `${keyword} AutoFlow ${String(payload.status)}: ${String(payload.runId)} (${String(payload.environmentId)})`
+      : `AutoFlow ${String(payload.status)}: ${String(payload.runId)} (${String(payload.environmentId)})`;
     if (channelType === "feishu") return { msg_type: "text", content: { text: content } };
     if (channelType === "dingtalk") return { msgtype: "text", text: { content } };
     if (channelType === "wecom") return { msgtype: "text", text: { content } };
@@ -928,9 +892,18 @@ function createPlatformServices(dataDirectory: string) {
 
   async function deliverPendingNotifications() {
     try {
+      // stale-claim：超过 30s 仍处于 delivering 的投递视为卡死，按 attempt 指数退避恢复，
+      // 避免与原投递并发重复发送。
       const staleClaim = new Date(Date.now() - 30_000).toISOString();
-      database.prepare(`UPDATE deliveries SET status = 'retrying', next_attempt_at = ?, updated_at = ? WHERE status = 'delivering' AND updated_at <= ?`)
-        .run(now(), now(), staleClaim);
+      const stale = database
+        .prepare(`SELECT id, attempt_count FROM deliveries WHERE status = 'delivering' AND updated_at <= ?`)
+        .all(staleClaim) as Array<{ id: string; attempt_count: number }>;
+      for (const delivery of stale) {
+        const attempts = Number(delivery.attempt_count) + 1;
+        const delayMs = notificationRetryBaseMs * 2 ** Math.max(0, attempts - 1);
+        database.prepare(`UPDATE deliveries SET status = 'retrying', next_attempt_at = ?, updated_at = ? WHERE id = ? AND status = 'delivering'`)
+          .run(new Date(Date.now() + delayMs).toISOString(), now(), delivery.id);
+      }
       const rows = database
         .prepare(
           `SELECT d.id, d.channel_id, d.payload, d.attempt_count, c.channel_type, c.config_iv, c.config_tag, c.config_ciphertext
@@ -951,14 +924,24 @@ function createPlatformServices(dataDirectory: string) {
           const endpoint = typeof config.url === "string" ? config.url : "";
           const target = await notificationTarget(endpoint);
           const headers = asRecord(config.headers);
+          const keyword = typeof config.keyword === "string" && config.keyword.trim() ? config.keyword.trim() : undefined;
           const response = await postNotification(
             target,
             { "content-type": "application/json", ...Object.fromEntries(Object.entries(headers).filter(([, value]) => typeof value === "string").map(([key, value]) => [key, String(value)])) },
-            json(formatNotificationBody(delivery.channel_type, parseJson<Record<string, unknown>>(delivery.payload, {}))),
+            json(formatNotificationBody(delivery.channel_type, parseJson<Record<string, unknown>>(delivery.payload, {}), keyword)),
           );
           responseCode = response.status;
           status = response.status >= 200 && response.status < 300 ? "delivered" : "failed";
           error = status === "delivered" ? null : `HTTP_${response.status}`;
+          // 飞书/钉钉/企微 webhook 对业务拒绝（如自定义关键词不匹配）也返回 HTTP 200：
+          // 响应体含数字 code 且非 0 时判为送达失败，避免误报成功。
+          if (status === "delivered" && response.body) {
+            const bodyCode = parseJson<{ code?: unknown }>(response.body, {}).code;
+            if (typeof bodyCode === "number" && bodyCode !== 0) {
+              status = "failed";
+              error = `NOTIFICATION_REJECTED_${bodyCode}`;
+            }
+          }
         } catch (reason) {
           error = reason instanceof Error ? reason.name === "TimeoutError" ? "NOTIFICATION_TIMEOUT" : reason.message.slice(0, 200) : "NOTIFICATION_DELIVERY_FAILED";
         }
@@ -980,7 +963,7 @@ function createPlatformServices(dataDirectory: string) {
 
   function processDueSchedules() {
     const rows = database
-      .prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, cron_expression, timezone, next_run_at FROM schedules WHERE enabled = 1 AND archived_at IS NULL AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT 20`)
+      .prepare(`SELECT id, project_id, revision_id, environment_id, dataset_version_id, cron_expression, timezone, next_run_at FROM schedules WHERE enabled = 1 AND archived_at IS NULL AND next_run_at <= ? AND project_id NOT IN (SELECT id FROM platform_projects WHERE archived_at IS NOT NULL) ORDER BY next_run_at ASC LIMIT 20`)
       .all(now()) as Array<{ id: string; project_id: string; revision_id: string; environment_id: string; dataset_version_id: string | null; cron_expression: string; timezone: string; next_run_at: string }>;
     for (const schedule of rows) {
       const attemptedAt = now();
@@ -1242,6 +1225,15 @@ function createPlatformServices(dataDirectory: string) {
     };
   }
 
+  function missingSecretNames(projectId: string, requested: string[]): string[] {
+    if (requested.length === 0) return [];
+    const rows = database
+      .prepare(`SELECT name FROM project_secrets WHERE project_id = ? AND name IN (${requested.map(() => "?").join(",")})`)
+      .all(projectId, ...requested) as Array<{ name: string }>;
+    const found = new Set(rows.map((row) => row.name));
+    return requested.filter((name) => !found.has(name));
+  }
+
   function secretValues(projectId: string, requested: string[]) {
     if (requested.length === 0) return {};
     const rows = database
@@ -1276,18 +1268,43 @@ function createPlatformServices(dataDirectory: string) {
 
   const interrupted = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'running'`).all() as Array<{ id: string }>;
   for (const item of interrupted) {
-    database.prepare(`UPDATE platform_runs SET status = 'failed', interruption_reason = 'SERVICE_RESTARTED', result = ?, updated_at = ? WHERE id = ?`)
-      .run(json({ error: "SERVICE_RESTARTED", interrupted: true }), now(), item.id);
-    appendRunEvent(item.id, "run.interrupted", { reason: "SERVICE_RESTARTED" });
+    finalizeRunAsInterrupted(item.id, "SERVICE_RESTARTED");
   }
   const recoverable = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'queued' ORDER BY created_at`).all() as Array<{ id: string }>;
-  for (const item of recoverable) enqueueManagedRun(item.id);
+  for (const item of recoverable) {
+    try {
+      enqueueManagedRun(item.id);
+    } catch (error) {
+      // 入队失败（如引用的 secret 已缺失）不得阻断服务启动：将该 run 终态化为 failed 并记录事件。
+      database.prepare(`UPDATE platform_runs SET status = 'failed', result = ?, updated_at = ? WHERE id = ? AND status = 'queued'`)
+        .run(json({ error: error instanceof PlatformError ? error.code : "RUN_ENQUEUE_FAILED", interrupted: true }), now(), item.id);
+      appendRunEvent(item.id, "run.interrupted", { reason: "RUN_ENQUEUE_FAILED" });
+    }
+  }
+
+  let lastRetentionCleanup = 0;
+  const retentionEventDays = Math.max(1, Number(process.env.AUTOFLOW_RETENTION_EVENT_DAYS ?? 180));
+  const retentionDeliveryDays = Math.max(1, Number(process.env.AUTOFLOW_RETENTION_DELIVERY_DAYS ?? 90));
 
   const maintenanceTimer = setInterval(() => {
     try {
       processDueSchedules();
-      database.prepare(`UPDATE platform_runs SET status = 'failed', result = ?, updated_at = ? WHERE executor_type = 'managed' AND status = 'running' AND updated_at <= ?`)
-        .run(json({ error: "MANAGED_RUN_WATCHDOG_TIMEOUT", interrupted: true }), now(), new Date(Date.now() - 30 * 60_000).toISOString());
+      const watchdogCutoff = new Date(Date.now() - 30 * 60_000).toISOString();
+      const stuck = database.prepare(`SELECT id FROM platform_runs WHERE executor_type = 'managed' AND status = 'running' AND updated_at <= ?`).all(watchdogCutoff) as Array<{ id: string }>;
+      for (const item of stuck) {
+        finalizeRunAsInterrupted(item.id, "MANAGED_RUN_WATCHDOG_TIMEOUT");
+        cancelManagedRun(item.id);
+      }
+      // 保留策略：每小时清理过期会话与超过保留期的运行事件/投递记录（audit 历史保留）。
+      if (Date.now() - lastRetentionCleanup > 3_600_000) {
+        lastRetentionCleanup = Date.now();
+        const eventCutoff = new Date(Date.now() - retentionEventDays * 86_400_000).toISOString();
+        const deliveryCutoff = new Date(Date.now() - retentionDeliveryDays * 86_400_000).toISOString();
+        database.prepare("DELETE FROM platform_sessions WHERE expires_at <= ?").run(now());
+        database.prepare("DELETE FROM platform_run_events WHERE created_at <= ?").run(eventCutoff);
+        database.prepare("DELETE FROM flow_outputs WHERE created_at <= ?").run(eventCutoff);
+        database.prepare("DELETE FROM deliveries WHERE status IN ('delivered', 'failed') AND created_at <= ?").run(deliveryCutoff);
+      }
       void deliverPendingNotifications().catch((error) => console.error("deliverPendingNotifications failed", error));
     } catch {
       // Request handling and the next interval both retry transient maintenance failures.

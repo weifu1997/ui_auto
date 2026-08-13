@@ -196,7 +196,15 @@ export class PlatformApiError extends Error {
   }
 }
 
+// 会话代次：登录/注册/恢复成功即递增。旧会话 in-flight 请求的迟到 401 只有在代次未变时
+// 才触发 autoflow-auth-expired，避免清掉刚建立的新登录会话。
+let sessionGeneration = 0;
+export function bumpSessionGeneration() {
+  sessionGeneration += 1;
+}
+
 async function request<T>(path: string, init: RequestInit = {}, token?: string) {
+  const generation = sessionGeneration;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15_000);
   try {
@@ -212,7 +220,9 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string) 
     });
     const body = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) {
-      if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("autoflow-auth-expired"));
+      if (response.status === 401 && generation === sessionGeneration && typeof window !== "undefined") {
+        window.dispatchEvent(new Event("autoflow-auth-expired"));
+      }
       throw new PlatformApiError(response.status, body.error ?? "PLATFORM_REQUEST_FAILED");
     }
     return body;
@@ -229,6 +239,7 @@ export async function loginPlatform(input: { email: string; password: string; na
     method: "POST",
     body: JSON.stringify(input),
   });
+  bumpSessionGeneration();
   const session = await request<Omit<PlatformSession, "token">>("/auth/session");
   return { ...session, token: "cookie" } satisfies PlatformSession;
 }
@@ -238,16 +249,19 @@ export async function registerPlatform(input: { email: string; password: string;
     method: "POST",
     body: JSON.stringify(input),
   });
+  bumpSessionGeneration();
   const session = await request<Omit<PlatformSession, "token">>("/auth/session");
   return { ...session, token: "cookie" } satisfies PlatformSession;
 }
 
 export function logoutPlatform() {
+  bumpSessionGeneration();
   return request<{ loggedOut: true }>("/auth/logout", { method: "POST" }, "cookie");
 }
 
 export async function restorePlatformSession() {
   const session = await request<Omit<PlatformSession, "token">>("/auth/session");
+  bumpSessionGeneration();
   return { ...session, token: "cookie" } satisfies PlatformSession;
 }
 
@@ -588,10 +602,10 @@ export function getPlatformNotificationChannels(token: string, workspaceId: stri
   );
 }
 
-export function createPlatformNotificationChannel(token: string, workspaceId: string, input: { name: string; type: PlatformNotificationChannel["type"]; url: string }) {
+export function createPlatformNotificationChannel(token: string, workspaceId: string, input: { name: string; type: PlatformNotificationChannel["type"]; url: string; keyword?: string }) {
   return request<{ channel: PlatformNotificationChannel }>(
     `/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels`,
-    { method: "POST", body: JSON.stringify({ name: input.name, type: input.type, config: { url: input.url } }) },
+    { method: "POST", body: JSON.stringify({ name: input.name, type: input.type, config: { url: input.url, ...(input.keyword?.trim() ? { keyword: input.keyword.trim() } : {}) } }) },
     token,
   );
 }

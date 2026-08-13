@@ -452,6 +452,7 @@ export function watchWorkerRun(
   projectId: string,
   run: Run,
   upsertRun: (projectId: string, run: Run) => void,
+  onTerminal?: (status: Run["status"]) => void,
 ) {  let current = run;
   const unsubscribe = subscribeToTask(projectId, "runs", run.id, (event) => {
     if (event.kind === "status") {
@@ -485,7 +486,10 @@ export function watchWorkerRun(
       };
     }
     upsertRun(projectId, current);
-    if (isTerminalStatus(current.status)) unsubscribe();
+    if (isTerminalStatus(current.status)) {
+      onTerminal?.(current.status);
+      unsubscribe();
+    }
   });
   return unsubscribe;
 }

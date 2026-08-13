@@ -31,3 +31,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.tmp
+
+server/selftest-deploy-loop-log.txt
+server/selftest-deploy-verify-log.txt
+
+# Agent 本地工具目录与调试脚本
+.zcode/
+server/.debug-*.mjs
+server/.repro-*.mjs
+server/.resolve-map.mjs
