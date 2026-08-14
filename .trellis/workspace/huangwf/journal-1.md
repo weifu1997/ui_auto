@@ -79,3 +79,25 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: 审计与治理增强（埋点/审计日志面板/指标扩展）+ webhook 迁移修复提交
+
+**Date**: 2026-08-14
+**Task**: 审计与治理增强（埋点/审计日志面板/指标扩展）+ webhook 迁移修复提交
+**Branch**: `codex/element-picker`
+
+### Summary
+
+规划并实现平台审计与治理增强：R1 审计埋点（认证/通知投递/运行生命周期/密钥解密，敏感字段只记名称）；R2 审计查询 API 分页/筛选/搜索 + 治理页审计日志面板（脱敏详情）；R3 指标窗口（7/14/30/自定义）+ 环比 + 新增运行时长/调度健康度 + 失败归类维度 + 按周趋势。新建 .trellis/spec/backend 规范层沉淀契约。验证：lint/build/单测 63 用例/契约冒烟/governance e2e 全绿。另将先前未提交的 webhook 迁移修复（noTransaction + archived_at + errcode 识别）按 hunk 拆分提交。两任务均已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8e4fee` | (see git log) |
+| `5a26858` | (see git log) |
+
+### Status
+
+[OK] **Completed**
