@@ -11,6 +11,7 @@ import {
   normalizeDatasetRows,
   notificationHostAllowed,
   notificationHostAllowlist,
+  notificationRejectionCode,
   notificationMaxAttempts,
   notificationRetryBaseMs,
   now,
@@ -934,10 +935,10 @@ function createPlatformServices(dataDirectory: string) {
           status = response.status >= 200 && response.status < 300 ? "delivered" : "failed";
           error = status === "delivered" ? null : `HTTP_${response.status}`;
           // 飞书/钉钉/企微 webhook 对业务拒绝（如自定义关键词不匹配）也返回 HTTP 200：
-          // 响应体含数字 code 且非 0 时判为送达失败，避免误报成功。
+          // 响应体含数字 code/errcode 且非 0 时判为送达失败，避免误报成功。
           if (status === "delivered" && response.body) {
-            const bodyCode = parseJson<{ code?: unknown }>(response.body, {}).code;
-            if (typeof bodyCode === "number" && bodyCode !== 0) {
+            const bodyCode = notificationRejectionCode(response.body);
+            if (bodyCode !== undefined) {
               status = "failed";
               error = `NOTIFICATION_REJECTED_${bodyCode}`;
             }

@@ -9,6 +9,7 @@ import {
   nextCronTime,
   normalizeDatasetRows,
   notificationHostAllowed,
+  notificationRejectionCode,
   parseCsv,
   publicFlowOutputNames,
   publicIpAddress,
@@ -196,6 +197,21 @@ describe("notificationHostAllowed", () => {
     expect(notificationHostAllowed("team.notify.corp.test", allowlist)).toBe(true);
     expect(notificationHostAllowed("notify.corp.test", allowlist)).toBe(false);
     expect(notificationHostAllowed("hooks.corp.test.attacker.test", allowlist)).toBe(false);
+  });
+});
+
+describe("notificationRejectionCode", () => {
+  it("detects non-zero code and errcode responses", () => {
+    expect(notificationRejectionCode(JSON.stringify({ code: 19001 }))).toBe(19001);
+    expect(notificationRejectionCode(JSON.stringify({ errcode: 310000 }))).toBe(310000);
+    expect(notificationRejectionCode(JSON.stringify({ code: 19001, errcode: 310000 }))).toBe(19001);
+  });
+
+  it("ignores success codes and malformed bodies", () => {
+    expect(notificationRejectionCode(JSON.stringify({ code: 0 }))).toBeUndefined();
+    expect(notificationRejectionCode(JSON.stringify({ errcode: 0 }))).toBeUndefined();
+    expect(notificationRejectionCode("not-json")).toBeUndefined();
+    expect(notificationRejectionCode(null)).toBeUndefined();
   });
 });
 

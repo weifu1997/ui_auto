@@ -67,6 +67,68 @@ describe("platform database migrations", () => {
     database.close();
   });
 
+  it("rebuilds webhook_triggers without losing archived_at or foreign-key deliveries", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec(minimalLegacySchema);
+    database.exec(`
+      DROP TABLE webhook_triggers;
+      CREATE TABLE webhook_triggers (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES platform_projects(id),
+        revision_id TEXT NOT NULL REFERENCES flow_revisions(id),
+        environment_id TEXT NOT NULL,
+        dataset_version_id TEXT REFERENCES dataset_versions(id),
+        name TEXT NOT NULL,
+        signing_secret_iv TEXT,
+        signing_secret_tag TEXT,
+        signing_secret_ciphertext TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_triggered_at TEXT,
+        archived_at TEXT,
+        token_hash TEXT UNIQUE
+      );
+      CREATE TABLE dataset_versions (id TEXT PRIMARY KEY);
+      CREATE TABLE element_validations (id TEXT PRIMARY KEY);
+      CREATE TABLE webhook_deliveries (
+        trigger_id TEXT NOT NULL REFERENCES webhook_triggers(id),
+        delivery_id TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        PRIMARY KEY (trigger_id, delivery_id)
+      );
+    `);
+    database.prepare("INSERT INTO workspaces (id) VALUES (?)").run("workspace-1");
+    database.prepare("INSERT INTO platform_projects (id, workspace_id) VALUES (?, ?)").run("project-1", "workspace-1");
+    database.prepare("INSERT INTO flow_revisions (id, flow_snapshot, environment_snapshot) VALUES (?, ?, ?)")
+      .run("revision-1", JSON.stringify({ id: "flow-1", name: "Legacy flow" }), JSON.stringify({ id: "environment-1" }));
+    database.prepare("INSERT INTO dataset_versions (id) VALUES (?)").run("dataset-version-1");
+    database.prepare(`
+      INSERT INTO webhook_triggers (
+        id, project_id, revision_id, environment_id, dataset_version_id, name,
+        signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled,
+        created_by, created_at, last_triggered_at, archived_at, token_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+    `).run(
+      "trigger-1", "project-1", "revision-1", "environment-1", "dataset-version-1", "Legacy trigger",
+      "iv", "tag", "cipher", "user-1", "2026-01-01T00:00:00.000Z",
+      "2026-02-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z", "legacy-token-hash",
+    );
+    database.prepare("INSERT INTO webhook_deliveries (trigger_id, delivery_id, received_at) VALUES (?, ?, ?)")
+      .run("trigger-1", "delivery-1", "2026-01-02T00:00:00.000Z");
+
+    expect(() => runPlatformMigrations(database, minimalLegacySchema)).not.toThrow();
+
+    const columns = database.prepare("PRAGMA table_info(webhook_triggers)").all() as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === "archived_at")).toBe(true);
+    expect(columns.some((column) => column.name === "token_hash")).toBe(false);
+    expect(database.prepare("SELECT archived_at FROM webhook_triggers WHERE id = ?").get("trigger-1"))
+      .toEqual({ archived_at: "2026-03-01T00:00:00.000Z" });
+    expect(database.prepare("SELECT COUNT(*) AS count FROM webhook_deliveries WHERE trigger_id = ?").get("trigger-1"))
+      .toEqual({ count: 1 });
+    database.close();
+  });
+
   it("rolls back a failed migration and does not mark it applied", () => {
     const database = new DatabaseSync(":memory:");
     expect(() => runMigrations(database, [{
