@@ -94,7 +94,8 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
           const created = now();
           services.database.prepare(`INSERT INTO platform_user_credentials (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`)
             .run(user.id, passwordHash(password), created, created);
-          services.createWorkspace(user, `${user.name}'s workspace`);
+          const workspace = services.createWorkspace(user, `${user.name}'s workspace`);
+          services.audit(workspace.id, { type: "user", id: user.id }, "auth.registered", { type: "user", id: user.id }, { email, ip: request.socket.remoteAddress ?? "unknown" });
           services.database.exec("COMMIT");
         } catch (error) {
           services.database.exec("ROLLBACK");
@@ -113,16 +114,37 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         if (!email || !email.includes("@") || !password) throw new PlatformError(400, "LOGIN_INPUT_INVALID");
         const user = services.database.prepare(`SELECT id, email, name FROM platform_users WHERE email = ? AND enabled = 1`).get(email) as AuthUser | undefined;
         const credential = user ? services.database.prepare(`SELECT password_hash FROM platform_user_credentials WHERE user_id = ?`).get(user.id) as { password_hash: string } | undefined : undefined;
-        if (!user || !credential || !passwordMatches(password, credential.password_hash)) throw new PlatformError(401, "LOGIN_INVALID");
+        if (!user || !credential || !passwordMatches(password, credential.password_hash)) {
+          // 登录失败留痕：仅当账号存在（密码错误）时可用其工作区写入审计；账号不存在的场景无有效 workspace 外键，不记录。
+          if (user) {
+            const failedWorkspace = services.database.prepare(`SELECT w.id FROM workspaces w JOIN workspace_members m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at ASC LIMIT 1`).get(user.id) as { id: string } | undefined;
+            if (failedWorkspace) {
+              services.audit(failedWorkspace.id, { type: "user", id: user.id }, "auth.login_failed", { type: "user", id: user.id }, { reason: "LOGIN_INVALID", ip: request.socket.remoteAddress ?? "unknown" });
+            }
+          }
+          throw new PlatformError(401, "LOGIN_INVALID");
+        }
         const session = services.createAuthSession(user);
         setSessionCookie(response, session.token, session.expiresAt);
+        const loginWorkspace = services.database.prepare(`SELECT w.id FROM workspaces w JOIN workspace_members m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at ASC LIMIT 1`).get(user.id) as { id: string } | undefined;
+        if (loginWorkspace) services.audit(loginWorkspace.id, { type: "user", id: user.id }, "auth.login_succeeded", { type: "user", id: user.id }, { ip: request.socket.remoteAddress ?? "unknown" });
         sendJson(response, 200, session);
         return true;
       }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
         const token = authorization(request);
+        let logoutUser: AuthUser | undefined;
+        try {
+          if (token) logoutUser = services.sessionUser(request);
+        } catch {
+          // 会话已失效（过期/被删除）时仍正常登出，仅不写审计。
+        }
         if (token) services.database.prepare("DELETE FROM platform_sessions WHERE token_hash = ?").run(digest(token));
+        if (logoutUser) {
+          const logoutWorkspace = services.database.prepare(`SELECT w.id FROM workspaces w JOIN workspace_members m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at ASC LIMIT 1`).get(logoutUser.id) as { id: string } | undefined;
+          if (logoutWorkspace) services.audit(logoutWorkspace.id, { type: "user", id: logoutUser.id }, "auth.logout", { type: "user", id: logoutUser.id }, {});
+        }
         clearSessionCookie(response);
         sendJson(response, 200, { loggedOut: true });
         return true;
@@ -720,8 +742,37 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         const user = services.sessionUser(request);
         const projectId = decodeURIComponent(auditRoute[1]);
         services.requireProjectRole(projectId, user.id);
-        const events = services.database.prepare(`SELECT id, actor_type, actor_id, action, target_type, target_id, detail, created_at FROM audit_events WHERE project_id = ? ORDER BY created_at DESC LIMIT 500`).all(projectId) as Array<{ id: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string; detail: string; created_at: string }>;
-        sendJson(response, 200, { events: events.map((item) => ({ id: item.id, actorType: item.actor_type, actorId: item.actor_id, action: item.action, targetType: item.target_type, targetId: item.target_id, detail: parseJson(item.detail, {}), createdAt: item.created_at })) });
+        // 项目审计视图 = 该项目的事件 + 所属工作区的全局事件（认证/工作区/通知通道等 project_id 为空），使治理页能看到完整留痕。
+        const auditProject = services.projectFor(projectId);
+        const page = Math.max(1, Math.trunc(Number(url.searchParams.get("page") ?? 1)) || 1);
+        const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(url.searchParams.get("pageSize") ?? 20)) || 20));
+        const action = url.searchParams.get("action")?.trim();
+        const actorId = url.searchParams.get("actorId")?.trim();
+        const actorType = url.searchParams.get("actorType")?.trim();
+        const from = url.searchParams.get("from")?.trim();
+        const to = url.searchParams.get("to")?.trim();
+        const q = url.searchParams.get("q")?.trim();
+        const conditions = ["(project_id = ? OR (project_id IS NULL AND workspace_id = ?))"];
+        const params: Array<string | number> = [projectId, auditProject.workspace_id];
+        if (action) { conditions.push("action LIKE ?"); params.push(`${action}%`); }
+        if (actorId) { conditions.push("actor_id = ?"); params.push(actorId); }
+        if (actorType) { conditions.push("actor_type = ?"); params.push(actorType); }
+        if (from) { conditions.push("created_at >= ?"); params.push(from); }
+        if (to) { conditions.push("created_at <= ?"); params.push(to); }
+        if (q) {
+          const like = `%${q}%`;
+          conditions.push("(action LIKE ? OR target_type LIKE ? OR target_id LIKE ? OR detail LIKE ?)");
+          params.push(like, like, like, like);
+        }
+        const where = conditions.join(" AND ");
+        const totalRow = services.database.prepare(`SELECT COUNT(*) AS total FROM audit_events WHERE ${where}`).get(...params) as { total: number };
+        const events = services.database.prepare(`SELECT id, actor_type, actor_id, action, target_type, target_id, detail, created_at FROM audit_events WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, pageSize, (page - 1) * pageSize) as Array<{ id: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string; detail: string; created_at: string }>;
+        sendJson(response, 200, {
+          events: events.map((item) => ({ id: item.id, actorType: item.actor_type, actorId: item.actor_id, action: item.action, targetType: item.target_type, targetId: item.target_id, detail: parseJson(item.detail, {}), createdAt: item.created_at })),
+          total: totalRow.total,
+          page,
+          pageSize,
+        });
         return true;
       }
 
@@ -730,7 +781,20 @@ export function createPlatformHandler(services: PlatformServices): PlatformApi {
         const user = services.sessionUser(request);
         const projectId = decodeURIComponent(analyticsRoute[1]);
         services.requireProjectRole(projectId, user.id);
-        sendJson(response, 200, { analytics: services.projectAnalytics(projectId) });
+        const windowDays = Number(url.searchParams.get("window"));
+        const limit = Number(url.searchParams.get("limit"));
+        const period = url.searchParams.get("period") === "week" ? "week" : "day";
+        const categoryBy = url.searchParams.get("categoryBy") === "code" ? "code" : url.searchParams.get("categoryBy") === "step" ? "step" : "message";
+        sendJson(response, 200, {
+          analytics: services.projectAnalytics(projectId, {
+            windowDays: Number.isFinite(windowDays) && windowDays > 0 ? Math.min(365, Math.trunc(windowDays)) : undefined,
+            from: url.searchParams.get("from")?.trim() || undefined,
+            to: url.searchParams.get("to")?.trim() || undefined,
+            period,
+            limit: Number.isFinite(limit) && limit > 0 ? Math.trunc(limit) : undefined,
+            categoryBy,
+          }),
+        });
         return true;
       }
 

@@ -156,7 +156,16 @@ export function safeArtifactName(value: string) {
   return filename || "artifact.bin";
 }
 
-export function failureCategory(message: unknown) {
+export function failureCategory(message: unknown, code?: unknown) {
+  const codeText = String(code ?? "").toUpperCase();
+  if (codeText) {
+    if (codeText.includes("TIMEOUT")) return "timeout";
+    if (codeText.includes("ELEMENT_NOT_FOUND") || codeText.includes("LOCATOR")) return "locator";
+    if (codeText.includes("ASSERT")) return "assertion";
+    if (codeText.includes("NET") || codeText.includes("ECONN")) return "network";
+    if (codeText.includes("BROWSER")) return "browser";
+    if (codeText.includes("CANCEL")) return "canceled";
+  }
   const value = String(message ?? "").toUpperCase();
   if (value.includes("TIMEOUT")) return "timeout";
   if (value.includes("ELEMENT_NOT_FOUND") || value.includes("LOCATOR") || value.includes("STRICT MODE")) return "locator";

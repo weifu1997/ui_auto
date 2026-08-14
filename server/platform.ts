@@ -774,6 +774,7 @@ function createPlatformServices(dataDirectory: string) {
         if (updated.changes !== 1) return;
         persistFlowOutputs(currentRun, safeResult);
         appendRunEvent(run.id, "run.complete", { status, result: safeResult, executorType: "managed" });
+        auditRunLifecycle(run.id, currentRun, status);
         queueRunDeliveries(runById(run.id), status);
       },
     });
@@ -870,6 +871,24 @@ function createPlatformServices(dataDirectory: string) {
     void deliverPendingNotifications().catch((error) => console.error("deliverPendingNotifications failed", error));
   }
 
+  /** 运行终态审计：success → run.completed；failed → run.failed（附失败码/步骤）；canceled → run.canceled。 */
+  function auditRunLifecycle(runId: string, run: PlatformRun, status: PlatformRunStatus) {
+    const project = projectFor(run.projectId);
+    const detail: Record<string, unknown> = { status };
+    if (status === "failed") {
+      const failure = database
+        .prepare(`SELECT kind, data FROM platform_run_events WHERE run_id = ? AND (kind LIKE '%failed%' OR kind LIKE '%error%') ORDER BY id DESC LIMIT 1`)
+        .get(runId) as { kind: string; data: string } | undefined;
+      const failureData = failure ? parseJson<Record<string, unknown>>(failure.data, {}) : undefined;
+      if (failureData) {
+        if (typeof failureData.code === "string" && failureData.code) detail.errorCode = failureData.code;
+        else if (typeof failureData.reason === "string" && failureData.reason) detail.errorCode = String(failureData.reason).slice(0, 200);
+        if (typeof failureData.stepId === "string" && failureData.stepId) detail.stepId = failureData.stepId;
+      }
+    }
+    audit(project.workspace_id, { type: "system", id: "managed-runner" }, `run.${status === "canceled" ? "canceled" : status === "failed" ? "failed" : "completed"}`, { type: "run_batch", id: runId }, detail, run.projectId);
+  }
+
   /** 中断/看门狗统一收尾：终态化 + 失败事件 + 通知投递（与正常 completed 一致，不再静默）。 */
   function finalizeRunAsInterrupted(runId: string, reason: string) {
     const updated = database.prepare(`UPDATE platform_runs SET status = 'failed', result = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
@@ -877,6 +896,7 @@ function createPlatformServices(dataDirectory: string) {
     if (updated.changes !== 1) return;
     appendRunEvent(runId, "run.interrupted", { reason });
     appendRunEvent(runId, "run.failed", { reason, interrupted: true });
+    auditRunLifecycle(runId, runById(runId), "failed");
     queueRunDeliveries(runById(runId), "failed");
   }
 
@@ -907,13 +927,13 @@ function createPlatformServices(dataDirectory: string) {
       }
       const rows = database
         .prepare(
-          `SELECT d.id, d.channel_id, d.payload, d.attempt_count, c.channel_type, c.config_iv, c.config_tag, c.config_ciphertext
+          `SELECT d.id, d.run_id, d.channel_id, d.payload, d.attempt_count, c.channel_type, c.name AS channel_name, c.workspace_id, c.config_iv, c.config_tag, c.config_ciphertext
            FROM deliveries d JOIN notification_channels c ON c.id = d.channel_id
            WHERE d.status IN ('pending', 'retrying') AND c.enabled = 1
              AND COALESCE(d.next_attempt_at, d.created_at) <= ?
            ORDER BY d.created_at ASC LIMIT 20`,
         )
-        .all(now()) as Array<{ id: string; channel_id: string; payload: string; attempt_count: number; channel_type: NotificationChannelType; config_iv: string; config_tag: string; config_ciphertext: string }>;
+        .all(now()) as Array<{ id: string; run_id: string; channel_id: string; payload: string; attempt_count: number; channel_type: NotificationChannelType; channel_name: string; workspace_id: string; config_iv: string; config_tag: string; config_ciphertext: string }>;
       for (const delivery of rows) {
         const claimed = database.prepare(`UPDATE deliveries SET status = 'delivering', attempt_count = attempt_count + 1, updated_at = ? WHERE id = ? AND status IN ('pending', 'retrying')`).run(now(), delivery.id);
         if (claimed.changes !== 1) continue;
@@ -956,6 +976,21 @@ function createPlatformServices(dataDirectory: string) {
               delivered_at = CASE WHEN ? = 'delivered' THEN ? ELSE delivered_at END, updated_at = ?
           WHERE id = ? AND status = 'delivering'`)
           .run(retry ? "retrying" : status, attempts, responseCode, error, nextAttemptAt, status, now(), now(), delivery.id);
+        // 终态投递留痕：成功/业务拒绝/失败（重试中不记，避免噪音）。detail 仅含通道类型/名称与结果码，不含 URL/关键词/密钥。
+        if (!retry) {
+          const deliveryProject = database.prepare(`SELECT project_id FROM platform_runs WHERE id = ?`).get(delivery.run_id) as { project_id: string } | undefined;
+          const deliveryAction = status === "delivered"
+            ? "notification.delivered"
+            : error?.startsWith("NOTIFICATION_REJECTED_") ? "notification.rejected" : "notification.failed";
+          audit(
+            delivery.workspace_id,
+            { type: "system", id: `delivery:${delivery.id}` },
+            deliveryAction,
+            { type: "notification_channel", id: delivery.channel_id },
+            { channelType: delivery.channel_type, channelName: delivery.channel_name, code: responseCode, error: error?.slice(0, 200) ?? null },
+            deliveryProject?.project_id,
+          );
+        }
       }
     } catch (error) {
       console.error("deliverPendingNotifications failed", error);
@@ -987,10 +1022,52 @@ function createPlatformServices(dataDirectory: string) {
     }
   }
 
-  function projectAnalytics(projectId: string) {
-    const runs = database
-      .prepare(`SELECT id, revision_id, status, snapshot, created_at FROM platform_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 500`)
-      .all(projectId) as Array<{ id: string; revision_id: string; status: PlatformRunStatus; snapshot: string; created_at: string }>;
+  function periodKey(iso: string, period: "day" | "week") {
+    if (period === "day") return iso.slice(0, 10);
+    // ISO 周：以周四归属年份的周编号（W01-W53）。
+    const date = new Date(iso);
+    const day = date.getUTCDay() || 7;
+    const thursday = new Date(date.getTime());
+    thursday.setUTCDate(date.getUTCDate() + 4 - day);
+    const year = thursday.getUTCFullYear();
+    const firstThursday = new Date(Date.UTC(year, 0, 4));
+    const firstDay = firstThursday.getUTCDay() || 7;
+    firstThursday.setUTCDate(firstThursday.getUTCDate() + 4 - firstDay);
+    const week = 1 + Math.round((thursday.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
+    return `${year}-W${String(week).padStart(2, "0")}`;
+  }
+
+  function fetchRuns(projectId: string, fromIso?: string, toIso?: string, limit = 2000) {
+    let query = `SELECT id, revision_id, status, snapshot, created_at FROM platform_runs WHERE project_id = ?`;
+    const params: Array<string | number> = [projectId];
+    if (fromIso) { query += " AND created_at >= ?"; params.push(fromIso); }
+    if (toIso) { query += " AND created_at <= ?"; params.push(toIso); }
+    query += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+    return database.prepare(query).all(...params) as Array<{ id: string; revision_id: string; status: PlatformRunStatus; snapshot: string; created_at: string }>;
+  }
+
+  function summarizeRuns(runRows: Array<{ status: PlatformRunStatus }>) {
+    const terminal = runRows.filter((run) => ["success", "failed", "canceled"].includes(run.status));
+    const failedRuns = runRows.filter((run) => run.status === "failed").length;
+    const canceledRuns = runRows.filter((run) => run.status === "canceled").length;
+    return {
+      totalRuns: runRows.length,
+      successRate: terminal.length ? Math.round((terminal.filter((run) => run.status === "success").length / terminal.length) * 100) : 0,
+      failedRuns,
+      canceledRuns,
+      failedRate: runRows.length ? Math.round((failedRuns / runRows.length) * 100) : 0,
+      canceledRate: runRows.length ? Math.round((canceledRuns / runRows.length) * 100) : 0,
+    };
+  }
+
+  function projectAnalytics(projectId: string, options: { windowDays?: number; from?: string; to?: string; period?: "day" | "week"; limit?: number; categoryBy?: "message" | "code" | "step" } = {}) {
+    const period = options.period ?? "day";
+    const categoryBy = options.categoryBy ?? "message";
+    const fromIso = options.from ?? (options.windowDays ? new Date(Date.now() - options.windowDays * 86_400_000).toISOString() : undefined);
+    const toIso = options.to;
+    const limit = options.limit ? Math.min(2000, Math.max(1, Math.trunc(options.limit))) : undefined;
+    const runs = fetchRuns(projectId, fromIso, toIso, limit ?? 2000);
     const eventsByRun = new Map<string, Array<{ kind: string; data: Record<string, unknown>; at: string }>>();
     for (const run of runs) {
       const events = database.prepare(`SELECT kind, data, created_at FROM platform_run_events WHERE run_id = ? ORDER BY id ASC`).all(run.id) as Array<{ kind: string; data: string; created_at: string }>;
@@ -1000,8 +1077,9 @@ function createPlatformServices(dataDirectory: string) {
     const categories = new Map<string, number>();
     const slowSteps = new Map<string, { stepId: string; title: string; totalMs: number; maxMs: number; count: number }>();
     const elements = new Map<string, { elementId: string; name: string; runCount: number; flowCount: Set<string>; failedRuns: number; lastUsedAt: string }>();
+    const durations = new Map<string, { date: string; totalMs: number; count: number }>();
     for (const run of runs) {
-      const date = run.created_at.slice(0, 10);
+      const date = periodKey(run.created_at, period);
       const point = trend.get(date) ?? { date, total: 0, success: 0, failed: 0, canceled: 0 };
       point.total += 1;
       if (run.status === "success") point.success += 1;
@@ -1009,9 +1087,25 @@ function createPlatformServices(dataDirectory: string) {
       if (run.status === "canceled") point.canceled += 1;
       trend.set(date, point);
       const events = eventsByRun.get(run.id) ?? [];
+      // 运行时长：首个事件到终态事件（run.complete / run.failed / run.interrupted）的时间差。
+      const first = events[0];
+      const terminal = [...events].reverse().find((event) => event.kind === "run.complete" || event.kind === "run.failed" || event.kind === "run.interrupted");
+      if (first && terminal) {
+        const startMs = new Date(first.at).getTime();
+        const endMs = new Date(terminal.at).getTime();
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+          const durationPoint = durations.get(date) ?? { date, totalMs: 0, count: 0 };
+          durationPoint.totalMs += endMs - startMs;
+          durationPoint.count += 1;
+          durations.set(date, durationPoint);
+        }
+      }
       const failure = [...events].reverse().find((event) => event.kind === "run.failed" || event.kind.includes("error"));
       if (failure) {
-        const category = failureCategory(failure.data.message);
+        // 归类维度：step 按失败步骤聚合；code 优先按错误码前缀归类；message 保持原逻辑。
+        const category = categoryBy === "step"
+          ? String(failure.data.stepId ?? "unknown")
+          : categoryBy === "code" ? failureCategory(failure.data.message, failure.data.code) : failureCategory(failure.data.message);
         categories.set(category, (categories.get(category) ?? 0) + 1);
       }
       for (const event of events.filter((item) => item.kind === "step.completed")) {
@@ -1043,13 +1137,35 @@ function createPlatformServices(dataDirectory: string) {
         elements.set(elementId, current);
       }
     }
-    const terminal = runs.filter((run) => ["success", "failed", "canceled"].includes(run.status));
+    // 环比基线：window/自定义区间取同长度前一段；limit 模式取当前集合最旧运行之前的一段。
+    let previous: ReturnType<typeof summarizeRuns> | undefined;
+    const fromMs = fromIso ? new Date(fromIso).getTime() : undefined;
+    const toMs = toIso ? new Date(toIso).getTime() : undefined;
+    if (fromMs !== undefined && toMs !== undefined && Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs) {
+      previous = summarizeRuns(fetchRuns(projectId, new Date(fromMs - (toMs - fromMs)).toISOString(), fromIso));
+    } else if (fromMs !== undefined && options.windowDays && Number.isFinite(fromMs)) {
+      previous = summarizeRuns(fetchRuns(projectId, new Date(fromMs - options.windowDays * 86_400_000).toISOString(), fromIso));
+    } else if (limit && runs.length > 0) {
+      previous = summarizeRuns(fetchRuns(projectId, undefined, runs[runs.length - 1].created_at, limit));
+    }
+    // 定时任务调度健康度：同窗口内审计事件聚合（triggered / skipped）。
+    const scheduleParams: Array<string | number> = [projectId, fromIso ?? "1970-01-01T00:00:00.000Z"];
+    let scheduleQuery = `SELECT action, COUNT(*) AS count FROM audit_events WHERE project_id = ? AND action IN ('schedule.triggered', 'schedule.skipped') AND created_at >= ?`;
+    if (toIso) { scheduleQuery += " AND created_at <= ?"; scheduleParams.push(toIso); }
+    scheduleQuery += " GROUP BY action";
+    const scheduleRows = database.prepare(scheduleQuery).all(...scheduleParams) as Array<{ action: string; count: number }>;
+    const triggered = scheduleRows.find((row) => row.action === "schedule.triggered")?.count ?? 0;
+    const skipped = scheduleRows.find((row) => row.action === "schedule.skipped")?.count ?? 0;
+    const scheduleTotal = triggered + skipped;
     return {
-      summary: { totalRuns: runs.length, successRate: terminal.length ? Math.round((terminal.filter((run) => run.status === "success").length / terminal.length) * 100) : 0, failedRuns: runs.filter((run) => run.status === "failed").length },
+      summary: summarizeRuns(runs),
+      previous,
       trend: [...trend.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-30),
-      failureCategories: [...categories.entries()].map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count),
+      failureCategories: [...categories.entries()].map(([category, count]) => ({ category, count, dimension: categoryBy })).sort((a, b) => b.count - a.count),
       slowSteps: [...slowSteps.values()].map((item) => ({ stepId: item.stepId, title: item.title, count: item.count, averageMs: Math.round(item.totalMs / item.count), maxMs: item.maxMs })).sort((a, b) => b.averageMs - a.averageMs).slice(0, 20),
       elementImpact: [...elements.values()].map((item) => ({ elementId: item.elementId, name: item.name, runCount: item.runCount, flowCount: item.flowCount.size, failedRuns: item.failedRuns, lastUsedAt: item.lastUsedAt })).sort((a, b) => b.runCount - a.runCount).slice(0, 100),
+      runDurations: [...durations.values()].map((item) => ({ date: item.date, averageMs: Math.round(item.totalMs / item.count), count: item.count })).sort((a, b) => a.date.localeCompare(b.date)).slice(-30),
+      scheduleHealth: { triggered, skipped, successRate: scheduleTotal ? Math.round((triggered / scheduleTotal) * 100) : 0 },
     };
   }
 
@@ -1241,6 +1357,9 @@ function createPlatformServices(dataDirectory: string) {
       .prepare(`SELECT name, iv, tag, ciphertext FROM project_secrets WHERE project_id = ? AND name IN (${requested.map(() => "?").join(",")})`)
       .all(projectId, ...requested) as Array<{ name: string; iv: string; tag: string; ciphertext: string }>;
     if (rows.length !== requested.length) throw new PlatformError(409, "RUN_SECRET_NOT_CONFIGURED");
+    // 敏感操作留痕：记录解密用于执行的密钥名称，明文永不进审计。
+    const secretProject = projectFor(projectId);
+    audit(secretProject.workspace_id, { type: "system", id: "managed-runner" }, "secret.decrypted_for_run", { type: "project", id: projectId }, { names: requested }, projectId);
     return Object.fromEntries(rows.map((row) => [row.name, decrypt(row)]));
   }
 

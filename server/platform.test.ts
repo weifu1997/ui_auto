@@ -143,6 +143,22 @@ describe("failureCategory", () => {
     expect(failureCategory("something unexpected")).toBe("other");
     expect(failureCategory(undefined)).toBe("other");
   });
+
+  it("classifies by error code when present", () => {
+    expect(failureCategory("some message", "ELEMENT_NOT_FOUND")).toBe("locator");
+    expect(failureCategory("some message", "TIMEOUT_EXPIRED")).toBe("timeout");
+    expect(failureCategory("some message", "ASSERT_FAILED")).toBe("assertion");
+    expect(failureCategory("some message", "NETWORK_ERROR")).toBe("network");
+    expect(failureCategory("some message", "ECONNREFUSED")).toBe("network");
+    expect(failureCategory("some message", "BROWSER_CRASH")).toBe("browser");
+    expect(failureCategory("some message", "RUN_CANCELED")).toBe("canceled");
+  });
+
+  it("falls back to message classification when code is present but uncategorized", () => {
+    expect(failureCategory("Timeout waiting for selector", "UNKNOWN_CODE_42")).toBe("timeout");
+    expect(failureCategory("STRICT MODE violation", "OK")).toBe("locator");
+    expect(failureCategory("", "NOTIFICATION_REJECTED_19024")).toBe("other");
+  });
 });
 
 describe("publicFlowOutputNames", () => {
