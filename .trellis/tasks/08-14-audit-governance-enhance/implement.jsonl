@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端整体规范入口，治理页改动需遵守其目录结构与运行时说明"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "GovernancePage 新增审计面板/指标卡遵循的组件、AntD 用法与可访问性约束"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "审计/分析 API 契约的类型定义与边界校验约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/测试选择门禁，验证命令与测试风格依据"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "改动横跨 server 埋点/API 与前端面板，需按跨层一致性检查"}

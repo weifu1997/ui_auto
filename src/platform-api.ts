@@ -174,15 +174,49 @@ export type PlatformDelivery = {
   channel: { name: string; type: PlatformNotificationChannel["type"] };
 };
 
+export type PlatformAnalyticsSummary = {
+  totalRuns: number;
+  successRate: number;
+  failedRuns: number;
+  canceledRuns: number;
+  failedRate: number;
+  canceledRate: number;
+};
+
 export type PlatformAnalytics = {
-  summary: { totalRuns: number; successRate: number; failedRuns: number };
+  summary: PlatformAnalyticsSummary;
+  previous?: PlatformAnalyticsSummary;
   trend: Array<{ date: string; total: number; success: number; failed: number; canceled: number }>;
-  failureCategories: Array<{ category: string; count: number }>;
+  failureCategories: Array<{ category: string; count: number; dimension: "message" | "code" | "step" }>;
   slowSteps: Array<{ stepId: string; title: string; count: number; averageMs: number; maxMs: number }>;
   elementImpact: Array<{ elementId: string; name: string; runCount: number; flowCount: number; failedRuns: number; lastUsedAt: string }>;
+  runDurations: Array<{ date: string; averageMs: number; count: number }>;
+  scheduleHealth: { triggered: number; skipped: number; successRate: number };
+};
+
+export type PlatformAnalyticsQuery = {
+  window?: number;
+  from?: string;
+  to?: string;
+  period?: "day" | "week";
+  limit?: number;
+  categoryBy?: "message" | "code" | "step";
 };
 
 export type PlatformAuditEvent = { id: string; actorType: string; actorId: string; action: string; targetType: string; targetId: string; detail: Record<string, unknown>; createdAt: string };
+
+export type PlatformAuditQuery = {
+  page?: number;
+  pageSize?: number;
+  /** action 前缀匹配，如 "auth."、"notification."、"run." */
+  action?: string;
+  actorId?: string;
+  actorType?: string;
+  from?: string;
+  to?: string;
+  /** 关键字：匹配 action / target_type / target_id / detail */
+  q?: string;
+};
 
 export class PlatformApiError extends Error {
   readonly status: number;
@@ -634,10 +668,28 @@ export function getPlatformDeliveries(token: string, projectId: string) {
   return request<{ deliveries: PlatformDelivery[] }>(`/platform/projects/${encodeURIComponent(projectId)}/deliveries`, {}, token);
 }
 
-export function getPlatformAuditEvents(token: string, projectId: string) {
-  return request<{ events: PlatformAuditEvent[] }>(`/platform/projects/${encodeURIComponent(projectId)}/audit-events`, {}, token);
+export function getPlatformAuditEvents(token: string, projectId: string, query: PlatformAuditQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set("page", String(query.page));
+  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
+  if (query.action) params.set("action", query.action);
+  if (query.actorId) params.set("actorId", query.actorId);
+  if (query.actorType) params.set("actorType", query.actorType);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.q) params.set("q", query.q);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return request<{ events: PlatformAuditEvent[]; total: number; page: number; pageSize: number }>(`/platform/projects/${encodeURIComponent(projectId)}/audit-events${suffix}`, {}, token);
 }
 
-export function getPlatformAnalytics(token: string, projectId: string) {
-  return request<{ analytics: PlatformAnalytics }>(`/platform/projects/${encodeURIComponent(projectId)}/analytics`, {}, token);
+export function getPlatformAnalytics(token: string, projectId: string, query: PlatformAnalyticsQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.window !== undefined) params.set("window", String(query.window));
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.period) params.set("period", query.period);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.categoryBy) params.set("categoryBy", query.categoryBy);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return request<{ analytics: PlatformAnalytics }>(`/platform/projects/${encodeURIComponent(projectId)}/analytics${suffix}`, {}, token);
 }

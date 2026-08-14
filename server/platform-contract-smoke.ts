@@ -36,6 +36,10 @@ try {
       AUTOFLOW_CORS_ORIGINS: "http://console.example.test",
       PLATFORM_SECRET_KEY: "platform-contract-smoke-secret",
       MANAGED_RUNNER_HEADLESS: "1",
+      // 通知投递指向本地 sink（worker 自身的 logout 端点返回 200），避免依赖外网且退避到终态耗时过长。
+      PLATFORM_ALLOW_INSECURE_NOTIFICATION_URLS: "1",
+      PLATFORM_ALLOW_PRIVATE_NOTIFICATION_URLS: "1",
+      PLATFORM_NOTIFICATION_HOST_ALLOWLIST: "127.0.0.1,localhost",
     },
   });
   root = worker.root;
@@ -276,6 +280,22 @@ try {
   }
   const downloadedArtifact = await fetch(`http://127.0.0.1:${port}/api/platform/artifacts/${completedRun.artifacts[0].id}`, { headers: headers(token) });
   if (!downloadedArtifact.ok) throw new Error("Artifact download failed");
+  // 密钥解密审计：运行引用 {{secret.login_password}} 的流程会触发解密留痕（enqueue 阶段即审计，运行成败不影响）。
+  const secretFlowRevision = await api<{ revision: { id: string } }>(`/api/platform/projects/${projectId}/revisions`, {
+    method: "POST",
+    headers: headers(token),
+    body: JSON.stringify({
+      flow: { id: "secret-flow", name: "Secret flow", steps: [{ id: "uses-secret", action: "wait", value: "{{secret.login_password}}" }] },
+      environment: fixtureEnvironment,
+      elements: [],
+      secretNames: ["login_password"],
+    }),
+  });
+  const secretFlowRevisionId = secretFlowRevision.body.revision?.id;
+  if (!secretFlowRevision.response.ok || !secretFlowRevisionId) throw new Error("Secret flow revision creation failed");
+  const secretRun = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: headers(token), body: JSON.stringify({ revisionId: secretFlowRevisionId, environmentId: "fixture" }) });
+  if (!secretRun.response.ok || !secretRun.body.runIds[0]) throw new Error("Secret flow run creation failed");
+  await waitForRun(token, projectId, secretRun.body.runIds[0], ["success", "failed"]);
 
   // 取消：等待中的 managed 运行可取消并收敛为 canceled。
   const waitingFlow = { id: "fixture-wait", name: "Fixture wait", steps: [{ id: "wait", title: "Wait", action: "等待", value: "10000", timeout: 10, failurePolicy: "停止流程", status: "pending" }] };
@@ -320,7 +340,7 @@ try {
   const channel = await api<{ channel: { id: string; name: string }; config?: unknown }>(`/api/platform/workspaces/${workspaceId}/notification-channels`, {
     method: "POST",
     headers: headers(token),
-    body: JSON.stringify({ name: "Contract webhook", type: "webhook", config: { url: "https://example.com/notification-sink", headers: { "x-contract": "yes" } } }),
+    body: JSON.stringify({ name: "Contract webhook", type: "webhook", config: { url: `http://127.0.0.1:${port}/api/auth/logout`, headers: { "x-contract": "yes" } } }),
   });
   const channelId = channel.body.channel?.id;
   if (!channel.response.ok || !channelId || "config" in channel.body) throw new Error("Notification channel was not securely created");
@@ -342,13 +362,43 @@ try {
   // managed 执行：再跑一次 fixture 版本产生成功运行，用于通知投递断言。
   const fixtureRun = await api<{ runIds: string[] }>(`/api/platform/projects/${projectId}/runs`, { method: "POST", headers: headers(token), body: JSON.stringify({ revisionId: fixtureRevisionId, environmentId: "fixture" }) });
   await waitForRun(token, projectId, fixtureRun.body.runIds[0], ["success", "failed"]);
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // 通知投递终态轮询：delivered/failed 落地后，投递审计才可断言。
+  let deliveryStatus = "";
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const poll = await api<{ deliveries: Array<{ status: string; channel: { name: string } }> }>(`/api/platform/projects/${projectId}/deliveries`, { headers: headers(token) });
+    const first = poll.body.deliveries[0];
+    if (first?.status === "delivered" || first?.status === "failed") { deliveryStatus = first.status; break; }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (deliveryStatus !== "delivered" && deliveryStatus !== "failed") throw new Error("Run notification delivery did not settle");
   const deliveries = await api<{ deliveries: Array<{ channel: { name: string } }> }>(`/api/platform/projects/${projectId}/deliveries`, { headers: headers(token) });
   if (!deliveries.response.ok || deliveries.body.deliveries[0]?.channel.name !== "Contract webhook") throw new Error("Run notification delivery was not queued");
   if (JSON.stringify(deliveries.body).includes("never-log-this")) throw new Error("Delivery listing leaked a secret value");
   const auditEvents = await api(`/api/platform/projects/${projectId}/audit-events`, { headers: headers(token) });
   if (!auditEvents.response.ok) throw new Error("Audit events listing failed");
   if (JSON.stringify(auditEvents.body).includes("never-log-this")) throw new Error("Audit events leaked a secret value");
+  // 通知投递审计：终态投递（成功/失败/业务拒绝）应有审计事件。
+  const notificationAudit = await api<{ events: Array<{ action: string }> }>(`/api/platform/projects/${projectId}/audit-events?action=notification.`, { headers: headers(token) });
+  if (!notificationAudit.response.ok || !notificationAudit.body.events.some((event) => ["notification.delivered", "notification.rejected", "notification.failed"].includes(event.action))) {
+    throw new Error(`Notification delivery audit missing: ${JSON.stringify(notificationAudit.body)}`);
+  }
+  // 认证审计：注册/登录成功/登录失败（含来源 IP）应出现在项目审计视图（工作区级事件）。
+  const authAudit = await api<{ events: Array<{ action: string; detail: { ip?: string } }> }>(`/api/platform/projects/${projectId}/audit-events?action=auth.`, { headers: headers(token) });
+  if (!authAudit.response.ok
+    || !["auth.registered", "auth.login_succeeded", "auth.login_failed"].every((action) => authAudit.body.events.some((event) => event.action === action))
+    || !authAudit.body.events.some((event) => typeof event.detail?.ip === "string")) {
+    throw new Error(`Auth audit events missing or lacking source IP: ${JSON.stringify(authAudit.body)}`);
+  }
+  // 分页契约：page/pageSize/total 齐全，pageSize 生效。
+  const pagedAudit = await api<{ events: unknown[]; total: number; page: number; pageSize: number }>(`/api/platform/projects/${projectId}/audit-events?page=1&pageSize=2`, { headers: headers(token) });
+  if (!pagedAudit.response.ok || pagedAudit.body.events.length > 2 || pagedAudit.body.total < 1 || pagedAudit.body.page !== 1 || pagedAudit.body.pageSize !== 2) {
+    throw new Error(`Audit pagination contract failed: ${JSON.stringify(pagedAudit.body)}`);
+  }
+  // 关键字搜索：按 action 内容命中。
+  const searchedAudit = await api<{ events: Array<{ action: string }> }>(`/api/platform/projects/${projectId}/audit-events?q=run.`, { headers: headers(token) });
+  if (!searchedAudit.response.ok || !searchedAudit.body.events.every((event) => event.action.includes("run."))) {
+    throw new Error(`Audit keyword search failed: ${JSON.stringify(searchedAudit.body)}`);
+  }
 
   const schedule = await api<{ schedule: { id: string } }>(`/api/platform/projects/${projectId}/schedules`, {
     method: "POST",
@@ -384,6 +434,27 @@ try {
   if (!analytics.response.ok || analytics.body.analytics.summary.totalRuns < 1) {
     throw new Error(`Analytics aggregation failed: ${JSON.stringify(analytics.body)}`);
   }
+  // 指标扩展契约：窗口/周期/归类维度参数 + 运行时长、调度健康度、失败归类维度字段。
+  const analyticsExtended = await api<{ analytics: { runDurations: Array<{ date: string; averageMs: number }>; scheduleHealth: { triggered: number; skipped: number; successRate: number }; failureCategories: Array<{ dimension: string }> } }>(`/api/platform/projects/${projectId}/analytics?window=30&period=week&categoryBy=code`, { headers: headers(token) });
+  if (!analyticsExtended.response.ok
+    || !Array.isArray(analyticsExtended.body.analytics.runDurations)
+    || typeof analyticsExtended.body.analytics.scheduleHealth?.successRate !== "number"
+    || analyticsExtended.body.analytics.failureCategories.some((item) => item.dimension !== "code")) {
+    throw new Error(`Analytics extended contract failed: ${JSON.stringify(analyticsExtended.body)}`);
+  }
+  // 运行生命周期审计：至少存在 run.created 与一个终态事件。
+  const runAudit = await api<{ events: Array<{ action: string }> }>(`/api/platform/projects/${projectId}/audit-events?action=run.&pageSize=100`, { headers: headers(token) });
+  if (!runAudit.response.ok
+    || !runAudit.body.events.some((event) => event.action === "run.created")
+    || !runAudit.body.events.some((event) => ["run.completed", "run.failed", "run.canceled"].includes(event.action))) {
+    throw new Error(`Run lifecycle audit events missing: ${JSON.stringify(runAudit.body)}`);
+  }
+  // 敏感操作审计：运行引用了 login_password，应有解密留痕且不含明文。
+  const secretAudit = await api<{ events: Array<{ action: string; detail: { names?: string[] } }> }>(`/api/platform/projects/${projectId}/audit-events?action=secret.`, { headers: headers(token) });
+  if (!secretAudit.response.ok || !secretAudit.body.events.some((event) => event.action === "secret.decrypted_for_run" && event.detail.names?.includes("login_password"))) {
+    throw new Error(`Secret decryption audit missing: ${JSON.stringify(secretAudit.body)}`);
+  }
+  if (JSON.stringify(secretAudit.body).includes("never-log-this")) throw new Error("Secret audit leaked a plaintext value");
   // 成员/角色已收敛：登录即全权限（角色细分移除），但工作空间隔离保留。
   const strangerRegistration = await api<{ token: string; user: { id: string } }>("/api/auth/register", {
     method: "POST",

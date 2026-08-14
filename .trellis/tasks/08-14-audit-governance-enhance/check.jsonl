@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口，检查治理页改动是否符合项目运行时与目录结构"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "检查新面板/表格/筛选组件的 AntD 用法与可访问性"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "检查审计/分析 API 类型契约的一致性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查 lint/type-check/测试门禁是否全绿"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查埋点-API-前端的数据流与脱敏约束是否跨层一致"}
