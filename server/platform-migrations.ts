@@ -282,8 +282,8 @@ export function runPlatformMigrations(database: DatabaseSync, bootstrapSchema: s
     { version: 6, name: "internal-template-library", up: addTemplateLibrary },
     { version: 7, name: "managed-validation-artifacts", up: addManagedValidationArtifacts },
     { version: 8, name: "blank-debug-sessions", up: allowBlankDebugSessions, noTransaction: true },
-    { version: 9, name: "drop-agent-and-debug-tables", up: dropAgentAndDebugTables },
-    { version: 10, name: "drop-dead-tables-and-columns", up: dropDeadTablesAndColumns },
+    { version: 9, name: "drop-agent-and-debug-tables", up: dropAgentAndDebugTables, noTransaction: true },
+    { version: 10, name: "drop-dead-tables-and-columns", up: dropDeadTablesAndColumns, noTransaction: true },
   ]);
 }
 
@@ -291,6 +291,7 @@ export function runPlatformMigrations(database: DatabaseSync, bootstrapSchema: s
 function dropDeadTablesAndColumns(database: DatabaseSync) {
   database.exec("PRAGMA foreign_keys = OFF");
   try {
+    database.exec("BEGIN IMMEDIATE");
     database.exec(`
       DROP TABLE IF EXISTS workspace_invitations;
       DROP TABLE IF EXISTS agent_tokens;
@@ -319,15 +320,20 @@ function dropDeadTablesAndColumns(database: DatabaseSync) {
           enabled INTEGER NOT NULL DEFAULT 1,
           created_by TEXT NOT NULL,
           created_at TEXT NOT NULL,
-          last_triggered_at TEXT
+          last_triggered_at TEXT,
+          archived_at TEXT
         );
-        INSERT INTO webhook_triggers_new (id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at, last_triggered_at)
-          SELECT id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at, last_triggered_at FROM webhook_triggers;
+        INSERT INTO webhook_triggers_new (id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at, last_triggered_at, archived_at)
+          SELECT id, project_id, revision_id, environment_id, dataset_version_id, name, signing_secret_iv, signing_secret_tag, signing_secret_ciphertext, enabled, created_by, created_at, last_triggered_at, archived_at FROM webhook_triggers;
         DROP TABLE webhook_triggers;
         ALTER TABLE webhook_triggers_new RENAME TO webhook_triggers;
         CREATE INDEX IF NOT EXISTS webhook_triggers_project ON webhook_triggers (project_id, enabled);
       `);
     }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
   }
@@ -353,6 +359,7 @@ function dropDeadTablesAndColumns(database: DatabaseSync) {
 function dropAgentAndDebugTables(database: DatabaseSync) {
   database.exec("PRAGMA foreign_keys = OFF");
   try {
+    database.exec("BEGIN IMMEDIATE");
     database.exec(`
       DROP TABLE IF EXISTS picker_captures;
       DROP TABLE IF EXISTS debug_session_events;
@@ -362,6 +369,10 @@ function dropAgentAndDebugTables(database: DatabaseSync) {
       DROP TABLE IF EXISTS agent_bindings;
       DROP TABLE IF EXISTS agent_tokens;
     `);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
   }

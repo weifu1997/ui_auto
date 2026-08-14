@@ -130,6 +130,15 @@ export function parseJson<T>(value: string | null, fallback: T): T {
   }
 }
 
+export function notificationRejectionCode(value: string | null) {
+  const body = parseJson<Record<string, unknown>>(value, {});
+  for (const key of ["code", "errcode"] as const) {
+    const code = body[key];
+    if (typeof code === "number" && code !== 0) return code;
+  }
+  return undefined;
+}
+
 export function authorization(request: IncomingMessage) {
   const value = request.headers.authorization;
   if (value?.startsWith("Bearer ")) {
