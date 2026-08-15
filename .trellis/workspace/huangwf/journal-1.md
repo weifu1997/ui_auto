@@ -206,3 +206,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: P2 运行与投递记录分页
+
+**Date**: 2026-08-15
+**Task**: P2 运行与投递记录分页
+**Branch**: `master`
+
+### Summary
+
+运行/投递接口支持服务端分页与筛选，前端 URL 保留查询状态并保留 Worker 运行合并兼容。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4d96115` | (see git log) |
+
+### Status
+
+[OK] **Completed**

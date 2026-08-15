@@ -18,7 +18,10 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-15-flow-recording-mvp",
+    "08-15-flow-batch-execution-mvp"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
