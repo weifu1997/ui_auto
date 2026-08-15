@@ -143,3 +143,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: P1 规范化版本快照语义
+
+**Date**: 2026-08-15
+**Task**: P1 规范化版本快照语义
+**Branch**: `master`
+
+### Summary
+
+新增后端 canonical revision checksum 与前端 revision payload builder，展示/瞬态字段不生成新版本，并补齐 API/单测回归。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `400bac0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
