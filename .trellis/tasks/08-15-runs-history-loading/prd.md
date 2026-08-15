@@ -19,10 +19,10 @@
 
 ## Acceptance Criteria
 
-- [ ] 清空浏览器 `autoflow-run-records` 后进入运行中心，仍能看到服务端历史。
-- [ ] 计划任务/Webhook 新运行在约定刷新周期内自动出现。
-- [ ] 本地 Worker 运行与平台历史合并时不重复、来源可识别。
-- [ ] 非终态轮询不会在离开页面后继续无界运行。
+- [x] 清空浏览器 `autoflow-run-records` 后进入运行中心，仍能看到服务端历史。
+- [x] 计划任务/Webhook 新运行在约定刷新周期内自动出现。
+- [x] 本地 Worker 运行与平台历史通过 `run.id` 合并，来源沿用 `isWorkerRunId` 标识。
+- [x] 非终态平台运行使用 3s 轮询，终态历史使用 15s 慢刷新，页面隐藏时暂停。
 
 ## Notes
 

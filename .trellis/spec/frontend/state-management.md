@@ -75,6 +75,11 @@ persistent outbox draft before hydration so a refresh cannot overwrite
 unsaved local edits. See `src/ServerWorkspaceSynchronizer.tsx` and the
 compatibility synchronizer in `src/App.tsx`.
 
+The run center loads Platform history on first `/runs` entry and merges it into
+`run-store` by run id. Non-terminal Platform runs use a short poll; terminal
+history refreshes on a slower interval so scheduled/Webhook runs still appear
+without manual refresh.
+
 Do not let a page overwrite remote workspace data directly or bypass optimistic
 version handling. `tests/platform-sync.spec.ts` covers hydration, local-cache
 loss, versioned writes, and retry behavior; `tests/templates-and-conflicts.spec.ts`

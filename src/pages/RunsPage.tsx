@@ -29,6 +29,7 @@ export function RunsPage({ project }: { project: Project }) {
       ? state.platformProjectIdsById?.[project.id]
       : undefined,
   );
+  const remotePlatformProjectId = platformProjectId ?? legacyPlatformProjectId;
   const storedApiRuns = useRunStore((state) => state.apiRuns[project.id]);
   const apiRuns = storedApiRuns ?? emptyRuns;
   const upsertRun = useRunStore((state) => state.upsertRun);
@@ -59,18 +60,24 @@ export function RunsPage({ project }: { project: Project }) {
     }
   }, [enablePlatformProject, legacyPlatformProjectId, platformProjectId, platformSession, project.id]);
   const refreshPlatformRuns = useCallback(async () => {
-    if (!platformSession || !platformProjectId || !window.location.pathname.endsWith("/platform")) return;
+    if (!platformSession || !remotePlatformProjectId) return;
     try {
-      const response = await getPlatformRuns(platformSession.token, platformProjectId);
+      const response = await getPlatformRuns(platformSession.token, remotePlatformProjectId);
       response.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
     } catch {
       // The legacy Worker run center remains usable when Platform is offline.
     }
-  }, [platformProjectId, platformSession, project.id, upsertRun]);
+  }, [platformSession, remotePlatformProjectId, project.id, upsertRun]);
   useEffect(() => {
     void refreshPlatformRuns();
   }, [refreshPlatformRuns]);
-  usePolling(refreshPlatformRuns, 3_000);
+  const hasActivePlatformRuns = apiRuns.some(
+    (run) => !isWorkerRunId(run.id) && !isTerminalStatus(run.status),
+  );
+  const pollInterval = platformSession && remotePlatformProjectId
+    ? hasActivePlatformRuns ? 3_000 : 15_000
+    : 0;
+  usePolling(refreshPlatformRuns, pollInterval);
   const filtered =
     filter === "all" ? apiRuns : apiRuns.filter((run) => run.status === filter);
   const cancel = async (run: Run) => {
@@ -142,8 +149,8 @@ export function RunsPage({ project }: { project: Project }) {
         const task = await getRun(project.id, run.id);
         upsertRun(project.id, workerTaskAsRun(task, run));
       }),
-      ...(platformSession && platformProjectId ? [
-        getPlatformRuns(platformSession.token, platformProjectId).then((response) => {
+      ...(platformSession && remotePlatformProjectId ? [
+        getPlatformRuns(platformSession.token, remotePlatformProjectId).then((response) => {
           response.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsRun(platformRun)));
         }),
       ] : []),
