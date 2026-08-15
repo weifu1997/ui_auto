@@ -330,7 +330,10 @@ def test_platform_route_contracts(tmp_path):
                 "http-project",
                 method="POST",
                 body=(
-                    b'{"flow":{"id":"flow-1","name":"Flow","steps":[{"id":"step-1"}]},'
+                        b'{"flow":{"id":"flow-1","name":"Flow",'
+                        b'"steps":[{"id":"step-1","action":"open","value":"/",'
+                        b'"timeout":30,"failurePolicy":"immediate",'
+                        b'"status":"success"}]},'
                     b'"environment":{"id":"env-1","browser":"Chromium",'
                     b'"baseUrl":"https://example.test"},"elements":[]}'
                 ),
@@ -341,6 +344,27 @@ def test_platform_route_contracts(tmp_path):
         assert created_revision["revisionNumber"] == 1
         assert created_revision["status"] == "published"
         assert created_revision["stepCount"] == 1
+
+        duplicate_revision_response = asyncio.run(
+            call_route(
+                revisions_route,
+                "http-project",
+                method="POST",
+                body=(
+                    b'{"flow":{"id":"flow-1","name":"Flow",'
+                    b'"updatedAt":"2030-01-02T00:00:00.000Z",'
+                    b'"steps":[{"id":"step-1","title":"Step",'
+                    b'"action":"open","value":"/","timeout":30,'
+                    b'"failurePolicy":"immediate","status":"success"}]},'
+                        b'"environment":{"id":"env-1","browser":"Chromium",'
+                        b'"baseUrl":"https://example.test","updatedAt":"recent"},'
+                        b'"elements":[]}'
+                    ),
+                )
+            )
+        assert duplicate_revision_response.status_code == 200
+        duplicate_revision = json.loads(duplicate_revision_response.body)["revision"]
+        assert duplicate_revision["id"] == created_revision["id"]
 
         list_revisions_response = asyncio.run(
             call_route(revisions_route, "http-project")

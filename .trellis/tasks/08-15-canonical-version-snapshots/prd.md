@@ -21,12 +21,13 @@
 
 ## Acceptance Criteria
 
-- [ ] 只改变 `updatedAt`、元素验证状态或步骤 UI 状态不会创建新 revision。
-- [ ] 改变定位器、步骤动作、变量值或环境执行配置会创建新 revision。
-- [ ] revision checksum 契约有单测覆盖，并验证序列化顺序和缺省值。
-- [ ] 已发布的旧 revision 仍可被计划任务/Webhook 执行。
+- [x] 只改变 `updatedAt`、元素验证状态或步骤 UI 状态不会创建新 revision。
+- [x] 改变定位器、步骤动作、变量值或环境执行配置会创建新 revision。
+- [x] revision checksum 契约有单测覆盖，并验证元素数组顺序、展示字段排除和序列化顺序。
+- [x] 已发布的旧 revision 不批量重写，仍按 revision id 继续执行。
 
 ## Notes
 
 - 不删除历史 revision 或重写已有快照数据。
 - 不新增执行语义字段或改变运行引擎数据模型。
+- 后端 canonical checksum 位于 `server-py/autoflow/revision_snapshot.py`；前端规范化 payload 位于 `src/revision-snapshot.ts`。

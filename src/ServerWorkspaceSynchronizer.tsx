@@ -16,6 +16,7 @@ import {
 import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformSession } from "./platform-api";
 import type { PlatformWorkspaceProject } from "./workspace-store";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformProjectMap } from "./platform-context";
+import { revisionElements, revisionEnvironment, revisionFlow } from "./revision-snapshot";
 import { useWorkspaceStore } from "./workspace-store";
 import {
   allSyncDraftPending,
@@ -387,15 +388,11 @@ export function ServerWorkspaceSynchronizer() {
       if (!flow.definition?.length) continue;
       try {
         await createPlatformRevision(apiToken, projectId, {
-          flow: {
-            id: flow.id,
-            name: flow.name,
-            description: flow.description,
-            steps: flow.definition,
-            variables: snapshotVariables(variables),
-          },
-          environment,
-          elements: elements.filter((item) => !item.environment || item.environment === environment.id),
+          flow: revisionFlow(flow, snapshotVariables(variables)),
+          environment: revisionEnvironment(environment),
+          elements: revisionElements(
+            elements.filter((item) => !item.environment || item.environment === environment.id),
+          ),
           secretNames: requiredSecretVariables(variables, flow.definition).map(variableReference),
         });
       } catch {

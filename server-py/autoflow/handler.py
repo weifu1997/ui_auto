@@ -28,6 +28,7 @@ from .core import (
 from .http import PlatformError
 from .resources import as_record, public_resource_data
 from .revisions import revision_number
+from .revision_snapshot import canonical_checksum
 from .services import PlatformServices
 from .templates import rewrite_template_references
 
@@ -2932,7 +2933,13 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 [{"revision_number": row[0]} for row in rows]
             )
             revision_id = str(uuid.uuid4())
-            revision_checksum = digest(json(snapshot))
+            revision_checksum = canonical_checksum(
+                flow,
+                environment,
+                elements,
+                dataset,
+                secret_names,
+            )
             created_at = now()
             latest = services.database.execute(
                 """
