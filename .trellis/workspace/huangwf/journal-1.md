@@ -185,3 +185,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: P2 自动化编辑能力
+
+**Date**: 2026-08-15
+**Task**: P2 自动化编辑能力
+**Branch**: `master`
+
+### Summary
+
+新增 schedule/webhook/channel 更新、Webhook secret 轮换和通知测试端点，前端补齐编辑/轮换/测试 UI 与回归测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `954b7d0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
