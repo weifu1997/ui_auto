@@ -2817,17 +2817,52 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     async def deliveries(request: Request, project_id: str) -> Response:
         user = services.session_user(dict(request.headers))
         services.require_project_role(project_id, user.id)
+        query = request.query_params
+        try:
+            page = max(1, int(query.get("page", "1") or "1"))
+            page_size = min(100, max(1, int(query.get("pageSize", "20") or "20")))
+        except ValueError:
+            raise PlatformError(400, "PAGINATION_INVALID") from None
+        conditions = ["r.project_id = ?"]
+        params: list[Any] = [project_id]
+        status = _text(query.get("status")).strip()
+        channel = _text(query.get("channel")).strip()
+        from_time = _text(query.get("from")).strip()
+        to_time = _text(query.get("to")).strip()
+        if status:
+            conditions.append("d.status = ?")
+            params.append(status)
+        if channel:
+            conditions.append("c.name = ?")
+            params.append(channel)
+        if from_time:
+            conditions.append("d.created_at >= ?")
+            params.append(from_time)
+        if to_time:
+            conditions.append("d.created_at <= ?")
+            params.append(to_time)
+        where = " AND ".join(conditions)
+        total = services.database.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM deliveries d
+            JOIN platform_runs r ON r.id = d.run_id
+            JOIN notification_channels c ON c.id = d.channel_id
+            WHERE {where}
+            """,
+            tuple(params),
+        ).fetchone()[0]
         rows = services.database.execute(
-            """
+            f"""
             SELECT d.id, d.run_id, d.status, d.attempt_count, d.response_code,
                    d.error, d.created_at, d.delivered_at, c.name, c.channel_type
             FROM deliveries d
             JOIN platform_runs r ON r.id = d.run_id
             JOIN notification_channels c ON c.id = d.channel_id
-            WHERE r.project_id = ?
-            ORDER BY d.created_at DESC LIMIT 200
+            WHERE {where}
+            ORDER BY d.created_at DESC LIMIT ? OFFSET ?
             """,
-            (project_id,),
+            (*params, page_size, (page - 1) * page_size),
         ).fetchall()
         return _send(
             Response(),
@@ -2846,7 +2881,10 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                         "channel": {"name": row[8], "type": row[9]},
                     }
                     for row in rows
-                ]
+                ],
+                "total": total,
+                "page": page,
+                "pageSize": page_size,
             },
         )
 
@@ -2863,12 +2901,52 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             )
         project = result["project"]
         if request.method == "GET":
+            query = request.query_params
+            try:
+                page = max(1, int(query.get("page", "1") or "1"))
+                page_size = min(100, max(1, int(query.get("pageSize", "20") or "20")))
+            except ValueError:
+                raise PlatformError(400, "PAGINATION_INVALID") from None
+            conditions = ["project_id = ?"]
+            params: list[Any] = [project_id]
+            status = _text(query.get("status")).strip()
+            flow = _text(query.get("flow")).strip()
+            source = _text(query.get("source")).strip()
+            from_time = _text(query.get("from")).strip()
+            to_time = _text(query.get("to")).strip()
+            if status:
+                conditions.append("status = ?")
+                params.append(status)
+            if flow:
+                conditions.append("json_extract(snapshot, '$.flow.name') LIKE ?")
+                params.append(f"%{flow}%")
+            if source == "schedule":
+                conditions.append("created_by LIKE 'schedule:%'")
+            elif source == "webhook":
+                conditions.append("created_by LIKE 'webhook:%'")
+            elif source == "manual":
+                conditions.append(
+                    "created_by NOT LIKE 'schedule:%'"
+                    " AND created_by NOT LIKE 'webhook:%'"
+                )
+            if from_time:
+                conditions.append("created_at >= ?")
+                params.append(from_time)
+            if to_time:
+                conditions.append("created_at <= ?")
+                params.append(to_time)
+            where = " AND ".join(conditions)
+            total = services.database.execute(
+                f"SELECT COUNT(*) FROM platform_runs WHERE {where}",
+                tuple(params),
+            ).fetchone()[0]
             rows = services.database.execute(
-                """
-                SELECT id FROM platform_runs WHERE project_id = ?
-                ORDER BY created_at DESC LIMIT 200
+                f"""
+                SELECT id FROM platform_runs
+                WHERE {where}
+                ORDER BY created_at DESC LIMIT ? OFFSET ?
                 """,
-                (project_id,),
+                (*params, page_size, (page - 1) * page_size),
             ).fetchall()
             return _send(
                 Response(),
@@ -2877,7 +2955,10 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     "runs": [
                         services.run_response(services.run_by_id(row[0]))
                         for row in rows
-                    ]
+                    ],
+                    "total": total,
+                    "page": page,
+                    "pageSize": page_size,
                 },
             )
 

@@ -764,6 +764,19 @@ def test_platform_route_contracts(tmp_path):
         assert deliveries_response.status_code == 200
         assert json.loads(deliveries_response.body)["deliveries"] == []
 
+        paginated_deliveries_response = asyncio.run(
+            call_route(
+                deliveries_route,
+                "http-project",
+                query_string=b"page=1&pageSize=1",
+            )
+        )
+        assert paginated_deliveries_response.status_code == 200
+        paginated_deliveries = json.loads(paginated_deliveries_response.body)
+        assert paginated_deliveries["page"] == 1
+        assert paginated_deliveries["pageSize"] == 1
+        assert len(paginated_deliveries["deliveries"]) == 0
+
         delete_channel_response = asyncio.run(
             call_route(
                 notification_channel_detail_route,
@@ -800,6 +813,20 @@ def test_platform_route_contracts(tmp_path):
         assert list_runs_response.status_code == 200
         listed_runs = json.loads(list_runs_response.body)["runs"]
         assert run_id in [item["id"] for item in listed_runs]
+
+        paginated_runs_response = asyncio.run(
+            call_route(
+                platform_runs_route,
+                "http-project",
+                query_string=b"page=1&pageSize=1&source=schedule",
+            )
+        )
+        assert paginated_runs_response.status_code == 200
+        paginated_runs = json.loads(paginated_runs_response.body)
+        assert paginated_runs["page"] == 1
+        assert paginated_runs["pageSize"] == 1
+        assert len(paginated_runs["runs"]) == 1
+        assert paginated_runs["total"] >= 1
 
         get_run_response = asyncio.run(
             call_route(

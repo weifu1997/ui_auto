@@ -486,8 +486,31 @@ export function savePlatformSecret(token: string, projectId: string, input: { na
   );
 }
 
-export function getPlatformRuns(token: string, projectId: string) {
-  return request<{ runs: PlatformRun[] }>(`/platform/projects/${encodeURIComponent(projectId)}/runs`, {}, token);
+export type PlatformRunsQuery = {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  flow?: string;
+  source?: "manual" | "schedule" | "webhook";
+  from?: string;
+  to?: string;
+};
+
+export function getPlatformRuns(token: string, projectId: string, query: PlatformRunsQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set("page", String(query.page));
+  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
+  if (query.status) params.set("status", query.status);
+  if (query.flow) params.set("flow", query.flow);
+  if (query.source) params.set("source", query.source);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return request<{ runs: PlatformRun[]; total: number; page: number; pageSize: number }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs${suffix}`,
+    {},
+    token,
+  );
 }
 
 export function getPlatformRun(token: string, projectId: string, runId: string) {
@@ -711,8 +734,29 @@ export function savePlatformNotificationSubscription(token: string, projectId: s
   );
 }
 
-export function getPlatformDeliveries(token: string, projectId: string) {
-  return request<{ deliveries: PlatformDelivery[] }>(`/platform/projects/${encodeURIComponent(projectId)}/deliveries`, {}, token);
+export type PlatformDeliveriesQuery = {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  channel?: string;
+  from?: string;
+  to?: string;
+};
+
+export function getPlatformDeliveries(token: string, projectId: string, query: PlatformDeliveriesQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set("page", String(query.page));
+  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
+  if (query.status) params.set("status", query.status);
+  if (query.channel) params.set("channel", query.channel);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return request<{ deliveries: PlatformDelivery[]; total: number; page: number; pageSize: number }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/deliveries${suffix}`,
+    {},
+    token,
+  );
 }
 
 export function getPlatformAuditEvents(token: string, projectId: string, query: PlatformAuditQuery = {}) {

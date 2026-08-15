@@ -3,18 +3,19 @@ import type { Project, Run } from "../mock-data";
 import { cancelPlatformRun, createPlatformRun, getPlatformRun, getPlatformRuns } from "../platform-api";
 import type { PlatformSession } from "../platform-api";
 import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
-import { useNavigate } from "../router";
+import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useWorkspaceStore } from "../workspace-store";
 import { PageHeading, canUseCapability, emptyRuns, isTerminalStatus, isWorkerRunId, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling, watchWorkerRun, workerTaskAsRun } from "./shared";
 import { cancelRun, getRun, retryRun } from "../worker-api";
 import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
-import { Button, Empty, Progress, Select, Space, Table, Tooltip } from "antd";
+import { Button, Empty, Input, Progress, Select, Space, Table, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export function RunsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const canExecuteRun = canUseCapability("run.execute");
   const watchCleanups = useRef<Array<() => void>>([]);
   useEffect(() => () => {
@@ -52,6 +53,13 @@ export function RunsPage({ project }: { project: Project }) {
     };
   }, [project.id, upsertRun]);
   const [filter, setFilter] = useState("all");
+  const [flowFilter, setFlowFilter] = useState(() => new URLSearchParams(location.search).get("flow") ?? "");
+  const [sourceFilter, setSourceFilter] = useState(() => new URLSearchParams(location.search).get("source") ?? "all");
+  const [fromFilter, setFromFilter] = useState(() => new URLSearchParams(location.search).get("from") ?? "");
+  const [toFilter, setToFilter] = useState(() => new URLSearchParams(location.search).get("to") ?? "");
+  const [page, setPage] = useState(() => Math.max(1, Number(new URLSearchParams(location.search).get("page") ?? "1") || 1));
+  const [platformPageRuns, setPlatformPageRuns] = useState<Run[]>([]);
+  const [platformTotal, setPlatformTotal] = useState(0);
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
@@ -62,12 +70,23 @@ export function RunsPage({ project }: { project: Project }) {
   const refreshPlatformRuns = useCallback(async () => {
     if (!platformSession || !remotePlatformProjectId) return;
     try {
-      const response = await getPlatformRuns(platformSession.token, remotePlatformProjectId);
-      response.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+      const response = await getPlatformRuns(platformSession.token, remotePlatformProjectId, {
+        page,
+        pageSize: 8,
+        status: filter === "all" ? undefined : filter,
+        flow: flowFilter || undefined,
+        source: sourceFilter === "all" ? undefined : sourceFilter as "manual" | "schedule" | "webhook",
+        from: fromFilter || undefined,
+        to: toFilter || undefined,
+      });
+      const pageRuns = response.runs.map((run) => platformRunAsRun(run));
+      setPlatformPageRuns(pageRuns);
+      setPlatformTotal(response.total);
+      pageRuns.forEach((run) => upsertRun(project.id, run));
     } catch {
       // The legacy Worker run center remains usable when Platform is offline.
     }
-  }, [platformSession, remotePlatformProjectId, project.id, upsertRun]);
+  }, [filter, flowFilter, fromFilter, page, platformSession, project.id, remotePlatformProjectId, sourceFilter, toFilter, upsertRun]);
   useEffect(() => {
     void refreshPlatformRuns();
   }, [refreshPlatformRuns]);
@@ -78,8 +97,21 @@ export function RunsPage({ project }: { project: Project }) {
     ? hasActivePlatformRuns ? 3_000 : 15_000
     : 0;
   usePolling(refreshPlatformRuns, pollInterval);
-  const filtered =
-    filter === "all" ? apiRuns : apiRuns.filter((run) => run.status === filter);
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (page > 1) params.set("page", String(page));
+    if (filter !== "all") params.set("status", filter);
+    if (flowFilter) params.set("flow", flowFilter);
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (fromFilter) params.set("from", fromFilter);
+    if (toFilter) params.set("to", toFilter);
+    const search = params.toString();
+    navigate(`${location.pathname}${search ? `?${search}` : ""}`, { replace: true });
+  }, [filter, flowFilter, fromFilter, location.pathname, navigate, page, sourceFilter, toFilter]);
+  const workerRuns = apiRuns.filter(
+    (run) => isWorkerRunId(run.id) && (filter === "all" || run.status === filter),
+  );
+  const dataSource = [...workerRuns, ...platformPageRuns];
   const cancel = async (run: Run) => {
     setUpdatingRunId(run.id);
     try {
@@ -256,11 +288,11 @@ export function RunsPage({ project }: { project: Project }) {
         }
       />
       <div className="run-filter">
-        <Space>
+        <Space wrap>
           <span>状态</span>
           <Select
             value={filter}
-            onChange={setFilter}
+            onChange={(value) => { setPage(1); setFilter(value); }}
             options={[
               { value: "all", label: "全部" },
               ...Object.entries(statusMeta).map(([value, meta]) => ({
@@ -269,6 +301,31 @@ export function RunsPage({ project }: { project: Project }) {
               })),
             ]}
           />
+          <span>流程</span>
+          <Input
+            value={flowFilter}
+            aria-label="流程名称"
+            placeholder="流程名称"
+            style={{ width: 160 }}
+            onChange={(event) => { setPage(1); setFlowFilter(event.target.value); }}
+          />
+          <span>来源</span>
+          <Select
+            value={sourceFilter}
+            aria-label="运行来源"
+            style={{ width: 110 }}
+            onChange={(value) => { setPage(1); setSourceFilter(value); }}
+            options={[
+              { value: "all", label: "全部" },
+              { value: "manual", label: "手动" },
+              { value: "schedule", label: "计划任务" },
+              { value: "webhook", label: "Webhook" },
+            ]}
+          />
+          <span>开始</span>
+          <Input type="date" aria-label="开始日期" value={fromFilter} onChange={(event) => { setPage(1); setFromFilter(event.target.value); }} />
+          <span>结束</span>
+          <Input type="date" aria-label="结束日期" value={toFilter} onChange={(event) => { setPage(1); setToFilter(event.target.value); }} />
         </Space>
         <span className="live-note">
           <i /> 实时更新已开启
@@ -278,8 +335,14 @@ export function RunsPage({ project }: { project: Project }) {
         <Table
           rowKey="id"
           columns={columns}
-          dataSource={filtered}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
+          dataSource={dataSource}
+          pagination={{
+            current: page,
+            pageSize: 8,
+            total: platformTotal + workerRuns.length,
+            showSizeChanger: false,
+            onChange: (nextPage) => setPage(nextPage),
+          }}
           scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty description="尚无真实运行任务" /> }}
         />

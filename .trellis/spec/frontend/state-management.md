@@ -80,6 +80,9 @@ The run center loads Platform history on first `/runs` entry and merges it into
 history refreshes on a slower interval so scheduled/Webhook runs still appear
 without manual refresh.
 
+Run and delivery list pagination/filter state is reflected in URL search
+parameters, so a page reload restores the same server-side page and filters.
+
 Do not let a page overwrite remote workspace data directly or bypass optimistic
 version handling. `tests/platform-sync.spec.ts` covers hydration, local-cache
 loss, versioned writes, and retry behavior; `tests/templates-and-conflicts.spec.ts`
