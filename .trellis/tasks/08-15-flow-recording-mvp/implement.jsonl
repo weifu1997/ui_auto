@@ -1,3 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"FastAPI、SQLite、Playwright 和后端测试的项目约定"}
-{"file":".trellis/spec/frontend/index.md","reason":"React、Ant Design、Zustand、API 类型和前端测试约定"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"录制事件跨浏览器、服务端、API、store 和 revision 的契约检查"}

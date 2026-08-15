@@ -1,3 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"复核 migration、事务、权限、运行恢复和后端测试"}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"复核构建、lint、单测、E2E 和运行中心回归门禁"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核 batch DTO、状态聚合、分页和子运行关联的一致性"}

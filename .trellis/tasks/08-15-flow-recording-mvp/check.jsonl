@@ -1,3 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"复核录制认证、敏感数据、Playwright 生命周期和后端测试"}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"复核构建、lint、单测、E2E 和前端回归门禁"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核事件 DTO、seq、元素导入和持久化边界的一致性"}
