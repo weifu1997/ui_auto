@@ -899,3 +899,52 @@ def test_platform_route_contracts(tmp_path):
         assert json.loads(repeat_import_response.body)["imported"] is False
     finally:
         services.close()
+
+
+def test_platform_login_rate_limits_per_ip(tmp_path):
+    services = PlatformServices(str(tmp_path))
+    try:
+        router = create_platform_router(services)
+        login_route = next(
+            route
+            for route in router.routes
+            if getattr(route, "path", None) == "/api/auth/login"
+        )
+
+        async def call_login(host: str = "127.0.0.1"):
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/auth/login",
+                "raw_path": b"/api/auth/login",
+                "query_string": b"",
+                "headers": [],
+                "client": (host, 1234),
+                "server": ("127.0.0.1", 8787),
+            }
+
+            async def receive():
+                return {
+                    "type": "http.request",
+                    "body": b'{"email":"nobody@example.test","password":"bad"}',
+                    "more_body": False,
+                }
+
+            return await login_route.endpoint(
+                Request(scope, receive=receive)
+            )
+
+        def login_status(host: str = "127.0.0.1"):
+            try:
+                return asyncio.run(call_login(host)).status_code
+            except PlatformError as error:
+                return error.status
+
+        assert [login_status() for _ in range(10)] == [401] * 10
+        assert login_status() == 429
+        assert login_status("10.0.0.2") == 401
+    finally:
+        services.close()

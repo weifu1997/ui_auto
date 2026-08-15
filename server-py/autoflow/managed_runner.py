@@ -92,6 +92,18 @@ class ManagedRunner:
                 return True
         return False
 
+    def position(self, item_id: str) -> int | None:
+        with self._condition:
+            for index, item in enumerate(self._items):
+                if item["id"] == item_id:
+                    return index + 1
+        return None
+
+    @property
+    def is_busy(self) -> bool:
+        with self._condition:
+            return self._active is not None
+
     def stop(self) -> None:
         with self._condition:
             self._stopped = True

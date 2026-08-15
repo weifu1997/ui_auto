@@ -49,6 +49,31 @@ def _redact_request(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _redact_task_text(task: dict[str, Any], value: str) -> str:
+    request = task.get("executionRequest") or task.get("request") or {}
+    secret_keys = request.get("secretKeys") or []
+    variables = request.get("variables") or {}
+    if not isinstance(secret_keys, list):
+        secret_keys = []
+    if not isinstance(variables, dict):
+        variables = {}
+    redacted = value
+    for key, secret in variables.items():
+        if key in secret_keys and isinstance(secret, str) and secret:
+            redacted = redacted.replace(secret, "***")
+    return redacted
+
+
+def _redact_task_data(task: dict[str, Any], value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_task_text(task, value)
+    if isinstance(value, list):
+        return [_redact_task_data(task, item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_task_data(task, item) for key, item in value.items()}
+    return value
+
+
 def _format_sse(event: dict[str, Any]) -> str:
     return (
         f"id: {event['id']}\n"
@@ -320,7 +345,10 @@ class WorkerService:
                 task["status"],
                 task["createdAt"],
                 _json.dumps(task["artifactIds"], separators=(",", ":")),
-                _json.dumps(task["result"], separators=(",", ":"))
+                _json.dumps(
+                    _redact_task_data(task, task["result"]),
+                    separators=(",", ":"),
+                )
                 if task["result"] is not None
                 else None,
                 _json.dumps(task["request"], separators=(",", ":"))
@@ -340,11 +368,12 @@ class WorkerService:
         kind: str,
         data: dict[str, Any],
     ) -> dict[str, Any]:
+        redacted_data = _redact_task_data(task, data)
         event = {
             "id": task["nextEventId"],
             "kind": kind,
             "at": now(),
-            "data": data,
+            "data": redacted_data,
         }
         task["nextEventId"] += 1
         task["events"].append(event)
@@ -356,7 +385,13 @@ class WorkerService:
               task_id, event_id, kind, occurred_at, data
             ) VALUES (?, ?, ?, ?, ?)
             """,
-            (task["id"], event["id"], kind, event["at"], json(data)),
+            (
+                task["id"],
+                event["id"],
+                kind,
+                event["at"],
+                json(redacted_data),
+            ),
         )
         self._persist_task(task)
         with self._condition:
@@ -428,8 +463,16 @@ class WorkerService:
                 for artifact_id in task["artifactIds"]
                 if artifact_id in self.artifacts
             ],
-            "result": task.get("result"),
+            "result": (
+                _redact_task_data(task, task["result"])
+                if task.get("result") is not None
+                else None
+            ),
             "browserState": task["browserState"],
+            "queue": {
+                "position": self.managed_runner.position(task["id"]),
+                "active": self.managed_runner.is_busy,
+            },
             "events": task["events"],
         }
         if task.get("summary") is not None:
@@ -990,6 +1033,16 @@ def create_worker_router(worker: WorkerService) -> APIRouter:
             raise PlatformError(400, "FLOW_STEPS_REQUIRED")
         if not isinstance(body.get("elements"), list):
             raise PlatformError(400, "ELEMENTS_REQUIRED")
+        variables = (
+            body["variables"]
+            if isinstance(body.get("variables"), dict)
+            else {}
+        )
+        secret_keys = body.get("secretKeys") or []
+        if isinstance(secret_keys, list) and any(
+            not variables.get(key) for key in secret_keys if isinstance(key, str)
+        ):
+            raise PlatformError(409, "RUN_SECRETS_REQUIRED")
         task = worker.create_task(project_id, "run", body)
         worker.enqueue_run(task)
         return Response(
@@ -1034,9 +1087,10 @@ def create_worker_router(worker: WorkerService) -> APIRouter:
         methods=["POST"],
     )
     async def run_cancel(project_id: str, run_id: str) -> Response:
+        task = worker.task_by_id(project_id, run_id, "run")
         worker.cancel(run_id)
         return Response(
-            content=json({"runId": run_id, "canceled": True}),
+            content=json(worker.task_response(task)),
             status_code=202,
             media_type="application/json; charset=utf-8",
         )
