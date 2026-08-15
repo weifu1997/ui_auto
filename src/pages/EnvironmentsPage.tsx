@@ -89,6 +89,10 @@ export function EnvironmentsPage({ project }: { project: Project }) {
                 <dd>{environment.browser}</dd>
               </div>
               <div>
+                <dt>窗口模式</dt>
+                <dd>{environment.headless === false ? "有头（可见窗口）" : "无头（后台执行）"}</dd>
+              </div>
+              <div>
                 <dt>认证方式</dt>
                 <dd>{environment.auth}</dd>
               </div>
@@ -141,13 +145,16 @@ export function EnvironmentDrawer({
   useEffect(() => {
     if (open)
       form.setFieldsValue(
-        environment ?? {
-          browser: "Chromium",
-          auth: "无认证",
-          timeout: 30,
-          testIdAttribute: "data-testid",
-          keepBrowserOpenOnFailure: false,
-        },
+        environment
+          ? { ...environment, headless: environment.headless ?? true }
+          : {
+              browser: "Chromium",
+              auth: "无认证",
+              timeout: 30,
+              testIdAttribute: "data-testid",
+              keepBrowserOpenOnFailure: false,
+              headless: true,
+            },
       );
   }, [environment, form, open]);
   return (
@@ -173,6 +180,7 @@ export function EnvironmentDrawer({
                   timeout: values.timeout,
                   testIdAttribute: values.testIdAttribute || "data-testid",
                   keepBrowserOpenOnFailure: Boolean(values.keepBrowserOpenOnFailure),
+                  headless: values.headless !== false,
                   color: environment?.color ?? "teal",
                   updatedAt: "刚刚",
                 }),
@@ -212,6 +220,14 @@ export function EnvironmentDrawer({
             <Input type="number" />
           </Form.Item>
         </div>
+        <Form.Item name="headless" label="浏览器模式" tooltip="无头在后台执行不弹窗，适合定时与批量运行；有头会弹出可见浏览器窗口，便于观察步骤执行。">
+          <Select
+            options={[
+              { value: true, label: "无头（后台执行，不弹窗）" },
+              { value: false, label: "有头（显示浏览器窗口）" },
+            ]}
+          />
+        </Form.Item>
         <Form.Item name="auth" label="认证配置">
           <Select
             options={["无认证", "账号密码", "Cookie", "HTTP Basic"].map(

@@ -2,9 +2,9 @@
   <id>AutoFlow</id>
   <name>AutoFlow Workbench</name>
   <description>AutoFlow internal web automation platform and ManagedRunner</description>
-  <executable>%BASE%\runtime\node.exe</executable>
-  <arguments>%BASE%\app\node_modules\tsx\dist\cli.mjs %BASE%\app\server\index.ts</arguments>
-  <workingdirectory>%BASE%\app</workingdirectory>
+  <executable>%BASE%\app\venv\Scripts\python.exe</executable>
+  <arguments>-m autoflow.main</arguments>
+  <workingdirectory>%BASE%\app\server-py</workingdirectory>
   <env name="NODE_ENV" value="production" />
   <env name="AUTOFLOW_LISTEN_HOST" value="0.0.0.0" />
   <env name="WORKER_DATA_DIRECTORY" value="%BASE%\data" />

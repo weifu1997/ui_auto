@@ -7,7 +7,7 @@ import { platformProjectContext } from "../platform-context";
 import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
-import { Alert, Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
+import { Alert, Button, Checkbox, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useRef, useState } from "react";
 
@@ -64,7 +64,7 @@ export function ElementsPage({ project }: { project: Project }) {
     setValidating(target);
     try {
       const platformContext = platformProjectContext(project.id);
-      if (platformContext) {
+      if (platformContext && !target.requiresLogin) {
         const created = await createPlatformElementValidation(
           platformContext.session.token,
           platformContext.projectId,
@@ -129,6 +129,11 @@ export function ElementsPage({ project }: { project: Project }) {
             reason: typeof event.data.reason === "string" ? event.data.reason : undefined,
             source: "worker",
           });
+          if (event.data.error === "LOGIN_SESSION_REQUIRED") {
+            message.warning("请先创建并登录本地调试会话，再验证需要登录态的元素");
+          } else if (event.data.error === "LOGIN_SESSION_INVALID") {
+            message.error("本地调试会话登录态已失效，请重新登录后再验证");
+          }
           unsubscribe();
         },
         () => {
@@ -435,6 +440,7 @@ export function ElementDrawer({
                   method: values.method,
                   value: values.value,
                   environment: values.environment,
+                  requiresLogin: Boolean(values.requiresLogin),
                   validation: element?.validation ?? "unverified",
                   updatedAt: "刚刚",
                 }),
@@ -499,6 +505,9 @@ export function ElementDrawer({
             />
           </Form.Item>
         </div>
+        <Form.Item name="requiresLogin" valuePropName="checked">
+          <Checkbox>验证时需要登录态（复用本地调试会话）</Checkbox>
+        </Form.Item>
         <Form.Item
           name="value"
           label="定位值"

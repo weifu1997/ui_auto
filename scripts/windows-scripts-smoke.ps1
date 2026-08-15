@@ -1,7 +1,7 @@
-param([string]$NodeExe = "")
+param([string]$NodeExe = "", [string]$PythonExe = "")
 $ErrorActionPreference = "Stop"
 
-$scriptRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+$scriptRoot = (Resolve-Path -LiteralPath $PSScriptRoot).ProviderPath
 $errors = @()
 foreach ($script in Get-ChildItem -LiteralPath $scriptRoot -Filter "*.ps1" -File) {
   $tokens = $null
@@ -15,6 +15,7 @@ $renderedService = $serviceTemplate.Replace("__PLATFORM_SECRET_KEY__", [Security
 try { [xml]$renderedService | Out-Null } catch { throw "Rendered WinSW service configuration is invalid: $($_.Exception.Message)" }
 
 $node = if ($NodeExe) { (Resolve-Path -LiteralPath $NodeExe).Path } else { (Get-Command node -ErrorAction Stop).Source }
+$python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { (Get-Command python -ErrorAction Stop).Source }
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $smokeRoot = Join-Path $tempBase ("autoflow-windows-smoke-" + [guid]::NewGuid().ToString("N"))
 $restoreRoot = "$smokeRoot-restored"
@@ -26,12 +27,12 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Unable to create smoke databases" }
   Set-Content -LiteralPath (Join-Path $smokeRoot "artifacts\smoke.txt") -Value "artifact" -Encoding ASCII
   $backupPath = Join-Path $smokeRoot "backups\smoke"
-  & (Join-Path $scriptRoot "backup.ps1") -Root $smokeRoot -Destination $backupPath -NodeExe $node | Out-Null
+  & (Join-Path $scriptRoot "backup.ps1") -Root $smokeRoot -Destination $backupPath -PythonExe $python | Out-Null
   & (Join-Path $scriptRoot "restore.ps1") -Backup $backupPath -Root $restoreRoot
   foreach ($required in @("data\platform.sqlite", "data\autoflow.sqlite", "artifacts\smoke.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $restoreRoot $required))) { throw "Restore smoke missing $required" }
   }
-  & $node (Join-Path $scriptRoot "sqlite-backup.mjs") (Join-Path $restoreRoot "data\platform.sqlite") (Join-Path $restoreRoot "data\verified.sqlite")
+  & $python (Join-Path $scriptRoot "sqlite-backup.py") (Join-Path $restoreRoot "data\platform.sqlite") (Join-Path $restoreRoot "data\verified.sqlite")
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $restoreRoot "data\verified.sqlite"))) { throw "Restored SQLite verification failed" }
   & (Join-Path $scriptRoot "retention.ps1") -Root $restoreRoot -ArtifactDays 30 -MinimumFreeGB 0
   Write-Output "Windows deployment script smoke test passed"

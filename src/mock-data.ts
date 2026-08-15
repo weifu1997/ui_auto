@@ -25,6 +25,7 @@ export type ElementAsset = {
   method: string;
   value: string;
   environment: string;
+  requiresLogin?: boolean;
   validation: "valid" | "multiple" | "unverified";
   updatedAt: string;
 };
@@ -49,6 +50,8 @@ export type Environment = {
   timeout: number;
   testIdAttribute?: string;
   keepBrowserOpenOnFailure?: boolean;
+  /** 无头（后台执行，不弹窗）为默认；设为 false 时运行使用有头可见窗口。 */
+  headless?: boolean;
   color: string;
   updatedAt: string;
 };
