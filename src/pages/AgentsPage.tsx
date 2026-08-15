@@ -5,6 +5,7 @@ import type { PlatformRevision, PlatformSession } from "../platform-api";
 import { disconnectPlatformProject as clearPlatformProjectMap, notifyPlatformContextChanged, platformSessionStorageKey, readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformDocumentVersion, storePlatformProjectMap, storePlatformWorkspaceId } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
+import { removeProjectDraft } from "../sync-outbox";
 import { PageHeading, emptyEnvironments, emptyFlows, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, variableReference } from "./shared";
 import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
@@ -139,6 +140,7 @@ export function AgentsPage({ project }: { project: Project }) {
   const stopSync = () => {
     clearPlatformProjectMap(project.id, workspaceId);
     disconnectPlatformProject(project.id);
+    removeProjectDraft(workspaceId, project.id);
     setProjectMap((current) => {
       const { [project.id]: _removed, ...remaining } = current;
       return remaining;
@@ -247,8 +249,13 @@ export function AgentsPage({ project }: { project: Project }) {
         </Space>
       </div>
       <Space>
-        <Tag color={syncStatus === "synced" ? "success" : syncStatus === "failed" ? "error" : "processing"}>
-          {syncStatus === "synced" ? "已同步" : syncStatus === "retrying" ? "待重试" : syncStatus === "failed" ? "同步失败" : "同步中"}
+        <Tag color={syncStatus === "synced" ? "success" : syncStatus === "conflict" || syncStatus === "failed" ? "error" : syncStatus === "queued" || syncStatus === "retrying" ? "warning" : "processing"}>
+          {syncStatus === "synced" ? "已同步"
+            : syncStatus === "queued" ? "等待同步"
+            : syncStatus === "retrying" ? "重试中"
+            : syncStatus === "conflict" ? "冲突"
+            : syncStatus === "failed" ? "同步失败"
+            : "同步中"}
         </Tag>
         <Button danger onClick={stopSync}>停止同步</Button>
       </Space>

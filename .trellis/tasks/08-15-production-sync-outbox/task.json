@@ -3,7 +3,7 @@
   "name": "production-sync-outbox",
   "title": "生产同步持久化与自动重试",
   "description": "R1.1 持久同步 outbox、防抖同步、指数退避与状态；R1.2 覆盖 production/auth-required 真实同步器场景",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -49,6 +49,9 @@ Persistence is intentional, not the default:
 - `workspace-store.ts` persists project documents under
   `autoflow-workspace-projects` and contains migrations for retired demo data
   and project modes.
+- `sync-outbox.ts` persists recoverable server-workspace drafts under
+  `autoflow-sync-outbox-v1`; secret variable values are always blanked before
+  storage.
 - `run-store.ts` persists run summaries but its `partialize` removes the
   original `request`, preventing run inputs and transient data from being
   stored.
@@ -67,8 +70,10 @@ API modules return typed promises but do not own UI state. Pages generally load
 remote records into local state and show explicit loading/error feedback.
 Server-backed workspace documents are different: the synchronizers hydrate the
 Zustand workspace, track document versions, debounce writes, retry transient
-failures, and surface conflicts. See `src/ServerWorkspaceSynchronizer.tsx` and
-the compatibility synchronizer in `src/App.tsx`.
+failures, and surface conflicts. `ServerWorkspaceSynchronizer` restores the
+persistent outbox draft before hydration so a refresh cannot overwrite
+unsaved local edits. See `src/ServerWorkspaceSynchronizer.tsx` and the
+compatibility synchronizer in `src/App.tsx`.
 
 Do not let a page overwrite remote workspace data directly or bypass optimistic
 version handling. `tests/platform-sync.spec.ts` covers hydration, local-cache

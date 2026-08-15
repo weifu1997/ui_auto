@@ -17,7 +17,13 @@ export type PlatformWorkspaceProject = {
 };
 
 export type ProjectMode = "local" | "platform-enabled";
-export type PlatformSyncStatus = "synced" | "syncing" | "retrying" | "failed";
+export type PlatformSyncStatus =
+  | "queued"
+  | "syncing"
+  | "retrying"
+  | "conflict"
+  | "synced"
+  | "failed";
 
 type WorkspaceStore = {
   projects: Project[];

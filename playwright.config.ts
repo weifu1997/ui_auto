@@ -18,7 +18,21 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:4174",
     trace: "on-first-retry",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: ["tests/production-sync.spec.ts"],
+    },
+    {
+      name: "production-auth",
+      use: {
+        baseURL: "http://127.0.0.1:4175",
+        ...devices["Desktop Chrome"],
+      },
+      testMatch: ["tests/production-sync.spec.ts"],
+    },
+  ],
   webServer: [
     {
       command: "npm run server:py",
@@ -29,6 +43,11 @@ export default defineConfig({
     {
       command: "npm run dev -- --host 127.0.0.1 --port 4174",
       url: "http://127.0.0.1:4174",
+      reuseExistingServer: true,
+    },
+    {
+      command: "node scripts/dev-auth.mjs --port 4175",
+      url: "http://127.0.0.1:4175",
       reuseExistingServer: true,
     },
   ],
