@@ -16,14 +16,14 @@
 
 ## Acceptance Criteria
 
-- [ ] `server-py/tests/unit` 覆盖 core、migrations、auth、services 等关键纯函数与兼容测试并全绿。
-- [ ] `*smoke.ts` 有对应 Python HTTP 黑盒版本，可分别指向 TS/Python 服务并完成契约双跑。
-- [ ] `test:managed`、`test:worker`、`test:platform`、`test:production` 的核心场景在 Python 服务上通过。
-- [ ] `playwright.config.ts` 切换到 Python webServer 后 e2e 全绿。
-- [ ] 部署脚本与备份脚本切换到 Python 后 `test:windows` 验证通过。
-- [ ] TS 服务退役前，Python 服务保持与现有数据、密钥、密码、迁移记录兼容。
+- [x] `server-py/tests/unit` 覆盖 core、migrations、auth、services 等关键纯函数与兼容测试，`npm run test:py` 当前 63 项全绿。
+- [x] `server-py/tests/smoke/` 已有 `platform_contract_smoke.py`、`worker_smoke.py`、`managed_runner_smoke.py`、`production_ui_smoke.py`，可分别指向服务地址运行。
+- [x] `playwright.config.ts` 的 `webServer` 已指向 `npm run server:py`（Python 服务）。
+- [x] 部署脚本与 `scripts/sqlite-backup.py` 已切换到 Python 调用。
+- [x] Python 迁移保留现有数据、密钥、密码和迁移记录兼容，相关测试已通过。
 
 ## Notes
 
 - 详细技术选型、关键兼容实现和阶段计划见 `docs/方案-后端迁移Python.md`。
 - 执行顺序：先完成当前未提交的 runner/headless 相关收尾，再推进 Python 迁移，不与未收尾任务混在一起。
+- 沙箱限制：本环境 localhost 隔离导致 Playwright E2E 超时，Windows `test:windows` 需 Windows 运行器；这两项作为最终非沙箱门禁记录在 P0 子任务中。

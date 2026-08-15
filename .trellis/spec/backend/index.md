@@ -1,12 +1,14 @@
 # Backend (Platform) Development Guidelines
 
-Server-side conventions and executable contracts for the Platform API layer under `server/`.
+Server-side conventions and executable contracts for the Platform API layer under `server-py/`.
 
 ## Runtime and Tooling
 
-- Node `node:sqlite` database (`server/.data/platform.sqlite` by default), WAL mode, FK constraints ON after migrations.
-- Route handler: `server/platform-handler.ts` (auth/workspace/project/automation endpoints) + `server/platform.ts` (services, notifications, analytics, audit writer).
-- Tests: `server/platform.test.ts` (unit, `@vitest-environment node`), `server/platform-contract-smoke.ts` (full E2E contract smoke via `npm run test:platform`).
+- Python 3.12+, FastAPI, uvicorn, sqlite3, playwright sync API, cryptography, openpyxl, pytest.
+- SQLite database (`server/.data/platform.sqlite` by default), WAL mode, FK constraints ON after migrations.
+- Route handler: `server-py/autoflow/handler.py` (auth/workspace/project/automation endpoints) + `server-py/autoflow/services.py` (services, notifications, analytics, audit writer); application root is `server-py/autoflow/main.py`.
+- Tests: `server-py/tests/unit` with `npm run test:py`, Python smoke scripts under `server-py/tests/smoke/`.
+- Environment setup and startup: `npm run setup:py`, `npm run server:py`, `npm run test:py`.
 
 ## Guidelines Index
 

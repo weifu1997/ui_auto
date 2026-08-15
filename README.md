@@ -8,7 +8,10 @@
 
 ```bash
 npm install
+npm run setup:py
 ```
+
+首次运行需要 Python 3.12+。Debian/Ubuntu 系统若提示 `ensurepip` 不可用，请先安装系统包 `python3.12-venv`（或发行版对应的 `python3-venv`）后重跑 `npm run setup:py`。
 
 在两个终端分别启动后端和前端：
 
@@ -24,14 +27,7 @@ npm run dev -- --host 127.0.0.1 --port 4173
 
 只启动前端时，界面会保留本地演示数据和元素验证降级，便于浏览完整工作流。
 
-Python 后端也可以直接启动：
-
-```bash
-python -m pip install -r server-py/requirements.txt
-python -m uvicorn autoflow.main:app --app-dir server-py --host 127.0.0.1 --port 8787
-```
-
-对应 npm 脚本：
+`npm run setup:py` 会在 `server-py/.venv` 创建项目 Python 环境并安装依赖与 Playwright Chromium。`server:py`、`test:py` 和 Playwright `webServer` 统一使用该环境；如需指定解释器，可设置 `AUTOFLOW_PYTHON` 覆盖。
 
 ```bash
 npm run server:py

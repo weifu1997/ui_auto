@@ -21,6 +21,8 @@ server/.platform-artifacts
 server/.artifacts
 server/.data
 server/.tmp-platform-debug
+server-py/server/.artifacts
+server-py/server/.data
 test-results
 playwright-report
 blob-report

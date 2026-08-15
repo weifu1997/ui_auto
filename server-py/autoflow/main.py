@@ -18,6 +18,8 @@ from .http import PlatformError
 from .services import PlatformServices
 from .worker import WorkerService, create_worker_router
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _configured_origins() -> list[str]:
     return [
@@ -102,15 +104,21 @@ class CorsMiddleware:
 
 def create_app(services: PlatformServices | None = None) -> FastAPI:
     if services is None:
-        data_directory = os.environ.get("WORKER_DATA_DIRECTORY", "server/.data")
+        data_directory = os.environ.get(
+            "WORKER_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
+        )
         services = PlatformServices(data_directory)
     app = FastAPI(title="AutoFlow Workbench Python Backend", docs_url=None, redoc_url=None)
     app.state.services = services
     app.add_middleware(CorsMiddleware, allowed_origins=_configured_origins())
     app.include_router(create_platform_router(services))
     worker = WorkerService(
-        os.environ.get("WORKER_DATA_DIRECTORY", "server/.data"),
-        os.environ.get("WORKER_ARTIFACT_DIRECTORY", "server/.artifacts"),
+        os.environ.get(
+            "WORKER_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
+        ),
+        os.environ.get(
+            "WORKER_ARTIFACT_DIRECTORY", str(REPO_ROOT / "server" / ".artifacts")
+        ),
     )
     app.state.worker = worker
     app.include_router(create_worker_router(worker))
