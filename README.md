@@ -10,7 +10,7 @@
 npm install
 ```
 
-在两个终端分别启动 Worker 和前端：
+在两个终端分别启动后端和前端：
 
 ```bash
 npm run server:py
@@ -95,7 +95,7 @@ The **Data Sets** page imports and previews frozen versions. The **Continuous Re
 - Workspace owners and administrators manage members. Viewers are read-only; editors can create draft assets; publication, secret rotation, schedules, Webhooks, and notification subscriptions require an owner or administrator.
 - Every member change and publish/rollback action is audited. The project release-audit view shows the published revision history without exposing secret values.
 
-`test:e2e` 会启动独立的 Vite 和 Worker 实例，覆盖项目隔离、元素验证、流程拖拽，以及浏览器中真实的“创建运行 -> SSE 日志 -> Trace 产物”链路。`test:worker` 会直接运行 Chromium，并验证任务执行和产物项目隔离。
+`test:e2e` 会启动独立的 Vite 和 Python 后端实例，覆盖项目隔离、元素验证、流程拖拽，以及浏览器中真实的“创建运行 -> SSE 日志 -> Trace 产物”链路。
 
 ## 当前能力
 
