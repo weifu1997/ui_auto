@@ -122,3 +122,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: P1 生产同步持久 outbox 与自动重试
+
+**Date**: 2026-08-15
+**Task**: P1 生产同步持久 outbox 与自动重试
+**Branch**: `master`
+
+### Summary
+
+新增 autoflow-sync-outbox-v1 持久草稿、刷新回灌、指数退避重试、409 刷新/重提，并加入 production-auth E2E。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ec311ab` | (see git log) |
+
+### Status
+
+[OK] **Completed**
