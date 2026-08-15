@@ -8,6 +8,7 @@ Server-side conventions and executable contracts for the Platform API layer unde
 - SQLite database (`server/.data/platform.sqlite` by default), WAL mode, FK constraints ON after migrations.
 - Route handler: `server-py/autoflow/handler.py` (auth/workspace/project/automation endpoints) + `server-py/autoflow/services.py` (services, notifications, analytics, audit writer); application root is `server-py/autoflow/main.py`.
 - Revision checksum uses canonical execution snapshots from `server-py/autoflow/revision_snapshot.py`; display/transient fields such as `updatedAt`, `validation`, and step `status` do not create new revisions.
+- Automation routes support schedule/webhook/channel updates, webhook secret rotation, and channel test delivery without exposing stored secrets.
 - Tests: `server-py/tests/unit` with `npm run test:py`, Python smoke scripts under `server-py/tests/smoke/`.
 - Environment setup and startup: `npm run setup:py`, `npm run server:py`, `npm run test:py`.
 

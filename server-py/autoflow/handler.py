@@ -1817,7 +1817,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
 
     @router.api_route(
         "/api/platform/projects/{project_id}/schedules/{schedule_id}",
-        methods=["DELETE"],
+        methods=["PUT", "DELETE"],
     )
     async def schedule_detail(
         request: Request, project_id: str, schedule_id: str
@@ -1827,6 +1827,79 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             project_id, user.id, "automation.manage"
         )
         project = result["project"]
+        if request.method == "PUT":
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+            name = _text(body.get("name")).strip()[:160]
+            cron = _text(body.get("cron")).strip()
+            timezone = _text(body.get("timezone")).strip() or "Asia/Shanghai"
+            environment_id = _text(body.get("environmentId")).strip()
+            if not name or not cron or not environment_id:
+                raise PlatformError(400, "SCHEDULE_INPUT_INVALID")
+            revision = services.published_revision_for(
+                project_id, _text(body.get("revisionId")).strip() or None
+            )
+            services.require_revision_environment(revision, environment_id)
+            dataset_version_id = (
+                _text(body.get("datasetVersionId")).strip() or None
+            )
+            if dataset_version_id:
+                services.dataset_version_for(project_id, dataset_version_id)
+            next_run_at = next_cron_time(cron, timezone)
+            cursor = services.database.execute(
+                """
+                UPDATE schedules
+                SET revision_id = ?, environment_id = ?,
+                    dataset_version_id = ?, name = ?, cron_expression = ?,
+                    timezone = ?, next_run_at = ?, updated_at = ?
+                WHERE id = ? AND project_id = ? AND archived_at IS NULL
+                """,
+                (
+                    revision["id"],
+                    environment_id,
+                    dataset_version_id,
+                    name,
+                    cron,
+                    timezone,
+                    next_run_at,
+                    now(),
+                    schedule_id,
+                    project_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise PlatformError(404, "SCHEDULE_NOT_FOUND")
+            services.audit(
+                project["workspace_id"],
+                {"type": "user", "id": user.id},
+                "schedule.updated",
+                {"type": "schedule", "id": schedule_id},
+                {
+                    "revisionId": revision["id"],
+                    "environmentId": environment_id,
+                    "datasetVersionId": dataset_version_id,
+                    "cron": cron,
+                    "timezone": timezone,
+                },
+                project_id,
+            )
+            return _send(
+                Response(),
+                200,
+                {
+                    "schedule": {
+                        "id": schedule_id,
+                        "name": name,
+                        "revisionId": revision["id"],
+                        "environmentId": environment_id,
+                        "datasetVersionId": dataset_version_id,
+                        "cron": cron,
+                        "timezone": timezone,
+                        "nextRunAt": next_run_at,
+                    }
+                },
+            )
         cursor = services.database.execute(
             """
             UPDATE schedules SET archived_at = ?, enabled = 0, updated_at = ?
@@ -2033,7 +2106,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
 
     @router.api_route(
         "/api/platform/projects/{project_id}/webhook-triggers/{trigger_id}",
-        methods=["DELETE"],
+        methods=["PUT", "DELETE"],
     )
     async def webhook_trigger_detail(
         request: Request, project_id: str, trigger_id: str
@@ -2043,6 +2116,66 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             project_id, user.id, "automation.manage"
         )
         project = result["project"]
+        if request.method == "PUT":
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+            name = _text(body.get("name")).strip()[:160]
+            environment_id = _text(body.get("environmentId")).strip()
+            if not name or not environment_id:
+                raise PlatformError(400, "WEBHOOK_TRIGGER_INPUT_INVALID")
+            revision = services.published_revision_for(
+                project_id, _text(body.get("revisionId")).strip() or None
+            )
+            services.require_revision_environment(revision, environment_id)
+            dataset_version_id = (
+                _text(body.get("datasetVersionId")).strip() or None
+            )
+            if dataset_version_id:
+                services.dataset_version_for(project_id, dataset_version_id)
+            cursor = services.database.execute(
+                """
+                UPDATE webhook_triggers
+                SET revision_id = ?, environment_id = ?,
+                    dataset_version_id = ?, name = ?
+                WHERE id = ? AND project_id = ? AND archived_at IS NULL
+                """,
+                (
+                    revision["id"],
+                    environment_id,
+                    dataset_version_id,
+                    name,
+                    trigger_id,
+                    project_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise PlatformError(404, "WEBHOOK_TRIGGER_NOT_FOUND")
+            services.audit(
+                project["workspace_id"],
+                {"type": "user", "id": user.id},
+                "webhook_trigger.updated",
+                {"type": "webhook_trigger", "id": trigger_id},
+                {
+                    "revisionId": revision["id"],
+                    "environmentId": environment_id,
+                    "datasetVersionId": dataset_version_id,
+                },
+                project_id,
+            )
+            return _send(
+                Response(),
+                200,
+                {
+                    "trigger": {
+                        "id": trigger_id,
+                        "name": name,
+                        "revisionId": revision["id"],
+                        "environmentId": environment_id,
+                        "datasetVersionId": dataset_version_id,
+                    }
+                },
+            )
         cursor = services.database.execute(
             """
             UPDATE webhook_triggers SET archived_at = ?, enabled = 0
@@ -2062,6 +2195,61 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         )
         return _send(
             Response(), 200, {"triggerId": trigger_id, "archived": True}
+        )
+
+    @router.api_route(
+        (
+            "/api/platform/projects/{project_id}/webhook-triggers/"
+            "{trigger_id}/rotate-secret"
+        ),
+        methods=["POST"],
+    )
+    async def webhook_rotate_secret(
+        request: Request, project_id: str, trigger_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        result = services.require_project_capability(
+            project_id, user.id, "automation.manage"
+        )
+        project = result["project"]
+        existing = services.database.execute(
+            """
+            SELECT id FROM webhook_triggers
+            WHERE id = ? AND project_id = ? AND archived_at IS NULL
+            """,
+            (trigger_id, project_id),
+        ).fetchone()
+        if not existing:
+            raise PlatformError(404, "WEBHOOK_TRIGGER_NOT_FOUND")
+        signing_secret = f"whsec_{secrets.token_urlsafe(32)}"
+        encrypted = services.encrypt(signing_secret)
+        services.database.execute(
+            """
+            UPDATE webhook_triggers
+            SET signing_secret_iv = ?, signing_secret_tag = ?,
+                signing_secret_ciphertext = ?
+            WHERE id = ? AND project_id = ?
+            """,
+            (
+                encrypted["iv"],
+                encrypted["tag"],
+                encrypted["ciphertext"],
+                trigger_id,
+                project_id,
+            ),
+        )
+        services.audit(
+            project["workspace_id"],
+            {"type": "user", "id": user.id},
+            "webhook_trigger.secret_rotated",
+            {"type": "webhook_trigger", "id": trigger_id},
+            {},
+            project_id,
+        )
+        return _send(
+            Response(),
+            200,
+            {"triggerId": trigger_id, "signingSecret": signing_secret},
         )
 
     @router.api_route(
@@ -2343,7 +2531,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             "/api/platform/workspaces/{workspace_id}/notification-channels/"
             "{channel_id}"
         ),
-        methods=["DELETE"],
+        methods=["PUT", "DELETE"],
     )
     async def notification_channel_detail(
         request: Request, workspace_id: str, channel_id: str
@@ -2352,6 +2540,114 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         services.require_workspace_capability(
             workspace_id, user.id, "automation.manage"
         )
+        if request.method == "PUT":
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+            current = services.database.execute(
+                """
+                SELECT name, channel_type, config_iv, config_tag,
+                       config_ciphertext, enabled
+                FROM notification_channels
+                WHERE id = ? AND workspace_id = ? AND archived_at IS NULL
+                """,
+                (channel_id, workspace_id),
+            ).fetchone()
+            if not current:
+                raise PlatformError(404, "NOTIFICATION_CHANNEL_NOT_FOUND")
+            name = (
+                _text(body.get("name")).strip()[:160]
+                if body.get("name") is not None
+                else current[0]
+            )
+            channel_type = body.get("type", current[1])
+            enabled = (
+                current[5]
+                if body.get("enabled") is None
+                else 1 if body.get("enabled") else 0
+            )
+            allowed_types = {"webhook", "feishu", "dingtalk", "wecom", "email"}
+            if not name or channel_type not in allowed_types:
+                raise PlatformError(400, "NOTIFICATION_CHANNEL_INPUT_INVALID")
+            config = body.get("config")
+            new_config = None
+            if isinstance(config, dict):
+                url = config.get("url")
+                if isinstance(url, str) and url.strip():
+                    try:
+                        endpoint = services.notification_target(url)
+                    except Exception:
+                        raise PlatformError(400, "NOTIFICATION_URL_INVALID") from None
+                    keyword = config.get("keyword")
+                    keyword = (
+                        keyword.strip()[:200]
+                        if isinstance(keyword, str) and keyword.strip()
+                        else None
+                    )
+                    new_config = {
+                        "url": endpoint["url"],
+                        "headers": as_record(config.get("headers")),
+                        **({"keyword": keyword} if keyword else {}),
+                    }
+            if new_config is not None:
+                encrypted = services.encrypt(json(new_config))
+                cursor = services.database.execute(
+                    """
+                    UPDATE notification_channels
+                    SET name = ?, channel_type = ?, enabled = ?,
+                        config_iv = ?, config_tag = ?, config_ciphertext = ?,
+                        updated_at = ?
+                    WHERE id = ? AND workspace_id = ? AND archived_at IS NULL
+                    """,
+                    (
+                        name,
+                        channel_type,
+                        enabled,
+                        encrypted["iv"],
+                        encrypted["tag"],
+                        encrypted["ciphertext"],
+                        now(),
+                        channel_id,
+                        workspace_id,
+                    ),
+                )
+            else:
+                cursor = services.database.execute(
+                    """
+                    UPDATE notification_channels
+                    SET name = ?, channel_type = ?, enabled = ?, updated_at = ?
+                    WHERE id = ? AND workspace_id = ? AND archived_at IS NULL
+                    """,
+                    (
+                        name,
+                        channel_type,
+                        enabled,
+                        now(),
+                        channel_id,
+                        workspace_id,
+                    ),
+                )
+            if cursor.rowcount == 0:
+                raise PlatformError(404, "NOTIFICATION_CHANNEL_NOT_FOUND")
+            services.audit(
+                workspace_id,
+                {"type": "user", "id": user.id},
+                "notification_channel.updated",
+                {"type": "notification_channel", "id": channel_id},
+                {"name": name, "type": channel_type, "enabled": bool(enabled)},
+            )
+            return _send(
+                Response(),
+                200,
+                {
+                    "channel": {
+                        "id": channel_id,
+                        "name": name,
+                        "type": channel_type,
+                        "enabled": bool(enabled),
+                    }
+                },
+            )
         cursor = services.database.execute(
             """
             UPDATE notification_channels
@@ -2369,6 +2665,57 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             {"type": "notification_channel", "id": channel_id},
         )
         return _send(Response(), 200, {"channelId": channel_id, "archived": True})
+
+    @router.api_route(
+        (
+            "/api/platform/workspaces/{workspace_id}/notification-channels/"
+            "{channel_id}/test"
+        ),
+        methods=["POST"],
+    )
+    async def notification_channel_test(
+        request: Request, workspace_id: str, channel_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(
+            workspace_id, user.id, "automation.manage"
+        )
+        try:
+            result = services.send_test_notification(channel_id)
+        except Exception as exc:
+            error = (
+                "NOTIFICATION_TIMEOUT"
+                if isinstance(exc, TimeoutError)
+                else str(exc)[:200]
+            )
+            services.audit(
+                workspace_id,
+                {"type": "user", "id": user.id},
+                "notification_channel.test_sent",
+                {"type": "notification_channel", "id": channel_id},
+                {"status": None, "error": error},
+            )
+            return _send(
+                Response(),
+                200,
+                {"tested": True, "status": None, "error": error},
+            )
+        services.audit(
+            workspace_id,
+            {"type": "user", "id": user.id},
+            "notification_channel.test_sent",
+            {"type": "notification_channel", "id": channel_id},
+            {"status": result.get("status"), "error": result.get("error")},
+        )
+        return _send(
+            Response(),
+            200,
+            {
+                "tested": True,
+                "status": result.get("status"),
+                "error": result.get("error"),
+            },
+        )
 
     @router.api_route(
         "/api/platform/projects/{project_id}/notification-subscriptions",

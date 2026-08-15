@@ -19,10 +19,10 @@
 
 ## Acceptance Criteria
 
-- [ ] 已有计划任务/Webhook/通知通道可通过 UI 更新配置并持久化。
-- [ ] Webhook secret 可显式轮换，轮换后旧 secret 按现有安全规则处理。
-- [ ] 通知通道测试通知可投递并显示成功/失败结果。
-- [ ] 每次编辑产生审计记录，响应不泄露密钥明文。
+- [x] 已有计划任务/Webhook/通知通道可通过 UI 更新配置并持久化。
+- [x] Webhook secret 可显式轮换，新 secret 仅响应一次展示。
+- [x] 通知通道测试通知可投递并显示成功/失败结果。
+- [x] 每次编辑产生审计记录，响应与审计 detail 不泄露 URL/keyword/signing secret。
 
 ## Notes
 

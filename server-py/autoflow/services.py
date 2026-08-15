@@ -1046,6 +1046,58 @@ class PlatformServices:
                 delivery_project[0] if delivery_project else None,
             )
 
+    def send_test_notification(self, channel_id: str) -> dict[str, Any]:
+        from .http import PlatformError
+
+        row = self.database.execute(
+            """
+            SELECT id, channel_type, config_iv, config_tag, config_ciphertext
+            FROM notification_channels
+            WHERE id = ? AND archived_at IS NULL
+            """,
+            (channel_id,),
+        ).fetchone()
+        if not row:
+            raise PlatformError(404, "NOTIFICATION_CHANNEL_NOT_FOUND")
+        config = parse_json(
+            self.decrypt(
+                {
+                    "iv": row[2],
+                    "tag": row[3],
+                    "ciphertext": row[4],
+                }
+            ),
+            {},
+        )
+        endpoint = config.get("url") if isinstance(config, dict) else None
+        if not isinstance(endpoint, str):
+            raise PlatformError(400, "NOTIFICATION_CONFIG_INVALID")
+        target = self.notification_target(endpoint)
+        headers = as_record(config.get("headers"))
+        string_headers = {
+            str(key): str(value)
+            for key, value in headers.items()
+            if isinstance(value, str)
+        }
+        response = _post_notification(
+            target,
+            string_headers,
+            json(
+                {
+                    "type": "test",
+                    "message": "AutoFlow test notification",
+                    "timestamp": now(),
+                }
+            ),
+        )
+        status = response["status"]
+        error = None if 200 <= status < 300 else f"HTTP_{status}"
+        if error is None and response.get("body"):
+            body_code = notification_rejection_code(response["body"])
+            if body_code is not None:
+                error = f"NOTIFICATION_REJECTED_{body_code}"
+        return {"status": status, "error": error}
+
     def append_run_event(
         self, run_id: str, kind: str, data: dict[str, Any]
     ) -> None:

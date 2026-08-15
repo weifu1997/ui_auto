@@ -592,6 +592,14 @@ export function createPlatformSchedule(token: string, projectId: string, input: 
   );
 }
 
+export function updatePlatformSchedule(token: string, projectId: string, scheduleId: string, input: { name: string; revisionId: string; environmentId: string; datasetVersionId?: string; cron: string; timezone: string }) {
+  return request<{ schedule: PlatformSchedule }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/schedules/${encodeURIComponent(scheduleId)}`,
+    { method: "PUT", body: JSON.stringify(input) },
+    token,
+  );
+}
+
 export function scheduleAction(token: string, projectId: string, scheduleId: string, action: "enable" | "disable" | "run") {
   return request<{ enabled?: boolean; runIds?: string[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/schedules/${encodeURIComponent(scheduleId)}/${action}`,
@@ -612,6 +620,22 @@ export function createPlatformWebhookTrigger(token: string, projectId: string, i
   return request<{ trigger: PlatformWebhookTrigger; triggerUrl: string; signingSecret: string }>(
     `/platform/projects/${encodeURIComponent(projectId)}/webhook-triggers`,
     { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function updatePlatformWebhookTrigger(token: string, projectId: string, triggerId: string, input: { name: string; revisionId: string; environmentId: string; datasetVersionId?: string }) {
+  return request<{ trigger: PlatformWebhookTrigger }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/webhook-triggers/${encodeURIComponent(triggerId)}`,
+    { method: "PUT", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function rotatePlatformWebhookSecret(token: string, projectId: string, triggerId: string) {
+  return request<{ triggerId: string; signingSecret: string }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/webhook-triggers/${encodeURIComponent(triggerId)}/rotate-secret`,
+    { method: "POST" },
     token,
   );
 }
@@ -640,6 +664,29 @@ export function createPlatformNotificationChannel(token: string, workspaceId: st
   return request<{ channel: PlatformNotificationChannel }>(
     `/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels`,
     { method: "POST", body: JSON.stringify({ name: input.name, type: input.type, config: { url: input.url, ...(input.keyword?.trim() ? { keyword: input.keyword.trim() } : {}) } }) },
+    token,
+  );
+}
+
+export function updatePlatformNotificationChannel(token: string, workspaceId: string, channelId: string, input: { name: string; type: PlatformNotificationChannel["type"]; enabled: boolean; url?: string; keyword?: string }) {
+  return request<{ channel: PlatformNotificationChannel }>(
+    `/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels/${encodeURIComponent(channelId)}`,
+    { method: "PUT", body: JSON.stringify({
+      name: input.name,
+      type: input.type,
+      enabled: input.enabled,
+      config: input.url?.trim()
+        ? { url: input.url, ...(input.keyword?.trim() ? { keyword: input.keyword.trim() } : {}) }
+        : undefined,
+    }) },
+    token,
+  );
+}
+
+export function testPlatformNotificationChannel(token: string, workspaceId: string, channelId: string) {
+  return request<{ tested: true; status: number | null; error: string | null }>(
+    `/platform/workspaces/${encodeURIComponent(workspaceId)}/notification-channels/${encodeURIComponent(channelId)}/test`,
+    { method: "POST" },
     token,
   );
 }
