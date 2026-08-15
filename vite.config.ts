@@ -6,5 +6,21 @@ export default defineConfig({
   plugins: [react()],
   build: {
     sourcemap: false,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          minSize: 20 * 1024,
+          maxSize: 400 * 1024,
+          groups: [
+            {
+              name: "vendor",
+              test: /[\\/]node_modules[\\/]/,
+              minSize: 20 * 1024,
+              maxSize: 400 * 1024,
+            },
+          ],
+        },
+      },
+    },
   },
 });

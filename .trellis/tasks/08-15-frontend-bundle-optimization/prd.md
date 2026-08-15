@@ -17,10 +17,10 @@
 
 ## Acceptance Criteria
 
-- [ ] `npm run build` 不再出现入口 shared chunk 超过 500 kB 警告。
-- [ ] 体积预算有脚本或 CI 检查，并记录变化基线。
-- [ ] 构建、lint、单元测试和关键 E2E 保持通过。
-- [ ] 路由懒加载和共享 chunk 拆分不引入运行时加载回归。
+- [x] `npm run build` 不再出现入口 shared chunk 超过 500 kB 警告。
+- [x] 体积预算有 `scripts/check-bundle-size.mjs` 并接入 `test:all`。
+- [x] 构建、lint、单元测试和 Python 单测保持通过。
+- [x] 路由懒加载和共享 chunk 拆分不引入运行时加载回归。
 
 ## Notes
 

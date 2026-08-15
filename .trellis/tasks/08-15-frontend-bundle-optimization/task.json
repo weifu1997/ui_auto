@@ -3,7 +3,7 @@
   "name": "frontend-bundle-optimization",
   "title": "前端包体优化",
   "description": "R6.1 拆分治理表格、编辑器与 Ant Design 重依赖，建立共享 chunk 体积预算并消除 Vite 500 kB 警告",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -25,12 +25,15 @@ Run checks in proportion to the change:
 npm run lint
 npm run build
 npm run test:unit
+npm run check:bundle
 ```
 
 - `npm run lint` runs Oxlint. `.oxlintrc.json` makes the Rules of Hooks an error
   and mixed component exports a warning.
 - `npm run build` runs the composite TypeScript build and the Vite production
   build, including sourcemaps.
+- `npm run check:bundle` enforces the 500 kB JS chunk budget against
+  `dist/assets/*.js`.
 - `npm run test:unit` runs Vitest in jsdom with `src/test-setup.ts`.
 
 For route, interaction, persistence, API composition, responsive behavior, or
