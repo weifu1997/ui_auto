@@ -101,3 +101,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: P0 Python 迁移收尾与统一验证入口
+
+**Date**: 2026-08-15
+**Task**: P0 Python 迁移收尾与统一验证入口
+**Branch**: `master`
+
+### Summary
+
+新增统一 Python 解析/初始化/启动脚本，修正默认数据目录，更新 README 与后端 spec，回填并归档迁移任务，父任务进入 1/7。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a937e83` | (see git log) |
+
+### Status
+
+[OK] **Completed**
