@@ -21,7 +21,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
     {
-      command: "npm run server",
+      command: "npm run server:py",
       url: "http://127.0.0.1:8787/health",
       env: workerEnvironment,
       reuseExistingServer: false,

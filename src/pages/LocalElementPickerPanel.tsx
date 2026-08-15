@@ -107,7 +107,7 @@ export function LocalElementPickerPanel({
   }, [project.id, selectedSession, workerState]);
   useEffect(() => {
     void loadCaptures();
-    const interval = setInterval(() => void loadCaptures(), 3_000);
+    const interval = setInterval(() => void loadCaptures(), 1_000);
     return () => clearInterval(interval);
   }, [loadCaptures]);
 

@@ -13,7 +13,7 @@ npm install
 在两个终端分别启动 Worker 和前端：
 
 ```bash
-npm run server
+npm run server:py
 ```
 
 ```bash
@@ -24,6 +24,19 @@ npm run dev -- --host 127.0.0.1 --port 4173
 
 只启动前端时，界面会保留本地演示数据和元素验证降级，便于浏览完整工作流。
 
+Python 后端也可以直接启动：
+
+```bash
+python -m pip install -r server-py/requirements.txt
+python -m uvicorn autoflow.main:app --app-dir server-py --host 127.0.0.1 --port 8787
+```
+
+对应 npm 脚本：
+
+```bash
+npm run server:py
+```
+
 ## 验证
 
 ```bash
@@ -31,9 +44,7 @@ npm run build
 npm run lint
 npm run test:unit
 npm run test:e2e
-npm run test:worker
-npm run test:platform
-npm run test:production
+npm run test:py
 npm run test:windows
 ```
 
@@ -51,7 +62,7 @@ The first Platform milestone includes:
 Start the local platform service with the existing command:
 
 ```bash
-npm run server
+npm run server:py
 ```
 
 For an internal deployment that other machines access over the LAN, configure the listener, browser origins, and encryption key before starting it:
@@ -61,7 +72,7 @@ set AUTOFLOW_LISTEN_HOST=0.0.0.0
 set AUTOFLOW_CORS_ORIGINS=http://autoflow-console.example.internal:8787
 set PLATFORM_SECRET_KEY=replace-with-a-long-random-secret
 set NODE_ENV=production
-npm run server
+npm run server:py
 ```
 
 The legacy local Worker endpoints under `/api/projects/*` stay enabled only when the service listens on loopback. They are disabled by default for an internal listener; platform runs execute through `ManagedRunner` on the deployment machine. Set `AUTOFLOW_ENABLE_LEGACY_WORKER_API=1` only when that legacy executor is intentionally isolated and protected.

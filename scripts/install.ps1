@@ -2,6 +2,7 @@ param(
   [string]$Root = "D:\AutoFlow",
   [Parameter(Mandatory=$true)][string]$NodeExe,
   [Parameter(Mandatory=$true)][string]$WinSWExe,
+  [string]$PythonExe = "",
   [string]$PlatformSecretKey = "",
   [string]$NotificationHostAllowlist = "",
   [string]$CorsOrigins = ""
@@ -26,11 +27,17 @@ $config = (Get-Content -Raw -LiteralPath $serviceConfig).Replace("__PLATFORM_SEC
 Set-Content -LiteralPath $serviceConfig -Value $config -Encoding UTF8
 $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $appRoot = Join-Path $resolvedRoot "app"
+$python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { "python" }
 & robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "server\.data") (Join-Path $sourceRoot "server\.artifacts") (Join-Path $sourceRoot "server\.platform-artifacts") (Join-Path $sourceRoot "server\.tmp-platform-debug") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Application file copy failed with robocopy exit code $LASTEXITCODE" }
 $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $resolvedRoot "browsers"
 try { Push-Location $appRoot; npm ci; npm run build; npx playwright install chromium; Pop-Location }
 finally { $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath }
+& $python -m venv (Join-Path $appRoot "venv")
+& (Join-Path $appRoot "venv\Scripts\python.exe") -m pip install -r (Join-Path $appRoot "server-py\requirements.txt")
+Push-Location (Join-Path $appRoot "server-py")
+& (Join-Path $appRoot "venv\Scripts\python.exe") -m playwright install chromium
+Pop-Location
 & (Join-Path $resolvedRoot "AutoFlow.exe") install
 & (Join-Path $resolvedRoot "AutoFlow.exe") start

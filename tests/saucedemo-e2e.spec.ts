@@ -26,11 +26,12 @@ async function chooseOption(
 ) {
   await trigger.click();
   if (searchable) await trigger.getByRole("combobox").fill(value);
-  await page
+  const option = page
     .locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)")
     .last()
-    .locator(`.ant-select-item-option[title="${value}"]`)
-    .click();
+    .locator(`.ant-select-item-option[title="${value}"]`);
+  await expect(option).toBeVisible();
+  await option.click();
 }
 
 async function addStep(

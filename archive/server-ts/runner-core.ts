@@ -47,6 +47,16 @@ function targetUrl(baseUrl: string, value: string) {
   }
 }
 
+async function ensurePageOpened(page: Page, element: ElementAsset | undefined, input: RunnerInput) {
+  // 流程缺少「打开页面」步骤时，自动打开元素所在页面（优先元素记录的 path，兜底环境基础地址），
+  // 避免在空白页上盲目等待定位器而产生难定位的 locator timeout 报错。
+  if (page.url() !== "about:blank" || !element) return;
+  await page.goto(targetUrl(input.environment.baseUrl, element.path || "/"), {
+    waitUntil: "domcontentloaded",
+    timeout: Math.max(1, input.environment.timeout) * 1000,
+  });
+}
+
 function locatorFor(page: Page, element: ElementAsset, testIdAttribute = "data-testid"): Locator {
   const value = element.value;
   if (element.method === "testid") {
@@ -73,7 +83,7 @@ export async function executeElementValidation(input: ElementValidationInput, ho
   let context: BrowserContext | undefined;
   const started = Date.now();
   try {
-    browser = await chromium.launch({ headless: process.env.MANAGED_RUNNER_HEADLESS !== "0" });
+    browser = await chromium.launch({ headless: input.environment.headless ?? (process.env.MANAGED_RUNNER_HEADLESS !== "0") });
     context = await browser.newContext();
     hooks.browser?.(browser, context);
     const page = await context.newPage();
@@ -123,27 +133,44 @@ export async function captureOutput(page: Page, step: FlowStep, locator: Locator
   return locator ? await locator.textContent() ?? "" : "";
 }
 
-async function executeStep(page: Page, step: FlowStep, input: RunnerInput, outputs: Record<string, string>) {
+async function executeStep(page: Page, step: FlowStep, input: RunnerInput, outputs: Record<string, string>, hooks: RunnerHooks) {
   const value = interpolate(step.value, input, outputs);
   const element = step.element ? input.elements.find((item) => item.name === step.element || item.id === step.element) : undefined;
   const locator = element ? locatorFor(page, element, input.environment.testIdAttribute) : undefined;
   const timeout = Math.max(1, step.timeout) * 1000;
-  if (step.action === "打开页面") await page.goto(targetUrl(input.environment.baseUrl, value), { waitUntil: "domcontentloaded", timeout });
-  else if (step.action === "点击") await required(locator).click({ timeout });
-  else if (step.action === "填写") await required(locator).fill(value, { timeout });
-  else if (step.action === "清空填写") await required(locator).fill("", { timeout });
-  else if (step.action === "选择下拉项") await required(locator).selectOption(value, { timeout });
-  else if (step.action === "勾选") await required(locator).check({ timeout });
-  else if (step.action === "键盘按键") {
-    if (locator) await locator.press(value, { timeout });
-    else await page.keyboard.press(value);
+  if (step.action !== "打开页面") {
+    const before = page.url();
+    await ensurePageOpened(page, element, input);
+    if (page.url() !== before) {
+      hooks.event("step.autoOpened", { title: step.title, message: `自动打开页面：${page.url()}` });
+    }
   }
-  else if (step.action === "等待") await page.waitForTimeout(Number(value) || timeout);
-  else if (step.action === "可见性断言") await required(locator).waitFor({ state: "visible", timeout });
-  else if (step.action === "文本断言") {
-    const actual = await required(locator).textContent({ timeout });
-    if (!(actual ?? "").includes(value)) throw new Error(`TEXT_ASSERTION_FAILED: expected ${value}, received ${actual ?? ""}`);
-  } else if (step.action !== "截图") throw new Error(`UNSUPPORTED_ACTION: ${step.action}`);
+  try {
+    if (step.action === "打开页面") await page.goto(targetUrl(input.environment.baseUrl, value), { waitUntil: "domcontentloaded", timeout });
+    else if (step.action === "点击") await required(locator).click({ timeout });
+    else if (step.action === "填写") await required(locator).fill(value, { timeout });
+    else if (step.action === "清空填写") await required(locator).fill("", { timeout });
+    else if (step.action === "选择下拉项") await required(locator).selectOption(value, { timeout });
+    else if (step.action === "勾选") await required(locator).check({ timeout });
+    else if (step.action === "键盘按键") {
+      if (locator) await locator.press(value, { timeout });
+      else await page.keyboard.press(value);
+    }
+    else if (step.action === "等待") await page.waitForTimeout(Number(value) || timeout);
+    else if (step.action === "可见性断言") await required(locator).waitFor({ state: "visible", timeout });
+    else if (step.action === "文本断言") {
+      const actual = await required(locator).textContent({ timeout });
+      if (!(actual ?? "").includes(value)) throw new Error(`TEXT_ASSERTION_FAILED: expected ${value}, received ${actual ?? ""}`);
+    } else if (step.action !== "截图") throw new Error(`UNSUPPORTED_ACTION: ${step.action}`);
+  } catch (error) {
+    // Playwright 的 locator timeout 只报等待的定位器，不说明当前页面，用户难以判断是没打开页面还是定位器失效。
+    if (step.action !== "打开页面" && error instanceof Error && error.message.includes("Timeout")) {
+      throw new Error(
+        `步骤「${step.action}」超时（${timeout / 1000}s）。当前页面：${page.url()}。请确认流程已通过「打开页面」步骤打开目标页面，且元素定位与页面内容一致。原始错误：${error.message}`,
+      );
+    }
+    throw error;
+  }
   const output = await captureOutput(page, step, locator);
   if (step.output && output !== undefined) outputs[step.output] = output;
 }
@@ -169,7 +196,7 @@ export async function executeBrowserRun(input: RunnerInput, hooks: RunnerHooks) 
   let tracingStarted = false;
   const started = Date.now();
   try {
-    browser = await chromium.launch({ headless: process.env.MANAGED_RUNNER_HEADLESS !== "0" });
+    browser = await chromium.launch({ headless: input.environment.headless ?? (process.env.MANAGED_RUNNER_HEADLESS !== "0") });
     context = await browser.newContext();
     hooks.browser?.(browser, context);
     const page = await context.newPage();
@@ -192,7 +219,7 @@ export async function executeBrowserRun(input: RunnerInput, hooks: RunnerHooks) 
               await page.screenshot({ path, fullPage: true });
               hooks.artifact({ name: `${step.title}.png`, contentType: "image/png", path });
             }
-          } else await executeStep(page, step, input, outputs);
+          } else await executeStep(page, step, input, outputs, hooks);
           failure = undefined;
           break;
         } catch (error) {
