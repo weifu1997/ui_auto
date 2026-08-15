@@ -227,3 +227,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: P2 前端包体优化
+
+**Date**: 2026-08-15
+**Task**: P2 前端包体优化
+**Branch**: `master`
+
+### Summary
+
+使用 Rolldown codeSplitting 拆分 vendor chunk，新增 500kB 体积预算脚本并接入 test:all，构建不再出现大 chunk 警告。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3249922` | (see git log) |
+
+### Status
+
+[OK] **Completed**
