@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-08-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~166 | Active |
+| `journal-1.md` | ~187 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-08-15 | P1 运行中心自动加载平台历史 | `531cf03` | `master` |
 | 7 | 2026-08-15 | P1 规范化版本快照语义 | `400bac0` | `master` |
 | 6 | 2026-08-15 | P1 生产同步持久 outbox 与自动重试 | `ec311ab` | `master` |
 | 5 | 2026-08-15 | P0 Python 迁移收尾与统一验证入口 | `a937e83` | `master` |

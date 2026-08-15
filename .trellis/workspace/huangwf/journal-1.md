@@ -164,3 +164,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: P1 运行中心自动加载平台历史
+
+**Date**: 2026-08-15
+**Task**: P1 运行中心自动加载平台历史
+**Branch**: `master`
+
+### Summary
+
+移除 /platform 路径限制，运行中心首屏加载平台历史，按运行状态切换 3s/15s 轮询，并补充空缓存与计划/Webhook 自动出现测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `531cf03` | (see git log) |
+
+### Status
+
+[OK] **Completed**
