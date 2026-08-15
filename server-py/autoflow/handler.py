@@ -38,6 +38,8 @@ RESOURCE_CAPABILITIES = {
     "variables": "variable.manage",
     "environments": "environment.manage",
 }
+LOGIN_RATE_LIMIT_PER_MINUTE = 10
+LOGIN_RATE_WINDOW_MS = 60_000
 
 
 def _send(response: Response, status_code: int, body: Any) -> Response:
@@ -65,6 +67,7 @@ def _assert_snapshot_depth(value: Any, limit: int = 100, current: int = 0) -> No
 
 def create_platform_router(services: PlatformServices) -> APIRouter:
     router = APIRouter()
+    login_rate_windows: dict[str, list[float]] = {}
 
     @router.api_route("/api/platform/health", methods=["GET"])
     def platform_health() -> Response:
@@ -145,6 +148,19 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
 
     @router.api_route("/api/auth/login", methods=["POST"])
     async def login(request: Request) -> Response:
+        ip = _client_ip(request)
+        now_ms = time.time() * 1000
+        cutoff = now_ms - LOGIN_RATE_WINDOW_MS
+        hits = [
+            timestamp
+            for timestamp in login_rate_windows.get(ip, [])
+            if timestamp > cutoff
+        ]
+        if len(hits) >= LOGIN_RATE_LIMIT_PER_MINUTE:
+            raise PlatformError(429, "RATE_LIMITED")
+        hits.append(now_ms)
+        login_rate_windows[ip] = hits
+
         body = await request.json()
         if not isinstance(body, dict):
             body = {}
