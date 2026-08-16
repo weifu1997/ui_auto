@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>录制 PoC · 工作台</title></head>
+<body>
+  <h1>工作台</h1>
+  <p><label>搜索 <input data-testid="search-input" name="q"></label></p>
+  <button type="button" data-testid="search-go" id="search-go">搜索</button>
+  <div id="spa-area" hidden>
+    <p><label>备注 <input data-testid="spa-input" name="note"></label></p>
+    <span id="spa-result"></span>
+  </div>
+  <script>
+    document.getElementById("search-go").addEventListener("click", () => {
+      history.pushState({}, "", "/page2.html#/detail");
+      document.getElementById("spa-area").hidden = false;
+      document.getElementById("spa-result").textContent = "spa-ready";
+    });
+  </script>
+</body>
+</html>
