@@ -103,4 +103,5 @@ test("assembles a flow-list Platform run with its active environment and variabl
   expect(calls.revisions).toHaveLength(0);
   expect(calls.runs).toHaveLength(1);
   expect(calls.runs[0]).not.toHaveProperty("revisionId");
+  expect(calls.runs[0]).toMatchObject({ flowId: expect.stringMatching(/^flow-\d+$/) });
 });

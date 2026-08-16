@@ -125,8 +125,13 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
     if (request.method() === "POST" && url.pathname.endsWith("/runs")) {
       const body = request.postDataJSON() as Record<string, unknown>;
       calls.runs.push(body);
-      // 运行可不传 revisionId：取最新版本（保存即快照后总有 published 版本）。
-      const revision = body.revisionId ? revisionById.get(String(body.revisionId)) : revisions[0];
+      // 运行按 flowId 解析该流程最新 published 版本，与服务端 flow-scoped resolver 契约一致。
+      const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
+      const revision = body.revisionId
+        ? revisionById.get(String(body.revisionId))
+        : flowId
+          ? revisions.find((revision) => revision.flow.id === flowId)
+          : revisions[0];
       if (!revision) {
         await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "PUBLISHED_REVISION_REQUIRED" }) });
         return;
@@ -135,7 +140,7 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
       const run = {
         id: `platform-run-${calls.runs.length}`,
         projectId: platformProjectId,
-        revisionId: body.revisionId,
+        revisionId: revision.id,
         environmentId: body.environmentId,
         agentId: "platform-ui-agent",
         status: "success",

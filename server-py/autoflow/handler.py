@@ -2969,6 +2969,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             {
                 "projectId": project_id,
                 "revisionId": _text(body.get("revisionId")).strip() or None,
+                "flowId": _text(body.get("flowId")).strip() or None,
                 "environmentId": _text(body.get("environmentId")).strip() or None,
                 "datasetVersionId": (
                     _text(body.get("datasetVersionId")).strip() or None
@@ -3075,6 +3076,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 "environmentId": run["environmentId"],
                 "createdBy": user.id,
                 "source": "manual",
+                "allowSuperseded": True,
             }
         )
         new_run_id = queued["runIds"][0]

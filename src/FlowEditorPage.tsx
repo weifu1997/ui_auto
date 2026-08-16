@@ -233,13 +233,13 @@ export default function FlowEditorPage() {
           const value = secretValues[variable.id];
           if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
         }
-        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: environment.id, upToStepId });
+        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: environment.id, upToStepId });
         result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
         message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
         if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
       } catch (error) {
         if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
-          message.error("当前项目还没有版本快照，请先保存流程");
+          message.error("该流程还没有已发布版本，请先保存流程");
         } else {
           message.error("创建平台运行失败，请检查执行服务与运行环境");
         }

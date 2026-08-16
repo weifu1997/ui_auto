@@ -50,4 +50,5 @@ test("completes a user journey from a new project to a Platform run report", asy
   expect(calls.revisions).toHaveLength(0);
   expect(calls.runs).toHaveLength(1);
   expect(calls.runs[0]).not.toHaveProperty("revisionId");
+  expect(calls.runs[0]).toMatchObject({ flowId: expect.stringMatching(/^flow-\d+$/) });
 });

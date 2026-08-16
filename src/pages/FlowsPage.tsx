@@ -1,7 +1,8 @@
 import { message } from "../antd-feedback";
 import { localWorkerRunRequest } from "../local-worker-run";
 import type { Flow, Project, Run } from "../mock-data";
-import { PlatformApiError, createPlatformRun, savePlatformSecret } from "../platform-api";
+import { PlatformApiError, createPlatformRun, getPlatformRevisions, savePlatformSecret } from "../platform-api";
+import type { PlatformRevision } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
@@ -62,6 +63,37 @@ export function FlowsPage({ project }: { project: Project }) {
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
   const [draftOpen, setDraftOpen] = useState(false);
+  const [publishedFlowIds, setPublishedFlowIds] = useState<ReadonlySet<string> | null>(null);
+  const platformToken = platformProjectContext(project.id)?.session.token;
+  const platformProjectIdValue = platformProjectContext(project.id)?.projectId;
+  useEffect(() => {
+    if (!platformToken || !platformProjectIdValue) {
+      setPublishedFlowIds(null);
+      return;
+    }
+    let cancelled = false;
+    getPlatformRevisions(platformToken, platformProjectIdValue)
+      .then((result) => {
+        if (cancelled) return;
+        const environmentId = activeEnvironment?.id;
+        setPublishedFlowIds(
+          new Set(
+            result.revisions
+              .filter((revision): revision is PlatformRevision & { flowId: string } =>
+                revision.status === "published" &&
+                (!environmentId || revision.environmentId === environmentId) &&
+                typeof revision.flowId === "string")
+              .map((revision) => revision.flowId),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setPublishedFlowIds(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [platformToken, platformProjectIdValue, activeEnvironment?.id]);
   const filtered = items.filter((item) =>
     item.name.toLowerCase().includes(search.toLowerCase()) &&
     (tagFilter === "all" || item.tags.includes(tagFilter)),
@@ -91,14 +123,14 @@ export function FlowsPage({ project }: { project: Project }) {
           const value = secretValues[variable.id];
           if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
         }
-        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { environmentId: activeEnvironment.id });
+        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: activeEnvironment.id });
         result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
         updateFlowStatus(flow.id, "running");
         message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
         navigate(`/project/${project.id}/runs`);
       } catch (error) {
         if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
-          message.error("当前项目还没有版本快照，请先在编排器中保存流程");
+          message.error("该流程还没有已发布版本，请先在编排器中保存流程");
           return;
         }
         message.error("创建平台运行失败，请检查执行服务与运行环境");
@@ -144,6 +176,8 @@ export function FlowsPage({ project }: { project: Project }) {
     }
     return;
   };
+  const isFlowRunnable = (flowId: string) =>
+    publishedFlowIds === null || publishedFlowIds.has(flowId);
   const columns: TableColumnsType<Flow> = [
     {
       title: "流程",
@@ -192,12 +226,13 @@ export function FlowsPage({ project }: { project: Project }) {
       render: (_, flow) => (
         <Space size={0}>
           {canRunFlow && (
-            <Tooltip title="运行流程">
+            <Tooltip title={isFlowRunnable(flow.id) ? "运行流程" : "该流程尚未发布版本，请先在编排器中保存流程"}>
               <Button
                 type="text"
                 size="small"
                 icon={<PlayCircleFilled />}
                 aria-label={`运行流程 ${flow.name}`}
+                disabled={!isFlowRunnable(flow.id)}
                 onClick={() => void runFlow(flow)}
               />
             </Tooltip>

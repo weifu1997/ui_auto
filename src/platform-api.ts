@@ -470,7 +470,7 @@ export function rollbackPlatformRevision(token: string, projectId: string, revis
   );
 }
 
-export function createPlatformRun(token: string, projectId: string, input: { revisionId?: string; environmentId: string; datasetVersionId?: string; upToStepId?: string }) {
+export function createPlatformRun(token: string, projectId: string, input: { revisionId?: string; flowId?: string; environmentId: string; datasetVersionId?: string; upToStepId?: string }) {
   return request<{ run?: PlatformRun; runs: PlatformRun[]; runIds: string[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs`,
     { method: "POST", body: JSON.stringify(input) },
