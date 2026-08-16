@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/index.md","reason":"FastAPI、SQLite migration、运行服务和后端测试约定"}
+{"file":".trellis/spec/frontend/index.md","reason":"流程多选、运行中心、API 类型和前端状态约定"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Batch 从数据库、服务、API 到 UI 的完整数据流契约"}

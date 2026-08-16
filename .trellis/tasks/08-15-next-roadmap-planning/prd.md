@@ -2,156 +2,108 @@
 
 ## Goal
 
-在继续扩展 AutoFlow Workbench 的业务能力前，先把 Python 后端迁移、生产同步、版本快照和运行历史四条核心链路收敛到“可重复部署、数据不丢、历史可见、行为可验证”的状态，再按实际使用价值扩展持续回归配置与大数据量体验。
+在稳定性路线图已经落地的基础上，先收敛一个会影响执行正确性的共同前置，再决定“流程批量执行 MVP”和“流程录制 MVP”的边界、顺序与验收口径。这个父任务只负责需求、证据、依赖和跨任务质量门；不直接实现任何产品功能。
 
-用户价值：编辑成果不会因导航、刷新或短暂网络故障丢失；保存不会制造无意义版本；计划任务和 Webhook 产生的运行会自动出现在运行中心；新环境可以按文档一次启动并完成全量验证。
+用户价值：用户选择哪个流程，就执行哪个流程的已发布版本；后续批量执行和录制结果不会建立在错误 revision、未认证浏览器会话或不可审计的临时状态上。
 
 ## Background And Evidence
 
-- 核心 MVP 已具备项目、流程、元素、变量、环境、运行、数据集、定时任务、Webhook、通知、模板、治理分析和部署机 ManagedRunner，不需要继续横向堆功能来证明闭环。
-- Python 迁移代码、部署脚本和 TS 归档已落地，`docs/方案-后端迁移Python.md:3` 标记 P3-P7 完成；但 `.trellis/tasks/08-15-python-backend-migration/prd.md:17` 的验收项仍全部未勾选，任务仍为 `in_progress`，记录与代码状态不一致。
-- 本轮验证：`npm run build`、`npm run lint`、前端 24 个单测通过；使用 `server-py/.venv-linux` 后 Python 63 个单测通过。
-- 直接执行 `npm run test:py` 缺少 `pytest`，`npm run test:e2e` 缺少 `uvicorn`；仓库已有可用虚拟环境，但 npm 脚本固定使用系统 `python`。本轮 E2E 在沙箱中还受 localhost 隔离影响，不能据此判断产品回归。
-- 构建产物 `shared-*.js` 为 732.18 kB（gzip 236.84 kB），超过 Vite 500 kB 警戒线；这是可测量的性能债务，不是当前数据完整性阻断项。
+### 已完成的稳定性基线
 
-## Recommended Priority
+以下事项已经由历史提交实现并归档，本规划不再把它们列为待开发需求，只保留回归验证责任：
 
-### P0: 收尾 Python 迁移与验证入口
+- Python 环境入口与迁移收尾：`a937e83`；
+- 生产同步 outbox 与网络重试：`ec311ab`；
+- canonical revision snapshot：`400bac0`；
+- 运行中心首次加载平台历史：`531cf03`；
+- 运行与投递服务端分页：`4d96115`；
+- 自动化配置编辑与 Webhook secret 轮换：`954b7d0`；
+- 前端 chunk/bundle 拆分与预算：`3249922`。
 
-#### R0.1 统一 Python 环境启动方式
+本轮只读验证：
 
-- 提供可重复的开发环境初始化命令，或让 npm 脚本优先使用项目虚拟环境并在缺失时给出明确安装指令。
-- `server:py`、`test:py`、Playwright `webServer` 使用同一 Python 解释器选择规则。
-- README 不再出现“照文档执行但因系统 Python 缺依赖失败”的路径。
+- `npm run build`：通过；
+- `npm run lint`：通过；
+- `npm run test:unit`：9 个文件、30 个测试通过；
+- `npm run test:py`：68 个测试通过；
+- E2E 与 Windows 门禁本轮未运行，不能标记为通过。
 
-#### R0.2 完成迁移任务验收与工作区清理
+证据与命令记录见 [`research/evidence-refresh-2026-08-15.md`](research/evidence-refresh-2026-08-15.md)。
 
-- 对照迁移 PRD 逐项回填真实结果，补跑可运行的 smoke、E2E 和 Windows 部署门禁。
-- 处理 `server-py/server/.data/` 本地运行数据：确认产生路径，加入正确忽略规则或修正本地默认工作目录；不得误删现有生产或用户数据。
-- 清理 Trellis 状态漂移：迁移任务通过后归档；`08-10-sauce-demo-platform-error` 已有归档副本且验收完成，确认活动副本不再代表未完成工作后再归档。
+### 当前共同缺口
 
-### P1: 生产同步可靠性
+- `src/pages/FlowsPage.tsx` 的平台手工运行只发送 `environmentId`；`src/FlowEditorPage.tsx` 的运行到此步骤只发送 `environmentId/upToStepId`。
+- `src/platform-api.ts:createPlatformRun` 允许省略 `revisionId`；`server-py/autoflow/services.py:715` 在省略时按项目最近 published revision 查询，没有 `flowId` 约束。
+- 因此流程 A/B 交替保存后，手工运行可能执行另一个流程的 revision。这是已由代码路径确认的 correctness 缺口，不是批量功能的假设。
+- 当前数据库只有 `platform_runs`，没有 batch 聚合实体；当前 local-picker 是内存、loopback 取向的 click 采集，也没有带平台 session 与 `flow.edit` 能力检查的录制 API。
 
-#### D1 快速导航或刷新会丢失刚保存的资源
+## Product Intent And Task Boundaries
 
-- 证据：`src/ServerWorkspaceSynchronizer.tsx:352` 使用 450 ms 定时器；`src/ServerWorkspaceSynchronizer.tsx:386` 在 effect 清理时取消全部定时器。
-- 证据：生产 store 不持久化完整资源，现有冲突草稿只在收到 `RESOURCE_VERSION_CONFLICT` 后写入 `sessionStorage`，普通待同步修改没有持久 outbox。
-- 已有真实复现记录：`docs/自测报告-内网部署验证.md:75`。
+- 本阶段保持三个任务为 `planning`；匿名模型评测 Prompt 是未来实验材料，不是本轮实现授权。
+- 父任务拥有共同目标、依赖图和跨任务验收；两个子任务各自拥有独立、可观察的产品验收标准。
+- 子任务之间的依赖写入子任务自身的 PRD/implement 文档，不以目录层级暗示依赖。
+- 任何子任务在进入实现前，都需要用户对该子任务最新 planning summary 另行明确批准；本轮不运行 `task.py start`。
 
-#### D2 短暂网络或 5xx 失败后不会自动重试
+## Candidate Roadmap
 
-- 证据：`src/ServerWorkspaceSynchronizer.tsx:250` 的失败分支只更新状态和提示；除版本冲突外没有退避重试或持久重放。
-- 风险：页面仍在时修改只保留于内存，刷新后可能被服务端旧数据覆盖。
+### P0：流程 revision 选择正确性（已锁定共同前置）
 
-#### R1.1 建立持久同步 outbox
+先把手工运行的输入契约收敛为“显式 revision，或由 `projectId + flowId + environmentId` 唯一解析该流程最新 published revision”。显式 revision 与 flow/environment 不一致时必须拒绝，不能静默纠正。
 
-- 本地变更先写入可恢复 outbox，再执行防抖网络同步。
-- 成功后按项目、资源类型和版本精确确认；刷新、导航、浏览器重启后可重放。
-- 对网络错误和 5xx 使用有上限的指数退避；对 409 保留显式冲突处理，不盲目覆盖。
-- 同步状态区分“等待同步、同步中、重试中、冲突、已同步”，离开页面前仍能判断数据是否安全。
+这项工作已经创建为独立 P0 子任务：[`08-15-flow-revision-selection-correctness`](../08-15-flow-revision-selection-correctness/prd.md)。它至少覆盖流程列表运行、编辑器运行到此步骤、显式 revision 的兼容路径，以及 A/B 流程回归。未通过前，batch 和 recording 的“保存后运行”验收均不成立。
 
-#### R1.2 覆盖真实生产同步器
+### P1：流程批量执行 MVP（候选子任务）
 
-- 当前 `src/App.tsx:117` 在 production/auth-required 才使用 `ServerWorkspaceSynchronizer`；默认 Vite E2E 主要覆盖另一套 `PlatformWorkspaceSynchronizer`。
-- 新增 production/auth-required 场景，覆盖保存后立即导航、立即刷新、请求 5xx 后恢复、409 冲突后重提和进程重启重放。
-- 长期目标是收敛两套同步实现，避免开发模式与生产模式行为漂移。
+沿用现有 ManagedRunner 的单并发 FIFO，只增加持久 batch 聚合、原子预检/创建、批次查询、取消和失败项重试。2–20 流程、单环境、每流程一条 run、禁止 dataset/`upToStepId`、部分失败继续执行等边界已于 2026-08-16 产品复核确认：预检失败整批拒绝、失败项重试按原 revision 快照、批次列表按创建时间倒序、取消复用现有状态机。
 
-### P1: 版本快照语义稳定
+### P1：流程录制 MVP（候选子任务）
 
-#### D3 非业务字段变化会制造新版本
+复用 Python Playwright/Pick­er 的部署机浏览器能力，新增认证的临时录制会话、事件归并、敏感输入保护、review 和原子草稿导入。起始 URL 同源、登录态快照注入（含「从头录制」选项）与 query/fragment 完全剥离已于 2026-08-16 确认并写入子任务 PRD/design。
 
-- `src/mock-data.ts:17`、`:30`、`:56` 表明流程、元素和环境含 `updatedAt`，元素还含 `validation`，步骤含运行/展示状态。
-- `src/ServerWorkspaceSynchronizer.tsx:321` 将环境和元素对象直接发送；`server-py/autoflow/handler.py:2917` 对完整快照计算 checksum。
-- 结果是展示时间、验证状态等非执行语义变化也可能 supersede 当前 published 版本；已有真实记录见 `docs/自测报告-内网部署验证.md:82`。
+### 暂缓项
 
-#### R2.1 使用规范化执行快照
+并行执行/可配置并发、跨项目批次、浏览器 Extension/CDP、多页面录制、自动断言、报告导出和多租户能力不进入本轮候选 MVP。
 
-- 在单一共享边界构建 revision DTO，只保留影响执行结果的字段。
-- 排除 `updatedAt`、`validation`、步骤 UI 状态等展示或瞬态字段，并对数组顺序、缺省值和 JSON 序列化给出明确契约。
-- 相同执行语义重复保存返回同一 published revision；真实执行字段变化才创建新版本。
-- 已绑定计划任务/Webhook 的 revision 不会因无关资源 round-trip 变为不可运行。
+## Dependency And Risk Contract
 
-### P1: 运行中心历史加载正确性
+```text
+revision-selection-correctness (P0)
+        ├──> batch-execution-mvp
+        └──> recording-mvp (保存/重放验收)
+```
 
-#### D4 运行中心不会自动读取平台历史
+- Batch 必须基于已完成的 runs 服务端分页契约；不得重新引入固定 200 条或客户端全量加载。
+- Recording 必须沿用现有资源同步和 canonical revision snapshot；确认导入前不能写平台资源。
+- 两个子任务都要保持项目隔离、现有单 run/dataset/schedule/webhook/Picker 兼容，并提供回滚点。
+- 批量会放大运行产物、事件和通知容量；录制会接触浏览器页面和敏感输入，容量与脱敏是发布阻断风险。
 
-- `src/pages/ProjectShell.tsx:22` 的运行中心路由为 `/project/:id/runs`。
-- `src/pages/RunsPage.tsx:62` 却只在 pathname 以 `/platform` 结尾时加载和轮询平台运行，因此页面首次进入不会自动拉取服务端历史。
-- 当前手动“刷新状态”会绕过该判断，所以问题容易被本地持久化的 `run-store` 掩盖；没有 `RunsPage` 专项测试。
+## Planning Acceptance Criteria
 
-#### R3.1 运行中心以服务端历史为准
-
-- 进入 `/runs` 立即加载平台运行；计划任务、Webhook 和其他浏览器创建的运行无需手动刷新即可出现。
-- 仅对非终态运行轮询或订阅，终态历史按需刷新。
-- 保留本地 Worker 运行兼容，但明确合并去重规则和来源标识。
-- 补充空缓存、跨浏览器、计划触发、Webhook 触发和手动刷新测试。
-
-## Product Requirements After Stability
-
-### P2: 持续回归配置可维护
-
-#### R4.1 编辑而不是删除重建
-
-- 计划任务支持修改名称、Cron、时区、版本、环境和数据集。
-- Webhook 支持修改名称、版本、环境和数据集，并可显式轮换 signing secret。
-- 通知通道支持修改名称、地址、类型和关键词，并提供“发送测试通知”。
-- 所有修改保留审计事件；密钥和地址仍按现有加密、单次展示与脱敏规则处理。
-
-现状证据：`src/pages/AutomationsPage.tsx:92` 至 `:100` 只有新建、启停和归档，服务端/客户端也没有相应更新接口。配置填错时只能删除重建，Webhook 单次展示的 secret 使这一操作成本更高。
-
-### P2: 历史数据分页与查询
-
-#### R5.1 运行和投递记录服务端分页
-
-- 运行列表支持服务端分页、状态、流程、来源和时间范围筛选。
-- 通知投递记录支持分页、状态、通道和时间范围筛选。
-- URL 保留查询状态，页面刷新后筛选不丢。
-
-现状证据：运行接口固定 `LIMIT 200`（`server-py/autoflow/handler.py:2521`），前端只对已加载数据做 8 条客户端分页；投递接口固定 200 条，页面只展示前 8 条。
-
-### P2: 首屏与共享依赖体积
-
-#### R6.1 建立可执行的前端体积预算
-
-- 拆分治理表格、编辑器和 Ant Design 重依赖，避免所有页面共享 chunk 持续增长。
-- 为入口共享 chunk 设定预算并在 CI 记录变化；先以消除 Vite 500 kB 警告为目标，不为了数字牺牲缓存命中或交互稳定性。
-
-### P3: 术语与历史文档收敛
-
-- 清理 UI 中已退役的“Agent/指定 Agent”文案，例如 `src/pages/RunsPage.tsx:86`、`:108`，统一为“部署机执行器/ManagedRunner”。
-- 将仍描述远程 Agent、远程调试、旧 TS 命令的历史方案标记为“已归档背景”，避免被当成当前操作指南。
-- 保留历史决策证据，不直接删除可追溯材料。
-
-## Suggested Iterations
-
-1. **迭代 0：迁移收尾**：R0.1-R0.2，目标是全量门禁有唯一、可复现入口，任务状态与仓库一致。
-2. **迭代 1：数据完整性**：R1.1-R1.2、R2.1，先解决同步丢数据和快照漂移。
-3. **迭代 2：运行可见性**：R3.1，并同步清理相关过时文案。
-4. **迭代 3：运营效率**：按真实使用反馈在 R4.1、R5.1、R6.1 中选一项，不建议一次并行铺开。
-
-## Acceptance Criteria
-
-- [ ] AC0：新检出环境按 README 的单一路径安装 Python 依赖并运行 `server:py`、`test:py`、前端测试和 Playwright E2E，不依赖开发者提前激活某个私有虚拟环境。
-- [ ] AC1：保存任一资源后立即导航、刷新或关闭再打开，修改最终仍可在服务端恢复；断网/5xx 恢复后无需再次编辑即可自动同步。
-- [ ] AC2：同一资源发生并发 409 时，本地草稿可恢复且不会静默覆盖远端；用户能明确选择刷新远端或重新提交。
-- [ ] AC3：只改变 `updatedAt`、元素验证状态或步骤 UI 状态不会创建新 revision；改变定位器、步骤动作、变量值或环境执行配置会创建新 revision。
-- [ ] AC4：清空浏览器 `autoflow-run-records` 后进入运行中心，仍能看到服务端历史；计划任务/Webhook 新运行在约定刷新周期内自动出现。
-- [ ] AC5：每个进入开发的需求都拆为独立 Trellis 子任务，拥有可观察验收标准、验证命令和回滚点，不以本路线图直接启动大范围实现。
+- [ ] AC0：父任务文档准确区分已完成基线、当前缺口和候选需求；不把已归档工作重复列为待开发。
+- [x] AC1：revision 选择正确性被拆成独立 P0 子任务，列出入口、API 契约、兼容路径、可观察回归和完成门槛。
+- [ ] AC2：batch 子任务写明对 P0、分页契约和 ManagedRunner 的依赖，并有原子性、幂等、状态聚合、取消竞态和审计安全的验收标准。
+- [ ] AC3：recording 子任务写明对 P0、平台认证、浏览器生命周期、敏感数据和现有保存/重放链路的依赖，并有真实本地 fixture 验收标准。
+- [ ] AC4：每个进入实现的子任务都有独立 `prd.md`、复杂任务所需的 `design.md`/`implement.md`，以及真实的 `implement.jsonl`/`check.jsonl` 上下文条目。
+- [ ] AC5：在用户批准最新 planning summary 之前，不修改产品代码、不启动任何子任务。
 
 ## Out Of Scope
 
-- 恢复多机 Agent/租约/WebSocket 体系；现有单机内网部署决策明确暂不需要。
-- 恢复成员/角色权限体系；当前产品决策是登录后全权限并保留工作空间隔离。
-- 新一轮纯视觉改版、增加更多流程动作、云端多租户化。
-- 本规划阶段直接修改产品代码或一次性启动全部 P0-P2 项目。
+- 本规划阶段直接实现 batch 或 recording；
+- 恢复多机 Agent、租约、WebSocket、成员角色体系或云端多租户；
+- 以匿名评测 Prompt 代替产品需求确认；
+- 为了通过门禁删除、放宽或改写既有测试。
 
-## Risks And Deferred Items
+## Decisions Log
 
-- 持久 outbox 涉及敏感变量时必须继续遵守“密钥明文不落盘”；只保存资源引用和非敏感草稿，密钥运行时再获取。
-- revision 规范化会改变新 checksum，需保留旧 revision 可执行，不批量重写历史记录。
-- 服务端分页会改变响应契约，应采用增量字段或版本兼容方案。
-- Windows 服务、真实 Chromium 和 localhost 网络链路需要在非沙箱环境完成最终验收。
+- 2026-08-16：单 run retry 按原 revision 快照执行，即使已 superseded；重试入口是唯一允许加载 superseded 快照的路径，普通手工运行仍只接受 published。batch「重试失败项」继承同一语义（每项按原 run 的 revision 快照重试）。已写入 P0 与 batch 子任务 PRD/design。
+- 2026-08-16：batch 预检失败整批拒绝，错误按 flowId 逐项定位，用户修正（换环境/先发布）后重新提交；不提供移除失败项后提交剩余项、也不自动跳过。已写入 batch 子任务 PRD。
+- 2026-08-16：录制起始 URL 强制与所选环境 baseUrl 同源（scheme+host+port），拒绝 userinfo、非 HTTP(S) 与跨域地址；跨域认证域路径 MVP 不支持，录制中导航外部域只产生 warning。已写入 recording 子任务 PRD/design。
+- 2026-08-16：录制登录态采用快照注入——创建独立 context 时若同项目+环境有存活 Picker 会话则一次性注入其 storage_state（只读、不回写），提供「从头录制」选项；无 Picker 会话时手动登录。已写入 recording 子任务 PRD/design。
+- 2026-08-16：录制 URL 一律脱敏为 scheme+host+path，query/fragment 在步骤、review、事件、日志、审计中完全剥离。已写入 recording 子任务 PRD/design。recording 子任务的产品决策已全部收敛。
+- 2026-08-16：批次取消的对外表达复用现有单 run 状态机——不新增“取消中”状态，running 子项由 UI 依据现有 `cancellation_requested` 标志呈现提示。已写入 batch 子任务 PRD。
+- 2026-08-16：批次列表默认按创建时间倒序，运行中的批次在分页跨页时位置稳定，不按最近子 run 更新时间重排。已写入 batch 子任务 PRD。batch 子任务的产品决策已全部收敛。
+- 2026-08-16：无 published revision 的流程在 UI 禁用运行入口并提示“先保存发布”，API 仍强校验 `PUBLISHED_REVISION_REQUIRED`。已写入 P0 子任务 PRD。P0 子任务的产品决策已全部收敛。
 
-## Open Question
+## Open Questions
 
-- 下一开发周期是否按建议锁定为“迭代 0 + 迭代 1”（迁移收尾、同步可靠性、版本稳定），并把持续回归配置编辑、分页和前端体积优化推迟到后续周期？
+（无——P0、batch、recording 三个子任务的产品决策已于 2026-08-16 全部收敛，见 Decisions Log；进入任一子任务实现前仍需用户单独批准其最终 planning summary。）
