@@ -540,6 +540,37 @@ def drop_dead_tables_and_columns(database: sqlite3.Connection) -> None:
         )
 
 
+def add_run_batches(database: sqlite3.Connection) -> None:
+    ensure_column(database, "platform_runs", "batch_id", "TEXT")
+    ensure_column(database, "platform_runs", "batch_item_index", "INTEGER")
+    exec_sql(
+        database,
+        """
+        CREATE TABLE IF NOT EXISTS run_batches (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES platform_projects(id),
+          environment_id TEXT NOT NULL,
+          client_request_id TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'manual',
+          retry_of_batch_id TEXT REFERENCES run_batches(id),
+          requested_flow_ids TEXT NOT NULL,
+          cancellation_requested INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (project_id, client_request_id)
+        );
+        CREATE INDEX IF NOT EXISTS run_batches_project
+          ON run_batches (project_id, created_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS platform_runs_batch_item
+          ON platform_runs (batch_id, batch_item_index)
+          WHERE batch_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS platform_runs_batch_status
+          ON platform_runs (batch_id, status);
+        """,
+    )
+
+
 def run_platform_migrations(
     database: sqlite3.Connection,
     bootstrap_schema: str,
@@ -591,6 +622,11 @@ def run_platform_migrations(
                 "name": "drop-dead-tables-and-columns",
                 "up": drop_dead_tables_and_columns,
                 "noTransaction": True,
+            },
+            {
+                "version": 11,
+                "name": "run-batches",
+                "up": add_run_batches,
             },
         ],
     )

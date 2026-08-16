@@ -1,7 +1,8 @@
 import { message } from "../antd-feedback";
 import type { Project, Run } from "../mock-data";
-import { cancelPlatformRun, createPlatformRun, getPlatformRun, getPlatformRuns } from "../platform-api";
-import type { PlatformSession } from "../platform-api";
+import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRunBatch } from "../platform-api";
+import type { PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../platform-api";
+
 import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
@@ -9,9 +10,18 @@ import { useWorkspaceStore } from "../workspace-store";
 import { PageHeading, canUseCapability, emptyRuns, isTerminalStatus, isWorkerRunId, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling, watchWorkerRun, workerTaskAsRun } from "./shared";
 import { cancelRun, getRun, retryRun } from "../worker-api";
 import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
-import { Button, Empty, Input, Progress, Select, Space, Table, Tooltip } from "antd";
+import { Button, Empty, Input, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
+const batchStatusMeta = {
+  queued: { label: "排队中", color: "default" },
+  running: { label: "运行中", color: "processing" },
+  success: { label: "全部通过", color: "success" },
+  partial_failed: { label: "部分失败", color: "warning" },
+  failed: { label: "失败", color: "error" },
+  canceled: { label: "已取消", color: "default" },
+} as const;
+
 
 export function RunsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
@@ -62,6 +72,14 @@ export function RunsPage({ project }: { project: Project }) {
   const [platformTotal, setPlatformTotal] = useState(0);
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [batches, setBatches] = useState<PlatformRunBatch[]>([]);
+  const [batchItems, setBatchItems] = useState<Record<string, PlatformRunBatchItem[]>>({});
+  const [expandedBatchIds, setExpandedBatchIds] = useState<string[]>(() => {
+    const target = new URLSearchParams(window.location.search).get("batch");
+    return target ? [target] : [];
+  });
+  const [batchUpdatingId, setBatchUpdatingId] = useState<string | null>(null);
+
   useEffect(() => {
     if (platformSession && legacyPlatformProjectId && !platformProjectId) {
       enablePlatformProject(project.id, legacyPlatformProjectId);
@@ -90,13 +108,86 @@ export function RunsPage({ project }: { project: Project }) {
   useEffect(() => {
     void refreshPlatformRuns();
   }, [refreshPlatformRuns]);
+  const loadBatchItems = useCallback(async (batchId: string) => {
+    if (!platformSession || !remotePlatformProjectId) return;
+    try {
+      const detail = await getPlatformRunBatch(
+        platformSession.token, remotePlatformProjectId, batchId,
+      );
+      setBatchItems((current) => ({ ...current, [batchId]: detail.runs }));
+    } catch {
+      // 展开的批次详情加载失败时保留已有数据，列表仍可用。
+    }
+  }, [platformSession, remotePlatformProjectId]);
+  const refreshBatches = useCallback(async () => {
+    if (!platformSession || !remotePlatformProjectId) return;
+    try {
+      const response = await getPlatformRunBatches(
+        platformSession.token, remotePlatformProjectId, { page: 1, pageSize: 20 },
+      );
+      setBatches(response.batches);
+      const stale = expandedBatchIds.filter(
+        (batchId) => response.batches.some((batch) => batch.id === batchId),
+      );
+      for (const batchId of stale) {
+        await loadBatchItems(batchId);
+      }
+    } catch {
+      // 批次列表轮询失败时保留上次结果，不影响单运行视图。
+    }
+  }, [expandedBatchIds, loadBatchItems, platformSession, remotePlatformProjectId]);
+  useEffect(() => {
+    void refreshBatches();
+  }, [refreshBatches]);
   const hasActivePlatformRuns = apiRuns.some(
     (run) => !isWorkerRunId(run.id) && !isTerminalStatus(run.status),
   );
+  const hasActiveBatches = batches.some(
+    (batch) => batch.status === "queued" || batch.status === "running",
+  );
   const pollInterval = platformSession && remotePlatformProjectId
-    ? hasActivePlatformRuns ? 3_000 : 15_000
+    ? hasActivePlatformRuns || hasActiveBatches ? 3_000 : 15_000
     : 0;
   usePolling(refreshPlatformRuns, pollInterval);
+  usePolling(refreshBatches, pollInterval);
+  const cancelBatch = async (batch: PlatformRunBatch) => {
+    if (!platformSession || !platformProjectId) return;
+    setBatchUpdatingId(batch.id);
+    try {
+      const response = await cancelPlatformRunBatch(
+        platformSession.token, platformProjectId, batch.id,
+      );
+      setBatches((current) => current.map(
+        (item) => (item.id === response.batch.id ? response.batch : item),
+      ));
+      setBatchItems((current) => ({ ...current, [response.batch.id]: response.runs }));
+      message.info("已请求取消批次中未完成的运行");
+    } catch {
+      message.error("取消批次失败，请稍后重试");
+    } finally {
+      setBatchUpdatingId(null);
+    }
+  };
+  const retryBatch = async (batch: PlatformRunBatch) => {
+    if (!platformSession || !platformProjectId) return;
+    setBatchUpdatingId(batch.id);
+    try {
+      await retryPlatformRunBatch(
+        platformSession.token, platformProjectId, batch.id, crypto.randomUUID(),
+      );
+      message.success("已创建重试批次，失败与取消项将按原版本快照重新执行");
+      await refreshBatches();
+    } catch (error) {
+      if (error instanceof Error && error.message === "BATCH_NOT_RETRYABLE") {
+        message.error("该批次当前不可重试");
+      } else {
+        message.error("重试批次失败，请稍后重试");
+      }
+    } finally {
+      setBatchUpdatingId(null);
+    }
+  };
+
   useEffect(() => {
     const params = new URLSearchParams();
     if (page > 1) params.set("page", String(page));
@@ -192,7 +283,104 @@ export function RunsPage({ project }: { project: Project }) {
     if (failed === 0) message.success("运行状态已刷新");
     else message.warning(`已刷新 ${results.length - failed} 条运行，${failed} 条暂不可用`);
   };
+  const batchItemColumns: TableColumnsType<PlatformRunBatchItem> = [
+    {
+      title: "流程运行",
+      dataIndex: "flowName",
+      render: (_, item) => (
+        <button
+          className="run-link"
+          onClick={() => navigate(`/project/${project.id}/runs/${item.id}`)}
+        >
+          <span className={`run-status-dot ${item.status}`} />
+          <span>
+            <strong>{item.flowName ?? item.revisionId}</strong>
+            <small>{item.id}</small>
+          </span>
+        </button>
+      ),
+    },
+    { title: "状态", dataIndex: "status", width: 110, render: statusTag },
+    {
+      title: "",
+      key: "cancellation",
+      width: 110,
+      render: (_, item) =>
+        item.cancellationRequested && !isTerminalStatus(item.status)
+          ? <Tag>取消中</Tag>
+          : null,
+    },
+    { title: "开始时间", dataIndex: "createdAt", width: 170 },
+  ];
+  const batchColumns: TableColumnsType<PlatformRunBatch> = [
+    {
+      title: "批次",
+      dataIndex: "id",
+      render: (_, batch) => (
+        <span>
+          <strong>{batch.retryOfBatchId ? "重试批次" : "批量运行"}（{batch.counts.total} 个流程）</strong>
+          <small>{batch.id}</small>
+        </span>
+      ),
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      width: 110,
+      render: (status: PlatformRunBatch["status"]) => {
+        const meta = batchStatusMeta[status];
+        return <Tag color={meta?.color ?? "default"}>{meta?.label ?? status}</Tag>;
+      },
+    },
+    {
+      title: "进度（串行执行）",
+      key: "counts",
+      width: 260,
+      render: (_, batch) => (
+        <span>
+          {batch.counts.completed}/{batch.counts.total} 完成 · 成功 {batch.counts.success} · 失败 {batch.counts.failed} · 取消 {batch.counts.canceled}
+          {batch.status === "running" && batch.cancellationRequested ? " · 取消中" : ""}
+        </span>
+      ),
+    },
+    { title: "创建时间", dataIndex: "createdAt", width: 170 },
+    {
+      title: "",
+      key: "actions",
+      width: 96,
+      render: (_, batch) =>
+        canExecuteRun
+          ? (
+            batch.status === "queued" || batch.status === "running" ? (
+              <Tooltip title="取消批次">
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<StopOutlined />}
+                  aria-label={`取消批次 ${batch.id}`}
+                  loading={batchUpdatingId === batch.id}
+                  onClick={() => void cancelBatch(batch)}
+                />
+              </Tooltip>
+            ) : batch.counts.failed + batch.counts.canceled > 0 ? (
+              <Tooltip title="重试失败项">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  aria-label={`重试批次 ${batch.id}`}
+                  loading={batchUpdatingId === batch.id}
+                  onClick={() => void retryBatch(batch)}
+                />
+              </Tooltip>
+            ) : null
+          )
+          : null,
+    },
+  ];
   const columns: TableColumnsType<Run> = [
+
     {
       title: "运行任务",
       dataIndex: "id",
@@ -331,6 +519,41 @@ export function RunsPage({ project }: { project: Project }) {
           <i /> 实时更新已开启
         </span>
       </div>
+      {batches.length > 0 && (
+        <section className="surface" style={{ marginBottom: 16 }}>
+          <Table
+            size="small"
+            rowKey="id"
+            columns={batchColumns}
+            dataSource={batches}
+            pagination={false}
+            expandable={{
+              expandedRowKeys: expandedBatchIds,
+              onExpand: (expanded, batch) => {
+                setExpandedBatchIds((current) => (
+                  expanded
+                    ? [...current, batch.id]
+                    : current.filter((id) => id !== batch.id)
+                ));
+                if (expanded && !batchItems[batch.id]) void loadBatchItems(batch.id);
+              },
+              expandedRowRender: (batch) =>
+                batchItems[batch.id] ? (
+                  <Table
+                    size="small"
+                    rowKey="id"
+                    columns={batchItemColumns}
+                    dataSource={batchItems[batch.id]}
+                    pagination={false}
+                  />
+                ) : (
+                  <span>批次详情加载中…</span>
+                ),
+            }}
+            locale={{ emptyText: <Empty description="尚无批次" /> }}
+          />
+        </section>
+      )}
       <section className="surface">
         <Table
           rowKey="id"
@@ -347,6 +570,7 @@ export function RunsPage({ project }: { project: Project }) {
           locale={{ emptyText: <Empty description="尚无真实运行任务" /> }}
         />
       </section>
+
     </>
   );
 }

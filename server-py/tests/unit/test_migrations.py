@@ -49,6 +49,7 @@ def test_run_platform_migrations_records_exactly_once():
             (8, "blank-debug-sessions"),
             (9, "drop-agent-and-debug-tables"),
             (10, "drop-dead-tables-and-columns"),
+            (11, "run-batches"),
         ]
         columns = _columns(database, "flow_revisions")
         assert "flow_id" in columns

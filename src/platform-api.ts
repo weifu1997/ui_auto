@@ -221,12 +221,14 @@ export type PlatformAuditQuery = {
 export class PlatformApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly items: Array<{ flowId: string; code: string }> | undefined;
 
-  constructor(status: number, code: string) {
+  constructor(status: number, code: string, items?: Array<{ flowId: string; code: string }>) {
     super(code);
     this.name = "PlatformApiError";
     this.status = status;
     this.code = code;
+    this.items = items;
   }
 }
 
@@ -252,12 +254,19 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string) 
         ...init.headers,
       },
     });
-    const body = (await response.json().catch(() => ({}))) as T & { error?: string };
+    const body = (await response.json().catch(() => ({}))) as T & {
+      error?: string;
+      items?: Array<{ flowId: string; code: string }>;
+    };
     if (!response.ok) {
       if (response.status === 401 && generation === sessionGeneration && typeof window !== "undefined") {
         window.dispatchEvent(new Event("autoflow-auth-expired"));
       }
-      throw new PlatformApiError(response.status, body.error ?? "PLATFORM_REQUEST_FAILED");
+      throw new PlatformApiError(
+        response.status,
+        body.error ?? "PLATFORM_REQUEST_FAILED",
+        Array.isArray(body.items) ? body.items : undefined,
+      );
     }
     return body;
   } catch (error) {
@@ -509,6 +518,90 @@ export function getPlatformRuns(token: string, projectId: string, query: Platfor
   return request<{ runs: PlatformRun[]; total: number; page: number; pageSize: number }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs${suffix}`,
     {},
+    token,
+  );
+}
+
+export type PlatformRunBatchCounts = {
+  total: number;
+  queued: number;
+  running: number;
+  success: number;
+  failed: number;
+  canceled: number;
+  completed: number;
+};
+
+export type PlatformRunBatch = {
+  id: string;
+  projectId: string;
+  environmentId: string;
+  clientRequestId: string;
+  source: string;
+  retryOfBatchId: string | null;
+  flowIds: string[];
+  cancellationRequested: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  status: "queued" | "running" | "success" | "partial_failed" | "failed" | "canceled";
+  counts: PlatformRunBatchCounts;
+};
+
+export type PlatformRunBatchItem = {
+  id: string;
+  status: "queued" | "running" | "success" | "failed" | "canceled";
+  revisionId: string;
+  environmentId: string;
+  flowName: string | null;
+  cancellationRequested: boolean;
+  retryOfRunId: string | null;
+  batchItemIndex: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export function createPlatformRunBatch(token: string, projectId: string, input: { flowIds: string[]; environmentId: string; clientRequestId: string }) {
+  return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/run-batches`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function getPlatformRunBatches(token: string, projectId: string, query: { page?: number; pageSize?: number; status?: string } = {}) {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set("page", String(query.page));
+  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
+  if (query.status) params.set("status", query.status);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return request<{ batches: PlatformRunBatch[]; total: number; page: number; pageSize: number }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/run-batches${suffix}`,
+    {},
+    token,
+  );
+}
+
+export function getPlatformRunBatch(token: string, projectId: string, batchId: string) {
+  return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/run-batches/${encodeURIComponent(batchId)}`,
+    {},
+    token,
+  );
+}
+
+export function cancelPlatformRunBatch(token: string, projectId: string, batchId: string) {
+  return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/run-batches/${encodeURIComponent(batchId)}/cancel`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function retryPlatformRunBatch(token: string, projectId: string, batchId: string, clientRequestId: string) {
+  return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/run-batches/${encodeURIComponent(batchId)}/retry-failed`,
+    { method: "POST", body: JSON.stringify({ clientRequestId }) },
     token,
   );
 }

@@ -55,6 +55,29 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _batch_run_summaries(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for run in runs:
+        snapshot = run.get("snapshot")
+        flow = snapshot.get("flow") if isinstance(snapshot, dict) else None
+        flow_name = flow.get("name") if isinstance(flow, dict) else None
+        summaries.append(
+            {
+                "id": run["id"],
+                "status": run["status"],
+                "revisionId": run["revisionId"],
+                "environmentId": run["environmentId"],
+                "flowName": flow_name if isinstance(flow_name, str) else None,
+                "cancellationRequested": run["cancellationRequested"],
+                "retryOfRunId": run.get("retryOfRunId"),
+                "batchItemIndex": run.get("batchItemIndex"),
+                "createdAt": run["createdAt"],
+                "updatedAt": run["updatedAt"],
+            }
+        )
+    return summaries
+
+
 def _assert_snapshot_depth(value: Any, limit: int = 100, current: int = 0) -> None:
     if current > limit:
         raise PlatformError(400, "SNAPSHOT_TOO_DEEP")
@@ -3095,6 +3118,161 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             Response(),
             202,
             {"runIds": queued["runIds"], "runs": runs},
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/run-batches",
+        methods=["GET", "POST"],
+    )
+    async def platform_run_batches(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        if request.method == "GET":
+            services.require_project_role(project_id, user.id)
+            query = request.query_params
+            try:
+                page = max(1, int(query.get("page", "1") or "1"))
+                page_size = min(100, max(1, int(query.get("pageSize", "20") or "20")))
+            except ValueError:
+                raise PlatformError(400, "PAGINATION_INVALID") from None
+            status = _text(query.get("status")).strip() or None
+            return _send(
+                Response(),
+                200,
+                services.run_batches_page(project_id, page, page_size, status),
+            )
+        result = services.require_project_capability(
+            project_id, user.id, "run.execute"
+        )
+        project = result["project"]
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        created = services.create_run_batch(
+            {
+                "projectId": project_id,
+                "flowIds": body.get("flowIds"),
+                "environmentId": _text(body.get("environmentId")).strip(),
+                "clientRequestId": _text(body.get("clientRequestId")).strip(),
+                "createdBy": user.id,
+            }
+        )
+        batch = created["batch"]
+        services.audit(
+            project["workspace_id"],
+            {"type": "user", "id": user.id},
+            "run_batch.created",
+            {"type": "run_batch", "id": batch["id"]},
+            {
+                "flowIds": batch["flowIds"],
+                "runIds": [run["id"] for run in created["runs"]],
+                "environmentId": batch["environmentId"],
+                "counts": batch["counts"],
+                "retryOfBatchId": batch["retryOfBatchId"],
+            },
+            project_id,
+        )
+        return _send(
+            Response(),
+            200 if created["replayed"] else 202,
+            {"batch": batch, "runs": _batch_run_summaries(created["runs"])},
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/run-batches/{batch_id}",
+        methods=["GET"],
+    )
+    async def platform_run_batch_detail(
+        request: Request, project_id: str, batch_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_role(project_id, user.id)
+        batch = services.run_batch_by_id(project_id, batch_id)
+        return _send(
+            Response(),
+            200,
+            {
+                "batch": batch,
+                "runs": _batch_run_summaries(
+                    services.batch_runs(project_id, batch_id)
+                ),
+            },
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/run-batches/{batch_id}/cancel",
+        methods=["POST"],
+    )
+    async def platform_run_batch_cancel(
+        request: Request, project_id: str, batch_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        result = services.require_project_capability(
+            project_id, user.id, "run.execute"
+        )
+        project = result["project"]
+        canceled = services.cancel_run_batch(project_id, batch_id, user.id)
+        services.audit(
+            project["workspace_id"],
+            {"type": "user", "id": user.id},
+            "run_batch.cancel_requested",
+            {"type": "run_batch", "id": batch_id},
+            {
+                "affectedQueued": canceled["affectedQueued"],
+                "affectedRunning": canceled["affectedRunning"],
+            },
+            project_id,
+        )
+        return _send(
+            Response(),
+            202,
+            {
+                "batch": canceled["batch"],
+                "runs": _batch_run_summaries(canceled["runs"]),
+            },
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/run-batches/{batch_id}/retry-failed",
+        methods=["POST"],
+    )
+    async def platform_run_batch_retry(
+        request: Request, project_id: str, batch_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        result = services.require_project_capability(
+            project_id, user.id, "run.execute"
+        )
+        project = result["project"]
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        client_request_id = _text(body.get("clientRequestId")).strip()
+        if not client_request_id:
+            raise PlatformError(400, "BATCH_CLIENT_REQUEST_ID_REQUIRED")
+        retried = services.retry_run_batch(
+            project_id, batch_id, user.id, client_request_id
+        )
+        services.audit(
+            project["workspace_id"],
+            {"type": "user", "id": user.id},
+            "run_batch.retried",
+            {"type": "run_batch", "id": retried["batch"]["id"]},
+            {
+                "sourceBatchId": batch_id,
+                "newBatchId": retried["batch"]["id"],
+                "retriedFlowIds": retried["batch"]["flowIds"],
+            },
+            project_id,
+        )
+        return _send(
+            Response(),
+            202,
+            {
+                "batch": retried["batch"],
+                "runs": _batch_run_summaries(retried["runs"]),
+            },
         )
 
     @router.api_route(

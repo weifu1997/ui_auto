@@ -14,6 +14,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from .core import json
 from .handler import create_platform_router
+from typing import Any
+
 from .http import PlatformError
 from .services import PlatformServices
 from .worker import WorkerService, create_worker_router
@@ -137,7 +139,10 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
     async def platform_error_handler(
         request: Request, exc: PlatformError
     ) -> JSONResponse:
-        return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        content: dict[str, Any] = {"error": exc.code}
+        if exc.detail:
+            content.update(exc.detail)
+        return JSONResponse(status_code=exc.status, content=content)
 
     @app.exception_handler(Exception)
     async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:

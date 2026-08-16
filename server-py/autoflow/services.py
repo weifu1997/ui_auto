@@ -1154,7 +1154,7 @@ class PlatformServices:
             (run_id, kind, json(data), now()),
         )
 
-    def queue_published_runs(self, input: dict[str, Any]) -> dict[str, Any]:
+    def resolve_run_spec(self, input: dict[str, Any]) -> dict[str, Any]:
         from .http import PlatformError
 
         project_id = input["projectId"]
@@ -1237,100 +1237,157 @@ class PlatformServices:
                     or f"{{{{ secret.{name} }}}}" in value
                 ):
                     required_secret_names.add(name)
+        return {
+            "projectId": project_id,
+            "revision": revision,
+            "environment": environment,
+            "environmentId": environment_id,
+            "datasetVersionId": dataset_version_id,
+            "datasetVersion": dataset_version,
+            "rows": rows,
+            "flow": flow,
+            "flowSteps": flow_steps,
+            "secretNames": secret_names,
+            "requiredSecretNames": required_secret_names,
+            "upToStepId": up_to_step_id or None,
+            "agent": agent,
+        }
+
+    def insert_run_from_spec(
+        self,
+        spec: dict[str, Any],
+        *,
+        row: dict[str, Any],
+        created_by: str,
+        source: str,
+        dispatch_key: str | None = None,
+        batch_id: str | None = None,
+        batch_item_index: int | None = None,
+        retry_of_run_id: str | None = None,
+    ) -> str:
+        from .http import PlatformError
+
+        project_id = spec["projectId"]
+        revision = spec["revision"]
+        environment_id = spec["environmentId"]
+        environment = spec["environment"]
+        dataset_version = spec["datasetVersion"]
+        dataset_version_id = spec["datasetVersionId"]
+        flow = spec["flow"]
+        agent = spec["agent"]
+        up_to_step_id = spec["upToStepId"]
+        if dispatch_key:
+            existing = self.database.execute(
+                "SELECT id FROM platform_runs WHERE dispatch_key = ?",
+                (dispatch_key,),
+            ).fetchone()
+            if existing:
+                return existing[0]
+        snapshot_secret_names = [
+            name
+            for name in spec["secretNames"]
+            if name in spec["requiredSecretNames"]
+        ]
+        missing = self.missing_secret_names(project_id, snapshot_secret_names)
+        if missing:
+            raise PlatformError(409, "RUN_SECRET_NOT_CONFIGURED")
+        run_id = str(uuid.uuid4())
+        created_at = now()
+        snapshot = {
+            "flowRevisionId": revision["id"],
+            "flowRevisionChecksum": revision["checksum"],
+            "environmentId": environment_id,
+            "flow": flow,
+            "environment": environment,
+            "elements": parse_json(revision["element_snapshot"], []),
+            "dataset": (
+                {
+                    "datasetId": dataset_version["datasetId"],
+                    "versionId": dataset_version["id"],
+                    "versionNumber": dataset_version["versionNumber"],
+                    "checksum": dataset_version["checksum"],
+                    "columns": dataset_version["columns"],
+                }
+                if dataset_version
+                else None
+            ),
+            "datasetRow": (
+                {"number": row["rowNumber"], "data": row["data"]}
+                if row["data"] is not None
+                else None
+            ),
+            "secretNames": snapshot_secret_names,
+            "upToStepId": up_to_step_id,
+            "executor": {
+                "type": "managed",
+                "id": agent["id"],
+                "name": agent["name"],
+                "browserVersion": agent["browserVersion"],
+            },
+            "trigger": source,
+        }
+        if batch_id:
+            snapshot["batchId"] = batch_id
+            snapshot["batchItemIndex"] = batch_item_index
+        self.database.execute(
+            """
+            INSERT INTO platform_runs (
+              id, project_id, revision_id, environment_id, agent_id,
+              executor_type, dispatch_key, status, snapshot,
+              batch_id, batch_item_index, retry_of_run_id,
+              created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'managed', ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                project_id,
+                revision["id"],
+                environment_id,
+                agent["id"],
+                dispatch_key,
+                json(snapshot),
+                batch_id,
+                batch_item_index,
+                retry_of_run_id,
+                created_by,
+                created_at,
+                created_at,
+            ),
+        )
+        self.append_run_event(
+            run_id,
+            "run.queued",
+            {
+                "revisionId": revision["id"],
+                "environmentId": environment_id,
+                "executorType": "managed",
+                "source": source,
+                "datasetVersionId": dataset_version_id,
+                "datasetRow": row["rowNumber"],
+            },
+        )
+        return run_id
+
+    def queue_published_runs(self, input: dict[str, Any]) -> dict[str, Any]:
+        spec = self.resolve_run_spec(input)
         run_ids: list[str] = []
         self.database.execute("BEGIN IMMEDIATE")
         try:
-            for row in rows:
+            for row in spec["rows"]:
                 dispatch_key = (
                     f"{input['dispatchKey']}:{row['rowNumber'] or 0}"
                     if input.get("dispatchKey")
                     else None
                 )
-                if dispatch_key:
-                    existing = self.database.execute(
-                        "SELECT id FROM platform_runs WHERE dispatch_key = ?",
-                        (dispatch_key,),
-                    ).fetchone()
-                    if existing:
-                        run_ids.append(existing[0])
-                        continue
-                snapshot_secret_names = [
-                    name for name in secret_names if name in required_secret_names
-                ]
-                missing = self.missing_secret_names(
-                    project_id, snapshot_secret_names
+                run_ids.append(
+                    self.insert_run_from_spec(
+                        spec,
+                        row=row,
+                        created_by=input["createdBy"],
+                        source=input["source"],
+                        dispatch_key=dispatch_key,
+                    )
                 )
-                if missing:
-                    raise PlatformError(409, "RUN_SECRET_NOT_CONFIGURED")
-                run_id = str(uuid.uuid4())
-                created_at = now()
-                snapshot = {
-                    "flowRevisionId": revision["id"],
-                    "flowRevisionChecksum": revision["checksum"],
-                    "environmentId": environment_id,
-                    "flow": flow,
-                    "environment": environment,
-                    "elements": parse_json(revision["element_snapshot"], []),
-                    "dataset": (
-                        {
-                            "datasetId": dataset_version["datasetId"],
-                            "versionId": dataset_version["id"],
-                            "versionNumber": dataset_version["versionNumber"],
-                            "checksum": dataset_version["checksum"],
-                            "columns": dataset_version["columns"],
-                        }
-                        if dataset_version
-                        else None
-                    ),
-                    "datasetRow": (
-                        {"number": row["rowNumber"], "data": row["data"]}
-                        if row["data"] is not None
-                        else None
-                    ),
-                    "secretNames": snapshot_secret_names,
-                    "upToStepId": up_to_step_id or None,
-                    "executor": {
-                        "type": "managed",
-                        "id": agent["id"],
-                        "name": agent["name"],
-                        "browserVersion": agent["browserVersion"],
-                    },
-                    "trigger": input["source"],
-                }
-                self.database.execute(
-                    """
-                    INSERT INTO platform_runs (
-                      id, project_id, revision_id, environment_id, agent_id,
-                      executor_type, dispatch_key, status, snapshot,
-                      created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'managed', ?, 'queued', ?, ?, ?, ?)
-                    """,
-                    (
-                        run_id,
-                        project_id,
-                        revision["id"],
-                        environment_id,
-                        agent["id"],
-                        dispatch_key,
-                        json(snapshot),
-                        input["createdBy"],
-                        created_at,
-                        created_at,
-                    ),
-                )
-                self.append_run_event(
-                    run_id,
-                    "run.queued",
-                    {
-                        "revisionId": revision["id"],
-                        "environmentId": environment_id,
-                        "executorType": "managed",
-                        "source": input["source"],
-                        "datasetVersionId": dataset_version_id,
-                        "datasetRow": row["rowNumber"],
-                    },
-                )
-                run_ids.append(run_id)
             self.database.execute("COMMIT")
         except Exception:
             self.database.execute("ROLLBACK")
@@ -1339,10 +1396,503 @@ class PlatformServices:
             self.enqueue_managed_run(run_id)
         return {
             "runIds": run_ids,
-            "revision": revision,
-            "environmentId": environment_id,
-            "datasetVersionId": dataset_version_id,
+            "revision": spec["revision"],
+            "environmentId": spec["environmentId"],
+            "datasetVersionId": spec["datasetVersionId"],
         }
+
+    BATCH_MIN_FLOWS = 2
+    BATCH_MAX_FLOWS = 20
+    BATCH_MAX_TOTAL_STEPS = 2000
+
+    _RUN_BATCH_COUNTS_CTE = """
+        counts AS (
+          SELECT batch_id,
+                 COUNT(*) AS total,
+                 SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+                 SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
+                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                 SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) AS canceled,
+                 COUNT(*) - SUM(
+                   CASE WHEN status IN ('queued', 'running') THEN 1 ELSE 0 END
+                 ) AS completed
+          FROM platform_runs
+          WHERE batch_id IS NOT NULL
+          GROUP BY batch_id
+        )
+    """
+
+    _RUN_BATCH_STATUS_EXPR = """
+            CASE
+              WHEN COALESCE(c.total, 0) = 0 THEN 'queued'
+              WHEN COALESCE(c.queued, 0) = COALESCE(c.total, 0) THEN 'queued'
+              WHEN COALESCE(c.running, 0) > 0
+                OR (COALESCE(c.queued, 0) > 0 AND COALESCE(c.completed, 0) > 0)
+                THEN 'running'
+              WHEN COALESCE(c.success, 0) = COALESCE(c.total, 0) THEN 'success'
+              WHEN COALESCE(c.canceled, 0) = COALESCE(c.total, 0) THEN 'canceled'
+              WHEN COALESCE(c.completed, 0) = COALESCE(c.total, 0)
+                AND COALESCE(c.success, 0) > 0 THEN 'partial_failed'
+              WHEN COALESCE(c.completed, 0) = COALESCE(c.total, 0)
+                AND COALESCE(c.failed, 0) > 0 THEN 'failed'
+              ELSE 'running'
+            END
+    """
+
+    def _run_batch_response(self, row: Any) -> dict[str, Any]:
+        total = int(row[12] or 0)
+        queued = int(row[13] or 0)
+        running = int(row[14] or 0)
+        success = int(row[15] or 0)
+        failed = int(row[16] or 0)
+        canceled = int(row[17] or 0)
+        completed = success + failed + canceled
+        return {
+            "id": row[0],
+            "projectId": row[1],
+            "environmentId": row[2],
+            "clientRequestId": row[3],
+            "source": row[4],
+            "retryOfBatchId": row[5],
+            "flowIds": parse_json(row[6], []),
+            "cancellationRequested": bool(row[7]),
+            "createdBy": row[8],
+            "createdAt": row[9],
+            "updatedAt": row[10],
+            "status": row[11],
+            "counts": {
+                "total": total,
+                "queued": queued,
+                "running": running,
+                "success": success,
+                "failed": failed,
+                "canceled": canceled,
+                "completed": completed,
+            },
+        }
+
+    def _run_batch_select(self) -> str:
+        status_expr = " ".join(
+            line.strip() for line in self._RUN_BATCH_STATUS_EXPR.splitlines()
+        ).strip()
+        return f"""
+        SELECT b.id, b.project_id, b.environment_id, b.client_request_id,
+               b.source, b.retry_of_batch_id, b.requested_flow_ids,
+               b.cancellation_requested, b.created_by, b.created_at, b.updated_at,
+               {status_expr} AS status,
+               COALESCE(c.total, 0) AS total, COALESCE(c.queued, 0) AS queued,
+               COALESCE(c.running, 0) AS running, COALESCE(c.success, 0) AS success,
+               COALESCE(c.failed, 0) AS failed, COALESCE(c.canceled, 0) AS canceled
+        """
+
+    def run_batch_by_id(self, project_id: str, batch_id: str) -> dict[str, Any]:
+        from .http import PlatformError
+
+        row = self.database.execute(
+            f"""
+            WITH {self._RUN_BATCH_COUNTS_CTE}
+            {self._run_batch_select()}
+            FROM run_batches b
+            LEFT JOIN counts c ON c.batch_id = b.id
+            WHERE b.id = ? AND b.project_id = ?
+            """,
+            (batch_id, project_id),
+        ).fetchone()
+        if not row:
+            raise PlatformError(404, "RUN_BATCH_NOT_FOUND")
+        return self._run_batch_response(row)
+
+    def run_batches_page(
+        self,
+        project_id: str,
+        page: int,
+        page_size: int,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        params: list[Any] = [project_id]
+        status_filter = ""
+        if status:
+            status_filter = "WHERE status = ?"
+            params.append(status)
+        rows = self.database.execute(
+            f"""
+            WITH {self._RUN_BATCH_COUNTS_CTE}
+            SELECT * FROM (
+              {self._run_batch_select()}
+              FROM run_batches b
+              LEFT JOIN counts c ON c.batch_id = b.id
+              WHERE b.project_id = ?
+              ORDER BY b.created_at DESC, b.id DESC
+            ) {status_filter}
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_size, (page - 1) * page_size),
+        ).fetchall()
+        total_row = self.database.execute(
+            f"""
+            WITH {self._RUN_BATCH_COUNTS_CTE}
+            SELECT COUNT(*) FROM (
+              {self._run_batch_select()}
+              FROM run_batches b
+              LEFT JOIN counts c ON c.batch_id = b.id
+              WHERE b.project_id = ?
+            ) {status_filter}
+            """,
+            tuple(params),
+        ).fetchone()
+        return {
+            "batches": [self._run_batch_response(row) for row in rows],
+            "total": int(total_row[0] or 0),
+            "page": page,
+            "pageSize": page_size,
+        }
+
+    def batch_runs(self, project_id: str, batch_id: str) -> list[dict[str, Any]]:
+        rows = self.database.execute(
+            """
+            SELECT id, project_id, revision_id, environment_id, agent_id,
+                   executor_type, status, snapshot, cancellation_requested,
+                   result, created_at, updated_at, batch_item_index,
+                   retry_of_run_id
+            FROM platform_runs
+            WHERE batch_id = ? AND project_id = ?
+            ORDER BY batch_item_index ASC
+            """,
+            (batch_id, project_id),
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "projectId": row[1],
+                "revisionId": row[2],
+                "environmentId": row[3],
+                "agentId": row[4],
+                "executorType": row[5],
+                "status": row[6],
+                "snapshot": parse_json(row[7], {}),
+                "cancellationRequested": bool(row[8]),
+                "result": parse_json(row[9], None),
+                "createdAt": row[10],
+                "updatedAt": row[11],
+                "batchItemIndex": row[12],
+                "retryOfRunId": row[13],
+            }
+            for row in rows
+        ]
+
+    def _validate_batch_input(self, input: dict[str, Any]) -> list[str]:
+        from .http import PlatformError
+
+        flow_ids = input.get("flowIds")
+        if not isinstance(flow_ids, list) or not all(
+            isinstance(value, str) and value.strip() for value in flow_ids
+        ):
+            raise PlatformError(400, "BATCH_FLOW_IDS_INVALID")
+        flow_ids = [value.strip() for value in flow_ids]
+        if len(set(flow_ids)) != len(flow_ids):
+            raise PlatformError(400, "BATCH_DUPLICATE_FLOW")
+        if not (
+            self.BATCH_MIN_FLOWS
+            <= len(flow_ids)
+            <= self.BATCH_MAX_FLOWS
+        ):
+            raise PlatformError(400, "BATCH_FLOW_COUNT_INVALID")
+        if not (input.get("environmentId") or "").strip():
+            raise PlatformError(400, "ENVIRONMENT_REQUIRED")
+        if not (input.get("clientRequestId") or "").strip():
+            raise PlatformError(400, "BATCH_CLIENT_REQUEST_ID_REQUIRED")
+        if (
+            input.get("revisionId")
+            or input.get("datasetVersionId")
+            or input.get("upToStepId")
+        ):
+            raise PlatformError(400, "BATCH_INPUT_NOT_SUPPORTED")
+        return flow_ids
+
+    def _existing_run_batch(
+        self, project_id: str, client_request_id: str
+    ) -> dict[str, Any] | None:
+        existing = self.database.execute(
+            """
+            SELECT id FROM run_batches
+            WHERE project_id = ? AND client_request_id = ?
+            """,
+            (project_id, client_request_id),
+        ).fetchone()
+        if not existing:
+            return None
+        return self.run_batch_by_id(project_id, existing[0])
+
+    def _insert_run_batch(
+        self,
+        *,
+        project_id: str,
+        environment_id: str,
+        client_request_id: str,
+        flow_ids: list[str],
+        created_by: str,
+        specs: list[dict[str, Any]],
+        retry_of_batch_id: str | None = None,
+        retry_of_run_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        import sqlite3
+
+        from .http import PlatformError
+
+        batch_id = str(uuid.uuid4())
+        created_at = now()
+        run_ids: list[str] = []
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            self.database.execute(
+                """
+                INSERT INTO run_batches (
+                  id, project_id, environment_id, client_request_id, source,
+                  retry_of_batch_id, requested_flow_ids, cancellation_requested,
+                  created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'manual', ?, ?, 0, ?, ?, ?)
+                """,
+                (
+                    batch_id,
+                    project_id,
+                    environment_id,
+                    client_request_id,
+                    retry_of_batch_id,
+                    json(flow_ids),
+                    created_by,
+                    created_at,
+                    created_at,
+                ),
+            )
+            for index, spec in enumerate(specs):
+                run_ids.append(
+                    self.insert_run_from_spec(
+                        spec,
+                        row={"rowNumber": None, "data": None},
+                        created_by=created_by,
+                        source="manual",
+                        batch_id=batch_id,
+                        batch_item_index=index,
+                        retry_of_run_id=(
+                            retry_of_run_ids[index]
+                            if retry_of_run_ids
+                            else None
+                        ),
+                    )
+                )
+            self.database.execute("COMMIT")
+        except sqlite3.IntegrityError:
+            self.database.execute("ROLLBACK")
+            existing = self._existing_run_batch(project_id, client_request_id)
+            if existing is None:
+                raise
+            if (
+                existing["environmentId"] != environment_id
+                or existing["flowIds"] != flow_ids
+            ):
+                raise PlatformError(409, "IDEMPOTENCY_KEY_REUSED")
+            return {
+                "batch": existing,
+                "runs": self.batch_runs(project_id, existing["id"]),
+                "replayed": True,
+            }
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+        for run_id in run_ids:
+            self.enqueue_managed_run(run_id)
+        return {
+            "batch": self.run_batch_by_id(project_id, batch_id),
+            "runs": self.batch_runs(project_id, batch_id),
+            "replayed": False,
+        }
+
+    def create_run_batch(self, input: dict[str, Any]) -> dict[str, Any]:
+        from .http import PlatformError
+
+        project_id = input["projectId"]
+        flow_ids = self._validate_batch_input(input)
+        environment_id = input["environmentId"].strip()
+        client_request_id = input["clientRequestId"].strip()
+        existing = self._existing_run_batch(project_id, client_request_id)
+        if existing is not None:
+            if (
+                existing["environmentId"] != environment_id
+                or existing["flowIds"] != flow_ids
+            ):
+                raise PlatformError(409, "IDEMPOTENCY_KEY_REUSED")
+            return {
+                "batch": existing,
+                "runs": self.batch_runs(project_id, existing["id"]),
+                "replayed": True,
+            }
+        specs: list[dict[str, Any]] = []
+        preflight_errors: list[dict[str, str]] = []
+        total_steps = 0
+        for flow_id in flow_ids:
+            try:
+                spec = self.resolve_run_spec(
+                    {
+                        "projectId": project_id,
+                        "flowId": flow_id,
+                        "environmentId": environment_id,
+                    }
+                )
+                if not spec["flowSteps"]:
+                    raise PlatformError(400, "FLOW_HAS_NO_STEPS")
+                missing = self.missing_secret_names(
+                    project_id,
+                    [
+                        name
+                        for name in spec["secretNames"]
+                        if name in spec["requiredSecretNames"]
+                    ],
+                )
+                if missing:
+                    raise PlatformError(409, "RUN_SECRET_NOT_CONFIGURED")
+            except PlatformError as error:
+                preflight_errors.append({"flowId": flow_id, "code": error.code})
+                continue
+            total_steps += len(spec["flowSteps"])
+            specs.append(spec)
+        if preflight_errors:
+            raise PlatformError(
+                409,
+                "BATCH_PREFLIGHT_FAILED",
+                {"items": preflight_errors},
+            )
+        if total_steps > self.BATCH_MAX_TOTAL_STEPS:
+            raise PlatformError(413, "BATCH_TOTAL_STEPS_EXCEEDED")
+        return self._insert_run_batch(
+            project_id=project_id,
+            environment_id=environment_id,
+            client_request_id=client_request_id,
+            flow_ids=flow_ids,
+            created_by=input["createdBy"],
+            specs=specs,
+        )
+
+    def cancel_run_batch(
+        self, project_id: str, batch_id: str, actor_id: str
+    ) -> dict[str, Any]:
+        from .http import PlatformError
+
+        self.run_batch_by_id(project_id, batch_id)
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            self.database.execute(
+                """
+                UPDATE run_batches
+                SET cancellation_requested = 1, updated_at = ?
+                WHERE id = ? AND cancellation_requested = 0
+                """,
+                (now(), batch_id),
+            )
+            queued_rows = self.database.execute(
+                """
+                SELECT id FROM platform_runs
+                WHERE batch_id = ? AND project_id = ? AND status = 'queued'
+                """,
+                (batch_id, project_id),
+            ).fetchall()
+            if queued_rows:
+                self.database.execute(
+                    """
+                    UPDATE platform_runs
+                    SET status = 'canceled', updated_at = ?
+                    WHERE batch_id = ? AND project_id = ?
+                      AND status = 'queued'
+                    """,
+                    (now(), batch_id, project_id),
+                )
+            running_rows = self.database.execute(
+                """
+                SELECT id FROM platform_runs
+                WHERE batch_id = ? AND project_id = ? AND status = 'running'
+                  AND cancellation_requested = 0
+                """,
+                (batch_id, project_id),
+            ).fetchall()
+            if running_rows:
+                self.database.execute(
+                    """
+                    UPDATE platform_runs
+                    SET cancellation_requested = 1, updated_at = ?
+                    WHERE batch_id = ? AND project_id = ? AND status = 'running'
+                      AND cancellation_requested = 0
+                    """,
+                    (now(), batch_id, project_id),
+                )
+            affected = [row[0] for row in queued_rows] + [
+                row[0] for row in running_rows
+            ]
+            for run_id in affected:
+                self.append_run_event(
+                    run_id, "run.cancel_requested", {"actorId": actor_id}
+                )
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+        for row in running_rows:
+            self.cancel_managed_run(row[0])
+        return {
+            "batch": self.run_batch_by_id(project_id, batch_id),
+            "runs": self.batch_runs(project_id, batch_id),
+            "affectedQueued": len(queued_rows),
+            "affectedRunning": len(running_rows),
+        }
+
+    def retry_run_batch(
+        self,
+        project_id: str,
+        batch_id: str,
+        actor_id: str,
+        client_request_id: str,
+    ) -> dict[str, Any]:
+        from .http import PlatformError
+
+        batch = self.run_batch_by_id(project_id, batch_id)
+        if batch["status"] not in ("success", "partial_failed", "failed", "canceled"):
+            raise PlatformError(409, "BATCH_NOT_RETRYABLE")
+        runs = self.batch_runs(project_id, batch_id)
+        retry_items = [
+            run for run in runs if run["status"] in ("failed", "canceled")
+        ]
+        if not retry_items:
+            raise PlatformError(409, "BATCH_NOT_RETRYABLE")
+        specs = []
+        for run in retry_items:
+            specs.append(
+                self.resolve_run_spec(
+                    {
+                        "projectId": project_id,
+                        "revisionId": run["revisionId"],
+                        "environmentId": run["environmentId"],
+                        "allowSuperseded": True,
+                    }
+                )
+            )
+        existing = self._existing_run_batch(project_id, client_request_id)
+        if existing is not None:
+            raise PlatformError(409, "IDEMPOTENCY_KEY_REUSED")
+        retry_flow_ids: list[str] = []
+        for run in retry_items:
+            flow_id = as_record(run["snapshot"].get("flow")).get("id")
+            retry_flow_ids.append(
+                flow_id if isinstance(flow_id, str) else run["revisionId"]
+            )
+        return self._insert_run_batch(
+            project_id=project_id,
+            environment_id=batch["environmentId"],
+            client_request_id=client_request_id,
+            flow_ids=retry_flow_ids,
+            created_by=actor_id,
+            specs=specs,
+            retry_of_batch_id=batch_id,
+            retry_of_run_ids=[run["id"] for run in retry_items],
+        )
 
     def run_by_id(self, run_id: str) -> dict[str, Any]:
         from .http import PlatformError

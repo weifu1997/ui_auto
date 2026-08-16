@@ -32,10 +32,13 @@ def send_error(status: int, error: str) -> tuple[int, dict[str, str], str]:
 
 
 class PlatformError(Exception):
-    def __init__(self, status: int, code: str):
+    def __init__(
+        self, status: int, code: str, detail: dict[str, Any] | None = None
+    ):
         super().__init__(code)
         self.status = status
         self.code = code
+        self.detail = detail
 
 
 class ErrorResponseOptions:
@@ -57,7 +60,10 @@ def error_response(
     else:
         opts = options or ErrorResponseOptions()
     if isinstance(error, PlatformError):
-        return {"status": error.status, "code": error.code}
+        response: dict[str, Any] = {"status": error.status, "code": error.code}
+        if error.detail:
+            response.update(error.detail)
+        return response
     if opts.expose_message and isinstance(error, BaseException):
         message = str(error)
         if "NOT_FOUND" in message:

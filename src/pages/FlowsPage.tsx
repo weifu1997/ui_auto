@@ -1,7 +1,7 @@
 import { message } from "../antd-feedback";
 import { localWorkerRunRequest } from "../local-worker-run";
 import type { Flow, Project, Run } from "../mock-data";
-import { PlatformApiError, createPlatformRun, getPlatformRevisions, savePlatformSecret } from "../platform-api";
+import { PlatformApiError, createPlatformRun, createPlatformRunBatch, getPlatformRevisions, savePlatformSecret } from "../platform-api";
 import type { PlatformRevision } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
@@ -11,7 +11,7 @@ import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyF
 import { createRun } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
-import { Button, Drawer, Empty, Form, Input, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
+import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useRef, useState } from "react";
 
@@ -178,6 +178,63 @@ export function FlowsPage({ project }: { project: Project }) {
   };
   const isFlowRunnable = (flowId: string) =>
     publishedFlowIds === null || publishedFlowIds.has(flowId);
+  const platformMode = Boolean(platformToken && platformProjectIdValue);
+  const [selectedFlowIds, setSelectedFlowIds] = useState<string[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  const [batchEnvironmentId, setBatchEnvironmentId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    setSelectedFlowIds((ids) => {
+      const valid = new Set(items.map((flow) => flow.id));
+      const next = ids.filter((id) => valid.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [items]);
+  const selectedFlows = items.filter((flow) => selectedFlowIds.includes(flow.id));
+  const batchTotalSteps = selectedFlows.reduce(
+    (sum, flow) => sum + (flow.definition?.length ?? 0),
+    0,
+  );
+  const batchPreflightHint = (code: string) => {
+    if (code === "PUBLISHED_REVISION_REQUIRED") return "当前环境没有已发布版本";
+    if (code === "REVISION_ENVIRONMENT_MISMATCH") return "版本与环境不匹配";
+    if (code === "FLOW_HAS_NO_STEPS") return "流程没有步骤";
+    if (code === "RUN_SECRET_NOT_CONFIGURED") return "缺少密钥配置";
+    if (code === "AGENT_BROWSER_UNSUPPORTED") return "环境浏览器不受支持";
+    return code;
+  };
+  const submitBatchRun = async () => {
+    if (!platformToken || !platformProjectIdValue || !batchEnvironmentId) return;
+    if (selectedFlows.length < 2) return;
+    setBatchSubmitting(true);
+    try {
+      const result = await createPlatformRunBatch(platformToken, platformProjectIdValue, {
+        flowIds: selectedFlows.map((flow) => flow.id),
+        environmentId: batchEnvironmentId,
+        clientRequestId: crypto.randomUUID(),
+      });
+      message.success(`已创建批次（${result.batch.counts.total} 个流程，串行执行）`);
+      setSelectedFlowIds([]);
+      setBatchOpen(false);
+      navigate(`/project/${project.id}/runs?batch=${encodeURIComponent(result.batch.id)}`);
+    } catch (error) {
+      if (
+        error instanceof PlatformApiError
+        && error.code === "BATCH_PREFLIGHT_FAILED"
+        && error.items?.length
+      ) {
+        const details = error.items.map((item) => {
+          const flow = items.find((candidate) => candidate.id === item.flowId);
+          return `${flow?.name ?? item.flowId}：${batchPreflightHint(item.code)}`;
+        });
+        message.error(`部分流程无法执行，请修正后重新提交——${details.join("；")}`);
+        return;
+      }
+      message.error("创建批量运行失败，请检查执行服务与运行环境");
+    } finally {
+      setBatchSubmitting(false);
+    }
+  };
   const columns: TableColumnsType<Flow> = [
     {
       title: "流程",
@@ -317,17 +374,68 @@ export function FlowsPage({ project }: { project: Project }) {
             { value: "回归", label: "回归" },
           ]}
         />
+        {platformMode && canRunFlow && (
+          <Button
+            icon={<PlayCircleFilled />}
+            disabled={selectedFlowIds.length < 2 || selectedFlowIds.length > 20}
+            onClick={() => {
+              setBatchEnvironmentId(activeEnvironment?.id);
+              setBatchOpen(true);
+            }}
+          >
+            批量运行（{selectedFlowIds.length}）
+          </Button>
+        )}
       </div>
       <section className="surface">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={filtered}
+          rowSelection={platformMode && canRunFlow ? {
+            selectedRowKeys: selectedFlowIds,
+            onChange: (keys) => setSelectedFlowIds(keys.map(String)),
+            getCheckboxProps: (flow) => ({ disabled: !isFlowRunnable(flow.id) }),
+          } : undefined}
           pagination={{ pageSize: 8, showSizeChanger: false }}
           scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty description="尚无流程" /> }}
         />
       </section>
+      <Modal
+        title="批量运行"
+        open={batchOpen}
+        okText="创建批次"
+        cancelText="取消"
+        confirmLoading={batchSubmitting}
+        okButtonProps={{ disabled: selectedFlows.length < 2 || !batchEnvironmentId }}
+        onCancel={() => setBatchOpen(false)}
+        onOk={() => void submitBatchRun()}
+      >
+        <Form layout="vertical">
+          <Form.Item label="环境" required>
+            <Select
+              aria-label="批量运行环境"
+              value={batchEnvironmentId}
+              onChange={setBatchEnvironmentId}
+              options={environments.map((environment) => ({
+                value: environment.id,
+                label: environment.name,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item label={`流程（${selectedFlows.length} 个，共 ${batchTotalSteps} 步）`}>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {selectedFlows.map((flow) => (
+                <li key={flow.id}>{flow.name}</li>
+              ))}
+            </ul>
+          </Form.Item>
+        </Form>
+        <div className="drawer-note">
+          批次按提交顺序串行执行（同一时间最多一个运行）；每个流程完成或失败后自动执行下一个，并可能产生多条完成通知。
+        </div>
+      </Modal>
       <NewFlowDrawer
         open={draftOpen}
         project={project}
