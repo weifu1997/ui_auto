@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>录制 PoC · 登录</title></head>
+<body>
+  <h1>测试登录</h1>
+  <form onsubmit="return false">
+    <p><label>用户名 <input data-testid="login-username" name="username" autocomplete="off"></label></p>
+    <p><label>密码 <input data-testid="login-password" name="password" type="password"></label></p>
+    <p><label>角色
+      <select data-testid="login-role" name="role">
+        <option value="admin">管理员</option>
+        <option value="tester">测试员</option>
+      </select>
+    </label></p>
+    <p><label><input data-testid="login-remember" type="checkbox"> 记住我</label></p>
+    <p><button type="button" data-testid="login-submit" id="login-submit">登录</button></p>
+  </form>
+  <iframe src="child.html" title="嵌入选区" width="320" height="60"></iframe>
+  <script>
+    document.getElementById("login-submit").addEventListener("click", () => {
+      location.href = "page2.html";
+    });
+  </script>
+</body>
+</html>
