@@ -248,3 +248,25 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: P0 revision selection implemented; planning converged; E2E legacy failures tracked
+
+**Date**: 2026-08-16
+**Task**: P0 revision selection implemented; planning converged; E2E legacy failures tracked
+**Branch**: `master`
+
+### Summary
+
+需求细化:8 个产品决策收敛(retry 按原快照、整批拒绝、录制同源/登录态快照注入/URL 脱敏、取消复用状态机、批次创建时间排序、未发布禁用入口)。实现 P0 flow-revision-selection-correctness:resolver 支持 flow/environment 约束并删除项目级回退,重试接受 superseded,手工入口携带 flowId,FlowsPage 禁用未发布流程运行;新增 8 个服务层测试,E2E fixture 改为 flowId 解析。门禁:build/lint/unit 30/py 76 全过;test:e2e 24 过 11 个遗留失败(基线复现,与改动无关)并立项 08-16-legacy-e2e-failures。P0 已归档,batch/recording 解锁待批准开工。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad8b061` | (see git log) |
+| `68c59e8` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
-- **Last Active**: 2026-08-15
+- **Total Sessions**: 12
+- **Last Active**: 2026-08-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~250 | Active |
+| `journal-1.md` | ~272 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-08-16 | P0 revision selection implemented; planning converged; E2E legacy failures tracked | `ad8b061`, `68c59e8` | `master` |
 | 11 | 2026-08-15 | P2 前端包体优化 | `3249922` | `master` |
 | 10 | 2026-08-15 | P2 运行与投递记录分页 | `4d96115` | `master` |
 | 9 | 2026-08-15 | P2 自动化编辑能力 | `954b7d0` | `master` |
