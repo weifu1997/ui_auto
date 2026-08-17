@@ -72,6 +72,13 @@
 - [ ] 回归本地 Picker、元素验证、手工流程编辑、资源同步、revision canonicalization 和单流程运行。
 - [ ] 补充用户文档：MVP 支持动作、明确不支持项、敏感变量绑定和会话回收行为；不写入真实账号或 secret。
 
+### 2026-08-18 收尾验证
+
+- `npm run lint`、`npm run build`、`npm run test:unit`（30）、`npm run check:bundle` 和 `npm run test:py`（107）均通过。
+- `npm run test:e2e -- tests/recording.spec.ts`：1/1 通过，覆盖创建录制会话、sessionStorage 恢复控制状态、暂停/继续、停止 review、定位器校验和原子导入草稿。
+- 后端专项覆盖启动/导航稳定错误、页面关闭或浏览器断连后的失败终态与资源回收、暂停 seq、不支持 `contenteditable`/拖拽 warning，以及审计幂等。
+- 尚未以专项闭环验证的部分保持未完成：导入后保存并由 ManagedRunner 重放（AC7）、真实页面的完整敏感变量绑定链路（AC5）、完整 handler 权限矩阵及用户文档；P0 retry snapshot follow-up 仍是最终发布 gate。
+
 ## Validation Commands
 
 ```bash

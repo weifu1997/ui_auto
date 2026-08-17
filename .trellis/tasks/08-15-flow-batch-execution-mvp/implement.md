@@ -90,6 +90,12 @@ npm run test:windows
 - `npm run test:windows`：未运行（Linux 环境）。
 - 残余：E2E 级取消/重试交互、服务重启进程退出级恢复模拟、handler 层权限专项测试未覆盖（权限由 handler `run.execute` capability + 项目范围 404 保证，行为由服务层契约测试覆盖）；用户文档更新未做。
 
+### 2026-08-18 收尾验证
+
+- `npm run lint`、`npm run build`、`npm run test:unit`（30）、`npm run check:bundle` 和 `npm run test:py`（107）均通过。
+- `npm run test:e2e -- tests/batch-run.spec.ts`：2/2 通过；新增场景覆盖 queued 批次取消、仅重试取消项、跳转到新 batch URL，以及刷新后从服务端恢复定位。
+- 仍未闭环：执行器级“前项失败后继续”专项测试（AC4）、P0 retry snapshot 的 checksum/dataset/upToStepId 完整性（AC7）、进程退出级 queued 恢复（AC8）、handler 权限/跨项目专项测试（AC10）及用户文档。
+
 ## Review Gates
 
 - [ ] 单流程和 batch 都不会按项目最新任意 revision 猜测流程。
