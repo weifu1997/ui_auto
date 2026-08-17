@@ -41,7 +41,7 @@ test("records, recovers controls, reviews, validates, and imports a flow draft",
   await createFlow(page);
 
   const calls = await configurePlatformRecordingUiMocks(page, "project");
-  await page.getByRole("button", { name: "录制回归流程" }).click();
+  await page.locator(".name-link", { hasText: "录制回归流程" }).click();
 
   await page.getByRole("button", { name: "录制" }).click();
   await page.getByLabel("录制起始 URL").fill("https://default.example.test/login?token=discarded");
@@ -65,6 +65,6 @@ test("records, recovers controls, reviews, validates, and imports a flow draft",
   await expect(review.getByText(/不支持的 iframe/)).toBeVisible();
   await review.getByRole("button", { name: "确认导入" }).click();
 
-  await expect(page.getByText("录制点击登录")).toBeVisible();
+  await expect(page.locator(".step-list").getByText("录制点击登录", { exact: true })).toBeVisible();
   expect(calls.validations).toHaveLength(1);
 });
