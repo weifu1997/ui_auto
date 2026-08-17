@@ -270,3 +270,25 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 补齐批量执行与流程录制收尾回归
+
+**Date**: 2026-08-18
+**Task**: 补齐批量执行与流程录制收尾回归
+**Branch**: `master`
+
+### Summary
+
+补齐批次取消、重试与刷新恢复 E2E；修复 revision 默认 dataset 的批次预检和录制暂停输入边界；完成 lint、build、bundle、30 个前端单测、107 个 Python 测试及专项 Playwright 验证。任务保留 in_progress：batch 的 AC4/AC7/AC8/AC10 与 recording 的保存后重放、敏感绑定、权限矩阵、用户文档仍待完成。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a6720a3` | (see git log) |
+| `0fb8631` | (see git log) |
+
+### Status
+
+[OK] **Completed**
