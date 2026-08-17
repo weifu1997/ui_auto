@@ -344,6 +344,10 @@ class RecorderNormalizer:
         """Return a non-mutating preview count for the recording toolbar."""
         return len(self._steps) + (1 if self._pending is not None else 0)
 
+    def flush_pending(self) -> None:
+        """Commit an in-progress input at an explicit recording boundary."""
+        self._flush_pending()
+
     def _note_navigation(self, url: str, at: int) -> None:
         target = sanitize_url(url)
         if not target:
@@ -953,6 +957,9 @@ class RecordingCoordinator:
         session = self._require_session(session_id)
         with self._lock:
             if session["status"] == "recording":
+                normalizer = session.get("normalizer")
+                if isinstance(normalizer, RecorderNormalizer):
+                    normalizer.flush_pending()
                 session["status"] = "paused"
         return self.session_response(session)
 

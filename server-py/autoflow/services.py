@@ -2002,6 +2002,10 @@ class PlatformServices:
                         "environmentId": environment_id,
                     }
                 )
+                # A revision can carry a dataset default even when the batch
+                # request does not. Batches are intentionally one run per flow.
+                if spec["datasetVersionId"]:
+                    raise PlatformError(400, "BATCH_INPUT_NOT_SUPPORTED")
                 if not spec["flowSteps"]:
                     raise PlatformError(400, "FLOW_HAS_NO_STEPS")
                 missing = self.missing_secret_names(

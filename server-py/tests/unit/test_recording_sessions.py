@@ -240,6 +240,8 @@ def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
     browser["page"].handlers["framenavigated"](browser["page"])
     assert coordinator.events_after(created["id"], 0)["lastSeq"] >= 3
 
+    emit({"kind": "input", "url": "https://app.test/home",
+          "element": {"tag": "input", "testid": "search"}, "value": "before-pause", "at": 25})
     coordinator.pause(created["id"])
     seq_before = coordinator.events_after(created["id"], 0)["lastSeq"]
     emit({"kind": "input", "url": "https://app.test/home",
@@ -250,6 +252,8 @@ def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
         event for event in after_pause["events"] if event.get("value") == "ignored"
     ]
     coordinator.resume(created["id"])
+    emit({"kind": "input", "url": "https://app.test/home",
+          "element": {"tag": "input", "testid": "search"}, "value": "after-resume", "at": 35})
 
     stopped = coordinator.stop(created["id"])
     assert stopped["status"] == "stopped"
@@ -261,6 +265,8 @@ def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
         ("填写", "tester"),
         ("点击", None),
         ("打开页面", "/home"),
+        ("填写", "before-pause"),
+        ("填写", "after-resume"),
     ]
     assert browser["context"].closed and browser["browser"].closed
     assert browser["playwright"].stopped

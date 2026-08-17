@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from fastapi import Request
 
 from autoflow.core import json
@@ -49,6 +50,7 @@ def _insert_revision(
     status="published",
     published_at="2026-08-16T00:00:00.000Z",
     steps=(),
+    dataset_snapshot=None,
 ):
     revision_number = 1 + services.database.execute(
         "SELECT COUNT(*) FROM flow_revisions WHERE project_id = ?",
@@ -74,7 +76,7 @@ def _insert_revision(
             json({"id": flow_id, "name": f"Flow {flow_id}", "steps": list(steps)}),
             json({"id": environment_id, "name": "Env", "browser": "Chromium"}),
             "[]",
-            "{}",
+            json(dataset_snapshot or {}),
             f"checksum-{revision_id}",
             "owner-1",
             published_at,
@@ -175,6 +177,56 @@ def test_batch_preflight_failure_rejects_whole_batch(tmp_path):
             assert exc.detail == {
                 "items": [{"flowId": "flow-missing", "code": "PUBLISHED_REVISION_REQUIRED"}]
             }
+        assert _batch_count(services, project_id) == 0
+        assert _run_count(services, project_id) == 0
+    finally:
+        services.close()
+
+
+def test_batch_preflight_rejects_revision_configured_dataset(tmp_path):
+    services, project_id = _setup_services(tmp_path)
+    try:
+        services.database.execute(
+            """
+            INSERT INTO datasets (id, project_id, name, description, created_by, created_at, updated_at)
+            VALUES ('dataset-1', ?, 'Dataset', '', 'owner-1', '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')
+            """,
+            (project_id,),
+        )
+        services.database.execute(
+            """
+            INSERT INTO dataset_versions (
+              id, dataset_id, version_number, columns_json, row_count, checksum,
+              source_name, created_by, created_at
+            ) VALUES ('dataset-version-1', 'dataset-1', 1, '[]', 0, 'dataset-checksum', 'test', 'owner-1', '2026-08-16T00:00:00.000Z')
+            """
+        )
+        _insert_revision(
+            services,
+            project_id,
+            "revision-a",
+            "flow-a",
+            steps=[{"id": "a-1"}],
+            dataset_snapshot={"versionId": "dataset-version-1"},
+        )
+        _insert_revision(
+            services, project_id, "revision-b", "flow-b", steps=[{"id": "b-1"}]
+        )
+
+        with pytest.raises(PlatformError) as error:
+            services.create_run_batch(
+                {
+                    "projectId": project_id,
+                    "flowIds": ["flow-a", "flow-b"],
+                    "environmentId": "env-1",
+                    "clientRequestId": "key-1",
+                    "createdBy": "owner-1",
+                }
+            )
+        assert error.value.code == "BATCH_PREFLIGHT_FAILED"
+        assert error.value.detail == {
+            "items": [{"flowId": "flow-a", "code": "BATCH_INPUT_NOT_SUPPORTED"}]
+        }
         assert _batch_count(services, project_id) == 0
         assert _run_count(services, project_id) == 0
     finally:

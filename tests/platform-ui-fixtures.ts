@@ -47,6 +47,10 @@ type MockBatch = {
   retryOfBatchId: string | null;
 };
 
+type PlatformRunUiMockOptions = {
+  batchRunStatus?: "queued" | "running" | "success" | "failed" | "canceled";
+};
+
 const session = {
   token: "platform-ui-token",
   user: { id: "platform-ui-user", email: "platform-ui@example.test", name: "Platform UI user" },
@@ -66,7 +70,12 @@ async function configurePlatformSession(
 }
 
 // These routes validate UI request composition only. They do not execute a browser flow.
-export async function configurePlatformRunUiMocks(page: Page, localProjectId: string, platformProjectId = `platform-${localProjectId}`) {
+export async function configurePlatformRunUiMocks(
+  page: Page,
+  localProjectId: string,
+  { batchRunStatus = "success" }: PlatformRunUiMockOptions = {},
+) {
+  const platformProjectId = `platform-${localProjectId}`;
   const calls: PlatformUiCalls = { revisions: [], secrets: [], runs: [], batches: [] };
   const runs: MockRun[] = [];
 
@@ -168,7 +177,12 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
         ? revisions.find((revision) => revision.flow.id === flowId)
         : revisions[0];
   };
-  const buildRun = (revision: FixtureRevision, environmentId: unknown, runKey: string): MockRun => {
+  const buildRun = (
+    revision: FixtureRevision,
+    environmentId: unknown,
+    runKey: string,
+    status = "success",
+  ): MockRun => {
     const flow = revision.flow as { steps?: Array<Record<string, unknown>> };
     return {
       id: `platform-run-${runKey}`,
@@ -176,7 +190,7 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
       revisionId: revision.id,
       environmentId,
       agentId: "platform-ui-agent",
-      status: "success",
+      status,
       snapshot: { flow: revision.flow, environment: revision.environment, elements: revision.elements },
       cancellationRequested: false,
       createdAt: "2030-01-01T00:00:00.000Z",
@@ -307,7 +321,12 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
         retryOfBatchId: null,
       };
       specs.forEach((spec) => {
-        const run = buildRun(spec as FixtureRevision, environmentId, `batch-${batches.length + 1}-${batch.childRunIds.length}`);
+        const run = buildRun(
+          spec as FixtureRevision,
+          environmentId,
+          `batch-${batches.length + 1}-${batch.childRunIds.length}`,
+          batchRunStatus,
+        );
         runs.unshift(run);
         batch.childRunIds.push(run.id);
       });
@@ -355,7 +374,12 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
       };
       retryItems.forEach((prior) => {
         const revision = revisionById.get(String(prior.revisionId)) ?? revisions[0];
-        const run = buildRun(revision, source.environmentId, `batch-${batches.length + 1}-${retry.childRunIds.length}`);
+        const run = buildRun(
+          revision,
+          source.environmentId,
+          `batch-${batches.length + 1}-${retry.childRunIds.length}`,
+          batchRunStatus,
+        );
         runs.unshift(run);
         retry.childRunIds.push(run.id);
       });
