@@ -8,19 +8,21 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 
 ## Background And Evidence
 
-- 流程列表目前只有逐行运行入口，见 `src/pages/FlowsPage.tsx:69`、`:194`。
+以下实现缺口描述是 2026-08-15 建任务时的历史基线；当前完成度以本 PRD 的 Acceptance Criteria 和 implement.md 为准。
+
+- 规划起点流程列表只有逐行运行入口，见 `src/pages/FlowsPage.tsx:69`、`:194`；后续并行工作已增加 batch 入口，仍需按本任务门禁收尾。
 - 单运行 API 已支持持久快照、`queued/running/success/failed/canceled` 状态、取消、失败重试和服务重启后恢复排队任务，见 `server-py/autoflow/services.py:1112`、`:1191`、`:1298`，`server-py/autoflow/handler.py:3022`、`:3057`。
 - ManagedRunner 是进程内单并发 FIFO，运行与元素验证共用队列，见 `server-py/autoflow/managed_runner.py:12`、`:22`。
-- 数据集可让一次请求生成同一 revision 的多条 run，但当前没有跨流程 batch 实体，见 `server-py/autoflow/services.py:1145`。
-- 当前单流程入口只传 `environmentId`，见 `src/pages/FlowsPage.tsx:94`；服务端省略 revision 时选择项目最近发布的任意 revision，而不是当前流程，见 `server-py/autoflow/services.py:715`。批量功能前必须修复这个 correctness 缺陷。
+- 规划起点数据集可让一次请求生成同一 revision 的多条 run，但没有跨流程 batch 实体，见 `server-py/autoflow/services.py:1145`；当前 batch schema/服务已存在，retry clone 仍由 P0 follow-up 负责。
+- 规划起点曾发现单流程入口省略 `flowId`、服务端可能选择项目其它流程 revision 的 correctness 缺陷；该问题已由归档 P0 `08-15-flow-revision-selection-correctness` 修复，batch 必须消费并持续回归该 flow-scoped resolver。
 - 运行历史已经进入服务端分页改造，批次 UI 应在该契约上增量建设，避免重新引入一次加载固定 200 条的限制。
 
 ### 规划刷新（2026-08-15）
 
-- 本任务仍是需求草案，当前不授权实现；共同前置已锁定为独立 P0 子任务 [`08-15-flow-revision-selection-correctness`](../08-15-flow-revision-selection-correctness/prd.md)。
-- 当前代码中的 `server-py/autoflow/services.py:715` 仍按项目最近 published revision 查询，`FlowsPage` 和 `FlowEditorPage` 的手工平台运行请求也未携带 `flowId`。因此 R0 不是已完成项，而是本任务的硬依赖。
+- 本任务文档只表达需求边界，不构成继续实现授权；共同 flow revision 前置已由独立 P0 [`08-15-flow-revision-selection-correctness`](../archive/2026-08/08-15-flow-revision-selection-correctness/prd.md) 完成并归档。
+- 基础 P0 已让 `FlowsPage`/`FlowEditorPage` 携带 `flowId`，服务端按 `project + flow + environment` 解析 published revision，并覆盖 mismatch/A-B flow 回归。batch 仍以这些回归持续通过为硬门；另一个 P0 follow-up [`08-16-flow-retry-reproduction-correctness`](../08-16-flow-retry-reproduction-correctness/prd.md) 负责 retry snapshot 一对一克隆，完成前 AC7 不得视为通过。
 - runs 接口的服务端分页、生产同步 outbox、canonical revision snapshot 和 Python 运行入口已经在历史任务中落地；batch 规划只需声明兼容/回归约束，不应重新规划这些稳定性工作。
-- 当前 `server-py/autoflow/migrations.py` 的平台 schema 版本为 10；若确认 batch 进入实现，`run_batches` 与 child-run 关联应使用新的向前兼容 migration 版本，并覆盖旧库/重复启动/历史 run 可读性。
+- 规划起点 `server-py/autoflow/migrations.py` 的平台 schema 版本为 10；并行实现已推进到 migration v11，仍须覆盖旧库/重复启动/历史 run 可读性。
 
 ## Product Decisions
 
@@ -33,7 +35,7 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 
 ### Dependency And Non-Goals For Planning
 
-- R0 必须先独立验收：列表运行、编辑器运行到此步骤、显式 `revisionId` 兼容和 flow/revision/environment mismatch 均通过后，才允许本任务进入实现评审。批次重试按 P0 已确认的重试语义（原 revision 快照）实现。
+- R0 已独立验收：列表运行、编辑器运行到此步骤、显式 `revisionId` 兼容和 flow/revision/environment mismatch 回归必须持续通过。批次重试还需等待 retry P0 follow-up 的 snapshot clone 实现/回归门禁，不得以现有 revision 级复用代替。
 - 本任务只规划“同项目批量提交 + 串行编排 + 批次观测”；不把并发调度、跨项目编排或新的执行器作为隐含后续。
 
 ## Requirements
@@ -42,7 +44,7 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 
 - 本节由独立 P0 子任务拥有，本任务不得重复实现或另建 resolver。
 - Batch 只消费 P0 已验收的 `projectId + flowId + environmentId` resolver，并复用其 mismatch/error 契约。
-- P0 的 A/B 流程回归、显式 revision 兼容和运行到此步骤测试是本任务启动前的外部 gate。
+- P0 的 A/B 流程回归、显式 revision 兼容和运行到此步骤测试是本任务持续回归 gate；retry P0 follow-up 是失败项重试完成验收的外部 gate。
 
 ### R1 Batch Creation
 
@@ -74,7 +76,8 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 - 只有原批次全部进入终态后才能“重试失败项”。
 - 重试集合为 failed 和 canceled 子项；若为空返回 `BATCH_NOT_RETRYABLE`。
 - 重试创建一个新 batch，记录 `retryOfBatchId`，使用新的 `clientRequestId`，不修改原批次和原 run 历史。
-- 重试语义与单 run 重试一致（2026-08-16 确认）：每个重试子项按其原 run 的 revision 快照重新执行，即使该 revision 已 superseded；目的是复现原失败，不解析最新 published revision。新 run 记录 `retryOfRunId`，原批次和原 run 历史不变。
+- 重试语义与单 run 重试一致（2026-08-16 已收敛）：每个重试子项必须是原 run snapshot 的一对一克隆，即使原 revision 已 superseded 也只创建一条新 run，复用原 revision ID/checksum、环境/元素快照、原 dataset 单行和 `upToStepId`；新 run 的 `retryOfRunId` 与 `run.retried` 审计逐条指向原 run，secret 明文不进入 snapshot。不得解析最新 published revision，也不得按 revision dataset 配置重新展开。
+- Retry 请求只预检每个原 snapshot 所需的普通变量和 secret 名称，不在请求中物化或持久化值；预检当下缺失时整次 retry 零写入并返回稳定错误，batch 不建立部分 child。已创建的 queued child 在 enqueue 与重启恢复物化 runner input 时读取当时当前值；预检后配置被删除时 child 保留并在物化阶段稳定失败。该值语义不改变 snapshot clone 的一对一边界。
 
 ### R5 Runs Center UX
 
@@ -94,18 +97,18 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 
 ## Acceptance Criteria
 
-- [ ] AC0：单流程列表和编辑器入口运行指定流程的 revision；两个流程连续保存后运行流程 A 不会执行流程 B。
-- [ ] AC1：登录用户可在同一项目选择 2-20 个有步骤的流程和一个环境，确认后一次创建一个 batch 及每流程一条 queued run。
-- [ ] AC2：任一流程没有匹配 published revision、环境不匹配、缺少 secret 或总量超限时，响应包含可定位到 flowId 的校验错误，数据库中不产生 batch/run。
-- [ ] AC3：相同 `(projectId, clientRequestId)` 重复或并发提交只存在一个 batch 和一组 run，响应返回相同 batch id。
-- [ ] AC4：ManagedRunner 保持最多一个 active run，子项按 itemIndex 串行执行；一个子项失败后后续子项仍执行。
-- [ ] AC5：批次状态和计数在全成功、全失败、全取消、部分成功、执行中混合状态下符合 R2 定义。
-- [ ] AC6：取消批次后 queued 子项被取消、running 子项收到取消请求、终态子项不变；重复取消无副作用。
-- [ ] AC7：终态批次可以只重试 failed/canceled 项，新 batch 记录 `retryOfBatchId`，每个子项按原 run 的 revision 快照执行（含已 superseded），原批次历史不变。
-- [ ] AC8：服务重启后 queued 子项恢复排队，批次页面刷新后从服务端显示正确进度，不依赖 localStorage。
-- [ ] AC9：运行中心能分页查看批次并展开子 run，孤立单 run 仍可见，单 run 详情/取消/重试保持可用。
-- [ ] AC10：无权限、跨项目 batch/run、非法 flowId 和批次上限请求被拒绝；API 和审计不泄漏 secret 或 snapshot 明文。
-- [ ] AC11：既有手工运行、dataset 单流程运行、schedule、webhook、通知、运行历史分页和 ManagedRunner 测试继续通过。
+- [x] AC0：单流程列表和编辑器入口运行指定流程的 revision；两个流程连续保存后运行流程 A 不会执行流程 B。（P0 已归档，`test_revision_selection.py` A/B 用例）
+- [x] AC1：登录用户可在同一项目选择 2-20 个有步骤的流程和一个环境，确认后一次创建一个 batch 及每流程一条 queued run。（`test_batch_create_orders_runs_and_sets_batch_context`）
+- [x] AC2：任一流程没有匹配 published revision、环境不匹配、缺少 secret 或总量超限时，响应包含可定位到 flowId 的校验错误，数据库中不产生 batch/run。（`test_batch_preflight_failure_rejects_whole_batch` + `test_batch_total_steps_limit`；错误经 `PlatformError.detail` 携带 `items` 透传前端）
+- [x] AC3：相同 `(projectId, clientRequestId)` 重复或并发提交只存在一个 batch 和一组 run，响应返回相同 batch id。（`test_batch_idempotency_replay_and_key_conflict`；并发由 UNIQUE 约束收口）
+- [~] AC4：ManagedRunner 保持最多一个 active run，子项按 itemIndex 串行执行；一个子项失败后后续子项仍执行。（按 itemIndex 顺序入既有单并发 FIFO，执行器行为未改动、由既有套件保护；“一个失败不阻断后续”依赖该不变量，未做专项执行级测试）
+- [x] AC5：批次状态和计数在全成功、全失败、全取消、部分成功、执行中混合状态下符合 R2 定义。（`test_batch_status_aggregation_matrix`）
+- [x] AC6：取消批次后 queued 子项被取消、running 子项收到取消请求、终态子项不变；重复取消无副作用。（`test_batch_cancel_idempotent_and_scoped`，含事件幂等断言）
+- [~] AC7：终态批次可以只重试 failed/canceled 项，新 batch 记录 `retryOfBatchId`，每个子项按原 run snapshot 一对一克隆（含已 superseded revision），原批次历史不变；当前实现/测试仍需补原 revision checksum、单行输入、`upToStepId` 和逐条 `retryOfRunId`/审计断言。（现有 `test_batch_retry_uses_original_revision_snapshots` 只证明 revision/步骤级复用）
+- [~] AC8：服务重启后 queued 子项恢复排队，批次页面刷新后从服务端显示正确进度，不依赖 localStorage。（启动恢复复用既有 queued 重排逻辑、create 测试断言 queued 可恢复；进程退出级重启模拟未做；页面刷新从服务端加载由 E2E 覆盖）
+- [~] AC9：运行中心能分页查看批次并展开子 run，孤立单 run 仍可见，单 run 详情/取消/重试保持可用。（批次列表/展开/子 run 链接由 `tests/batch-run.spec.ts` 覆盖；单 run 路径由既有 spec 回归；E2E 级批次取消/重试按钮交互未覆盖）
+- [~] AC10：无权限、跨项目 batch/run、非法 flowId 和批次上限请求被拒绝；API 和审计不泄漏 secret 或 snapshot 明文。（上限/非法输入由服务层测试覆盖；权限/跨项目由 handler capability + `run_batch_by_id` 项目范围 404 保证，未加 handler 专项测试；批次详情响应只含摘要不含 snapshot）
+- [x] AC11：既有手工运行、dataset 单流程运行、schedule、webhook、通知、运行历史分页和 ManagedRunner 测试继续通过。（85 Python + 30 前端单测 + E2E 除基线遗留失败外全部通过）
 
 ## Out Of Scope
 
@@ -118,7 +121,7 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 
 ## Dependencies And Estimate
 
-- P0 单流程 revision 正确性：独立任务估算 1-2 人日，不计入本任务 8-12 人日实现量。
+- P0 单流程 revision 正确性已由独立任务完成，不计入本任务 8-12 人日实现量；retry reproduction follow-up 也独立估算和验收。
 - 数据库、服务和 API：3-4 人日。
 - 流程多选、批次确认和运行中心分组：2-3 人日。
 - 重启、幂等、取消、历史分页和 E2E：2-3 人日。
@@ -131,7 +134,3 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 - 单个 20 项批次会连续占用 FIFO，MVP 通过硬上限控制；真实使用仍出现饥饿时再建设来源公平调度。
 - 当前运行产物缺少完整保留策略，批量会放大截图、事件和通知数量；上线前至少记录容量指标和运维清理建议。
 - 事务提交后入内存队列若进程崩溃，现有启动恢复必须能重新入队所有 queued run，这是发布阻断测试。
-
-## Open Questions For Requirement Convergence
-
-（无——batch 相关产品决策已全部收敛，见 Product Decisions 与各 R 节。）

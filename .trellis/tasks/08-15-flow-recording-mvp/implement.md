@@ -3,30 +3,43 @@
 ## Preconditions
 
 - 保持任务为 `planning`，经人工批准后再执行 `task.py start`。
-- 硬依赖 `08-15-flow-revision-selection-correctness` 已完成并有 A/B flow 回归证据；未通过前不启动录制任务。
+- 基础 P0 [`08-15-flow-revision-selection-correctness`](../archive/2026-08/08-15-flow-revision-selection-correctness/prd.md) 的 A/B flow 回归已通过；录制的 PoC、认证 API 和编辑器阶段可以独立取证。[`08-16-flow-retry-reproduction-correctness`](../08-16-flow-retry-reproduction-correctness/prd.md) 的原 revision checksum、单 run retry 重现单位和审计关联证据仍阻断最终保存/发布/ManagedRunner 重放闭环及 retry regression，不把它复制进录制任务。
 - 开发前读取 `.trellis/spec/frontend/index.md`、`.trellis/spec/backend/index.md` 和 cross-layer 指南。
 - 先运行基线测试并记录结果；不得把已有失败归因于本功能，也不得修改或删除既有断言来制造通过。
 - 先完成 2-3 人日 PoC。PoC 未证明敏感值不泄漏和录制后可重放时，不进入完整 UI 开发。
 
 ## Phase 0: Technical Proof
 
-- [ ] 建立只服务于测试的本地页面 fixture，覆盖普通输入、password、button navigation、select、checkbox、SPA route 和 iframe。
-- [ ] 扩展现有 Picker 注入思路，连续捕获 click、input/change 和 top-frame navigation。
-- [ ] 写纯 RecorderNormalizer 原型，证明连续输入归并、点击导航去重和 seq 稳定。
-- [ ] 用生成的定位器和步骤调用现有 runner，证明保存结构无需增加 FlowStep 字段即可重放。
-- [ ] 检查 API payload、日志和测试快照，证明 password 明文从未离开页面。
+- [x] 建立只服务于测试的本地页面 fixture，覆盖普通输入、password、button navigation、select、checkbox、SPA route 和 iframe。（`server-py/tests/fixtures/recorder/{page1,page2,child}.html`，经本地 HTTP 服务加载）
+- [x] 扩展现有 Picker 注入思路，连续捕获 click、input/change 和 top-frame navigation。（`server-py/autoflow/recorder.py` 的 `RECORDER_INIT_SCRIPT`：context init script + `expose_binding`，完整导航后自动重注入）
+- [x] 写纯 RecorderNormalizer 原型，证明连续输入归并、点击导航去重和 seq 稳定。（`RecorderNormalizer` 纯逻辑；`test_normalizer_pure_merge_causality_and_sensitive`、`test_normalizer_suppresses_select_click_and_flags_iframe`）
+- [x] 用生成的定位器和步骤调用现有 runner，证明保存结构无需增加 FlowStep 字段即可重放。（`test_capture_normalize_replay_and_sensitive_never_leaves_page`：录制 10 步 → `execute_browser_run` 全部重放成功，元素用现有 method/value 契约）
+- [x] 检查 API payload、日志和测试快照，证明 password 明文从未离开页面。（浏览器侧敏感判定不发送值；测试断言所有捕获 payload 的 JSON 序列化中不含密码明文，敏感步骤进入 requiredBindings）
 
-**Gate**：click + fill + navigation 录制、编辑器可消费 DTO、runner 重放、敏感值四项全部通过。失败则记录技术结论并停止，不用 UI 掩盖内核缺陷。
+**Gate**：click + fill + navigation 录制、编辑器可消费 DTO、runner 重放、敏感值四项全部通过。✅ 2026-08-16 PoC 通过，进入 Phase 1。
+
+### PoC 结论（2026-08-16）
+
+- 归并规则全部在真实 Chromium 上验证：逐字符输入归并为单条填写、checkbox 的 input(value=on) 与点击均被语义步骤吸收、点击触发导航不重复生成打开页面、直接导航生成打开页面并剥离 query/fragment、Enter/Escape/Tab 生成键盘按键、iframe 事件只产生 warning。
+- 归并器是纯后端逻辑（无 Playwright 依赖），已具备直接进入 Phase 1 的形态；本 PoC 中发现并修复的规则：点击前先 flush 输入缓冲（保证填写先于点击的时序）。
+- 敏感值双层判定（浏览器侧不发送 + 服务端 `is_sensitive_field` 复核）已在测试中固化。
+- 残余技术点（Phase 1 处理）：role 候选在真实页面的唯一性计数、SPA route 的 UI 状态呈现（pushState 不产生导航事件，捕获连续性已验证）、会话生命周期与 API 层。
 
 ## Phase 1: Shared Session And Recorder Core
 
-- [ ] 从 `WorkerService` 抽取 Picker/Recorder 共用的 browser/context/page 创建、线程提交、截图和回收能力，保持现有 Picker API 不变。
-- [ ] 新增 `server-py/autoflow/recorder.py`，集中定义注入脚本、输入 payload 校验、敏感判定和归并状态机。
-- [ ] 为注入脚本使用 context init script，确保完整导航后的新 document 继续捕获。
-- [ ] 增强 role locator，包含 accessible name；增加稳定排序和唯一性测试。
-- [ ] 实现 session/event 有界内存模型、seq、暂停/继续、stop flush、cancel/expire 和资源释放。
+- [x] 从 `WorkerService` 抽取 Picker/Recorder 共用的 browser/context/page 创建、线程提交、截图和回收能力，保持现有 Picker API 不变。（新增 `server-py/autoflow/browser_session.py`：`launch_browser_session`/`close_browser_session`；worker.py 的 Picker 创建与回收改用它，既有 Picker/Worker 测试全过）
+- [x] 新增 `server-py/autoflow/recorder.py`，集中定义注入脚本、输入 payload 校验、敏感判定和归并状态机。（`validate_recorder_event` 收敛 DTO 并做服务端敏感复核；`is_sensitive_field` 双层防线）
+- [x] 为注入脚本使用 context init script，确保完整导航后的新 document 继续捕获。（PoC 已验证；Coordinator 在 goto 前 `add_init_script` + `expose_binding`）
+- [x] 增强 role locator，包含 accessible name；增加稳定排序和唯一性测试。（候选优先级 testid → role[name=…] → label → text → css，见 `_candidate`；唯一性计数在 stop 阶段对当前页面核对，待 Phase 2 API 测试固化）
+- [x] 实现 session/event 有界内存模型、seq、暂停/继续、stop flush、cancel/expire 和资源释放。（`RecordingCoordinator`：`deque(maxlen=5000)`、RLock 保护、`sweep_expired`/`close_all`、stop/cancel 幂等、登录态 storage_state 快照注入）
 
-**Gate**：Recorder 纯单测、真实 Chromium fixture、全部既有 Picker 测试通过；浏览器关闭和超时无遗留进程。
+**Gate**：Recorder 纯单测、真实 Chromium fixture、全部既有 Picker 测试通过；浏览器关闭和超时无遗留进程。✅ 2026-08-16 通过（92 个 Python 测试，无遗留 chromium 进程）。
+
+### Phase 1 实测发现（2026-08-16）
+
+- 会话协调器必须用可重入锁：stop/cancel 的幂等分支会在持锁时调用 `session_response`（`threading.Lock` 死锁，改 `RLock`）。
+- 首次加载导航发生在 `starting` 状态，若被协调器丢弃会导致归并器把第一次用户导航误判为初始加载；导航事件在 starting/recording 均喂给归并器（首导航逻辑幂等）。
+- Playwright sync 对象线程绑定：所有页面驱动必须放在创建线程（`_SameThreadSubmitter` 模拟）；生产形态中服务器从不驱动页面，只有用户操作触发 binding 回调。
 
 ## Phase 2: Authenticated Platform API
 
@@ -80,6 +93,7 @@ npm run test:windows
 - [ ] 事件归并、seq 去重和导航因果有纯单测及真实浏览器测试。
 - [ ] 确认导入是原子的，取消路径无任何资源副作用。
 - [ ] 现有 Picker 和手工编辑路径保持可用。
+- [ ] P0 retry 回归通过：保存/发布后仍能按最终约定复用原 revision checksum、dataset 行/`upToStepId`（如适用），并为每条重试保留一对一 `retryOfRunId`/审计关联；产品语义已收敛，follow-up 实现/测试未通过前保持阻塞。
 
 ## Risky Files And Rollback Points
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "./router";
 import {
   ArrowLeftOutlined,
@@ -7,12 +7,14 @@ import {
   DragOutlined,
   FileSearchOutlined,
   MoreOutlined,
+  AudioOutlined,
   PlayCircleFilled,
   PlusOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
-import { Button, Dropdown, Empty, Input, Select, Switch, Tooltip } from "antd";
+import { Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Switch, Tooltip } from "antd";
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -23,7 +25,8 @@ import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { message, modal } from "./antd-feedback";
 import { localWorkerRunRequest } from "./local-worker-run";
-import { PlatformApiError, createPlatformRun, savePlatformSecret } from "./platform-api";
+import { PlatformApiError, cancelRecordingSession, createPlatformElementValidation, createPlatformRun, createRecordingSession, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
+import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
 import { platformRunAsRun } from "./pages/shared";
 import { createRun } from "./worker-api";
@@ -120,6 +123,7 @@ export default function FlowEditorPage() {
     (state) => (project ? state.activeEnvironmentByProject[project.id] : undefined),
   );
   const setFlows = useWorkspaceStore((state) => state.setFlows);
+  const setElements = useWorkspaceStore((state) => state.setElements);
   const flow = project
     ? (storedFlows ?? emptyFlows).find((item) => item.id === flowId)
     : undefined;
@@ -133,10 +137,25 @@ export default function FlowEditorPage() {
     removeStep,
     moveStep,
     loadSteps,
+    importRecordingSteps,
     isDirty,
     markSaved,
   } = useFlowStore();
   const [runToStep, setRunToStep] = useState(false);
+  const [recordingOpen, setRecordingOpen] = useState(false);
+  const [recordingSession, setRecordingSession] = useState<RecordingSession | null>(null);
+  const [recordingResult, setRecordingResult] = useState<RecordingResult | null>(null);
+  const [recordingStartUrl, setRecordingStartUrl] = useState("");
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingSecretMap, setRecordingSecretMap] = useState<Record<string, string>>({});
+  const [recordingEnvironmentId, setRecordingEnvironmentId] = useState(activeEnvironmentId ?? "");
+  const [recordingFreshLogin, setRecordingFreshLogin] = useState(false);
+  const [recordingEvents, setRecordingEvents] = useState<RecordingEvent[]>([]);
+  const [recordingImportBusy, setRecordingImportBusy] = useState(false);
+  const recordingPollRef = useRef<number | undefined>(undefined);
+  const recordingLastSeqRef = useRef(0);
+  const recordingPollInFlightRef = useRef(false);
+  const recordingRestoreInFlightRef = useRef(false);
   const selectedStep =
     steps.find((step) => step.id === selectedStepId) ?? steps[0];
   const elements = storedElements ?? emptyElements;
@@ -145,6 +164,10 @@ export default function FlowEditorPage() {
   const activeEnvironment =
     environments.find((environment) => environment.id === activeEnvironmentId) ??
     environments[0];
+  const recordingEnvironment =
+    environments.find((environment) => environment.id === recordingEnvironmentId) ??
+    activeEnvironment;
+  const platformContext = project ? platformProjectContext(project.id) : undefined;
   const upsertRun = useRunStore((state) => state.upsertRun);
   const sessionSecretValues = useSecretStore((state) =>
     project ? state.valuesByProject[project.id] ?? emptySecretValues : emptySecretValues,
@@ -156,9 +179,285 @@ export default function FlowEditorPage() {
   useEffect(() => {
     if (flowId) loadSteps(flowDefinition ?? []);
   }, [flowDefinition, flowId, loadSteps]);
+
+  useEffect(() => () => {
+    if (recordingPollRef.current !== undefined) {
+      window.clearInterval(recordingPollRef.current);
+    }
+  }, []);
+
+  const recordingStorageKey = project && flow
+    ? `autoflow-recording-session:${project.id}:${flow.id}`
+    : "";
+  const clearRecordingStorage = useCallback(() => {
+    if (recordingStorageKey) window.sessionStorage.removeItem(recordingStorageKey);
+  }, [recordingStorageKey]);
+  const clearRecordingPoll = useCallback(() => {
+    if (recordingPollRef.current !== undefined) {
+      window.clearInterval(recordingPollRef.current);
+      recordingPollRef.current = undefined;
+    }
+  }, []);
+  const pollRecording = useCallback(async (sessionId: string) => {
+    if (!platformContext || recordingPollInFlightRef.current) return;
+    recordingPollInFlightRef.current = true;
+    try {
+      let cursor = recordingLastSeqRef.current;
+      let hasMore = true;
+      while (hasMore) {
+        const page = await getRecordingEvents(
+          platformContext.session.token,
+          platformContext.projectId,
+          sessionId,
+          cursor,
+          100,
+        );
+        setRecordingEvents((current) => {
+          const bySeq = new Map(current.map((event) => [event.seq, event]));
+          for (const event of page.events) bySeq.set(event.seq, event);
+          return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
+        });
+        const pageSeq = page.events.reduce((max, event) => Math.max(max, event.seq), cursor);
+        cursor = pageSeq;
+        recordingLastSeqRef.current = cursor;
+        hasMore = page.hasMore;
+      }
+      const detail = await getRecordingSession(
+        platformContext.session.token,
+        platformContext.projectId,
+        sessionId,
+      );
+      setRecordingSession(detail.session);
+      if (["stopped", "canceled", "expired", "failed"].includes(detail.session.status)) {
+        clearRecordingPoll();
+        clearRecordingStorage();
+      }
+    } catch {
+      // Keep the cursor; a transient failure is retried by the next tick.
+    } finally {
+      recordingPollInFlightRef.current = false;
+    }
+  }, [clearRecordingPoll, clearRecordingStorage, platformContext]);
+  const startRecordingPoll = useCallback((sessionId: string) => {
+    clearRecordingPoll();
+    void pollRecording(sessionId);
+    recordingPollRef.current = window.setInterval(() => void pollRecording(sessionId), 1000);
+  }, [clearRecordingPoll, pollRecording]);
+
+  useEffect(() => {
+    if (!platformContext || !recordingStorageKey || recordingSession || recordingRestoreInFlightRef.current) return;
+    const recoveredId = window.sessionStorage.getItem(recordingStorageKey);
+    if (!recoveredId) return;
+    recordingRestoreInFlightRef.current = true;
+    void getRecordingSession(
+      platformContext.session.token,
+      platformContext.projectId,
+      recoveredId,
+    ).then(({ session }) => {
+      setRecordingSession(session);
+      recordingLastSeqRef.current = session.lastSeq;
+      if (["stopped", "canceled", "expired", "failed"].includes(session.status)) {
+        clearRecordingStorage();
+        return;
+      }
+      startRecordingPoll(session.id);
+    }).catch(() => {
+      clearRecordingStorage();
+    }).finally(() => {
+      recordingRestoreInFlightRef.current = false;
+    });
+  }, [clearRecordingStorage, platformContext, recordingSession, recordingStorageKey, startRecordingPoll]);
+
   if (!project || !flow) {
     return <Navigate to={project ? `/project/${project.id}/flows` : "/projects"} replace />;
   }
+  const startRecording = async () => {
+    if (!platformContext || !recordingEnvironment) {
+      message.error("当前项目没有可用的平台环境");
+      return;
+    }
+    setRecordingBusy(true);
+    try {
+      const created = await createRecordingSession(
+        platformContext.session.token,
+        platformContext.projectId,
+        {
+          flowId: flow.id,
+          environmentId: recordingEnvironment.id,
+          startUrl: recordingStartUrl || recordingEnvironment.baseUrl,
+          freshLogin: recordingFreshLogin,
+        },
+      );
+      setRecordingSession(created.session);
+      setRecordingEnvironmentId(created.session.environmentId);
+      window.sessionStorage.setItem(recordingStorageKey, created.session.id);
+      setRecordingOpen(false);
+      recordingLastSeqRef.current = 0;
+      setRecordingEvents([]);
+      message.success("录制已开始");
+      startRecordingPoll(created.session.id);
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.code === "RECORDING_SESSION_ACTIVE") {
+        message.error("当前环境已有录制会话");
+      } else {
+        message.error("开始录制失败，请检查环境与浏览器服务");
+      }
+    } finally {
+      setRecordingBusy(false);
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!platformContext || !recordingSession) return;
+    setRecordingBusy(true);
+    try {
+      const stopped = await stopRecordingSession(
+        platformContext.session.token,
+        platformContext.projectId,
+        recordingSession.id,
+      );
+      clearRecordingPoll();
+      setRecordingSession(stopped.session);
+      setRecordingResult(stopped.result);
+      setRecordingSecretMap({});
+      clearRecordingStorage();
+    } catch {
+      message.error("停止录制失败，请稍后重试");
+    } finally {
+      setRecordingBusy(false);
+    }
+  };
+
+  const cancelRecording = async () => {
+    if (!platformContext || !recordingSession) return;
+    setRecordingBusy(true);
+    try {
+      await cancelRecordingSession(
+        platformContext.session.token,
+        platformContext.projectId,
+        recordingSession.id,
+      );
+      clearRecordingPoll();
+      setRecordingSession(null);
+      setRecordingResult(null);
+      setRecordingEvents([]);
+      clearRecordingStorage();
+      message.info("录制已取消");
+    } catch {
+      message.error("取消录制失败，请稍后重试");
+    } finally {
+      setRecordingBusy(false);
+    }
+  };
+
+  const verifyRecordingElements = async (assets: ElementAsset[]) => {
+    if (!platformContext || !recordingEnvironment) return false;
+    const seen = new Set<string>();
+    for (const asset of assets) {
+      const key = `${asset.environment}\u0000${asset.path}\u0000${asset.method}\u0000${asset.value}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const created = await createPlatformElementValidation(
+        platformContext.session.token,
+        platformContext.projectId,
+        { environmentId: recordingEnvironment.id, element: asset },
+      );
+      let validation = created.validation;
+      for (let attempt = 0; attempt < 60 && (validation.status === "queued" || validation.status === "running"); attempt += 1) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+        validation = (await getPlatformElementValidation(
+          platformContext.session.token,
+          platformContext.projectId,
+          validation.id,
+        )).validation;
+      }
+      if (validation.status !== "success" || Number(validation.result?.count ?? 0) !== 1) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const importRecordedFlow = async () => {
+    if (!recordingResult || !project || !recordingEnvironment) return;
+    const unresolved = recordingResult.requiredBindings.filter(
+      (binding) => !recordingSecretMap[binding.stepId],
+    );
+    if (unresolved.length > 0) {
+      message.error("请先为所有敏感输入绑定 secret 变量");
+      return;
+    }
+    const existingNames = new Set(elements.map((element) => element.name));
+    const nameMap: Record<string, string> = {};
+    const newElements: ElementAsset[] = [];
+    for (const [index, raw] of recordingResult.elements.entries()) {
+      const rawName = String(raw.name ?? `录制元素 ${index + 1}`);
+      const path = String(raw.path ?? "/");
+      const method = String(raw.method ?? "css");
+      const value = String(raw.value ?? "");
+      const existing = elements.find(
+        (element) =>
+          element.environment === recordingEnvironment.id &&
+          element.path === path &&
+          element.method === method &&
+          element.value === value,
+      );
+      if (existing) {
+        nameMap[rawName] = existing.name;
+        continue;
+      }
+      const name = existingNames.has(rawName) ? `${rawName} ${Date.now()}` : rawName;
+      existingNames.add(name);
+      nameMap[rawName] = name;
+      newElements.push({
+        id: `rec-el-${Date.now()}-${index}`,
+        name,
+        path,
+        method,
+        value,
+        environment: recordingEnvironment.id,
+        description: "",
+        validation: "unverified" as const,
+        updatedAt: "刚刚",
+      });
+    }
+    const importedSteps: FlowStep[] = recordingResult.steps.map((raw, index) => {
+      const rawId = String(raw.id ?? `rec-step-${index}`);
+      const bound = recordingSecretMap[rawId];
+      const rawElement = raw.element ? String(raw.element) : undefined;
+      return {
+        id: `step-${Date.now()}-${index}`,
+        title: String(raw.title ?? raw.action ?? "录制步骤"),
+        action: String(raw.action ?? "点击"),
+        element: rawElement ? nameMap[rawElement] ?? rawElement : undefined,
+        value: bound ? `{{${bound}}}` : String(raw.value ?? ""),
+        timeout: 10,
+        failurePolicy: "立即失败",
+        status: "pending" as const,
+      };
+    });
+    setRecordingImportBusy(true);
+    try {
+      const unique = await verifyRecordingElements([
+        ...newElements,
+        ...elements.filter((element) => Object.values(nameMap).includes(element.name)),
+      ]);
+      if (!unique) {
+        message.error("存在未唯一匹配的定位器，未导入任何步骤或元素");
+        return;
+      }
+      setElements(project.id, [...elements, ...newElements]);
+      importRecordingSteps(importedSteps);
+    } finally {
+      setRecordingImportBusy(false);
+    }
+    setRecordingResult(null);
+    setRecordingSession(null);
+    setRecordingEvents([]);
+    clearRecordingStorage();
+    message.success("录制步骤已追加到流程草稿，请保存后发布");
+  };
+
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
     const from = steps.findIndex((step) => step.id === active.id);
@@ -297,6 +596,64 @@ export default function FlowEditorPage() {
           <span>{isDirty ? "未保存修改" : "已保存"}</span>
         </div>
         <div className="editor-actions">
+          {recordingSession && !["stopped", "canceled", "expired", "failed"].includes(recordingSession.status) ? (
+            <>
+              {recordingSession.status === "paused" ? (
+                <Button
+                  icon={<AudioOutlined />}
+                  loading={recordingBusy}
+                  onClick={() => {
+                    if (!platformContext) return;
+                    setRecordingBusy(true);
+                    void resumeRecordingSession(platformContext.session.token, platformContext.projectId, recordingSession.id)
+                      .then(({ session }) => setRecordingSession(session))
+                      .catch(() => message.error("继续录制失败，请稍后重试"))
+                      .finally(() => setRecordingBusy(false));
+                  }}
+                >
+                  继续录制
+                </Button>
+              ) : (
+                <Button
+                  icon={<AudioOutlined />}
+                  loading={recordingBusy}
+                  onClick={() => {
+                    if (!platformContext) return;
+                    setRecordingBusy(true);
+                    void pauseRecordingSession(platformContext.session.token, platformContext.projectId, recordingSession.id)
+                      .then(({ session }) => setRecordingSession(session))
+                      .catch(() => message.error("暂停录制失败，请稍后重试"))
+                      .finally(() => setRecordingBusy(false));
+                  }}
+                >
+                  暂停录制
+                </Button>
+              )}
+              <Button icon={<StopOutlined />} loading={recordingBusy} onClick={() => void stopRecording()}>
+                停止录制
+              </Button>
+              <Button danger icon={<StopOutlined />} loading={recordingBusy} onClick={() => void cancelRecording()}>
+                取消录制
+              </Button>
+            </>
+          ) : platformContext && recordingEnvironment ? (
+            <Button
+              icon={<AudioOutlined />}
+              onClick={() => {
+                setRecordingEnvironmentId(activeEnvironment?.id ?? environments[0]?.id ?? "");
+                setRecordingOpen(true);
+              }}
+            >
+              录制
+            </Button>
+          ) : null}
+          {recordingSession && ["stopped", "canceled", "expired", "failed"].includes(recordingSession.status) && (
+            <span className="recording-status" aria-live="polite">
+              录制{recordingSession.status === "stopped" ? "已停止" : recordingSession.status === "expired" ? "已过期" : recordingSession.status === "failed" ? "失败" : "已取消"}
+              {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
+              {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
+            </span>
+          )}
           <Button icon={<PlayCircleFilled />} loading={runToStep} onClick={() => run()}>
             运行整个流程
           </Button>
@@ -474,6 +831,119 @@ export default function FlowEditorPage() {
           </div>
         </aside>
       </main>
+
+      <Modal
+        title="开始录制"
+        open={recordingOpen}
+        onCancel={() => setRecordingOpen(false)}
+        onOk={() => void startRecording()}
+        confirmLoading={recordingBusy}
+        okText="开始录制"
+      >
+        <div className="recording-form">
+          <label>
+            <span>环境</span>
+            <Select
+              aria-label="录制环境"
+              value={recordingEnvironment?.id}
+              options={environments.map((environment) => ({
+                value: environment.id,
+                label: environment.name,
+              }))}
+              onChange={(value) => setRecordingEnvironmentId(value)}
+            />
+          </label>
+          <label>
+            <span>起始 URL</span>
+            <Input
+              aria-label="录制起始 URL"
+              value={recordingStartUrl}
+              onChange={(event) => setRecordingStartUrl(event.target.value)}
+              placeholder={activeEnvironment?.baseUrl ?? "/"}
+            />
+          </label>
+          <Checkbox
+            checked={recordingFreshLogin}
+            onChange={(event) => setRecordingFreshLogin(event.target.checked)}
+          >
+            从头录制（不使用已有登录态）
+          </Checkbox>
+        </div>
+      </Modal>
+
+      <Modal
+        title="录制结果"
+        open={Boolean(recordingResult)}
+        onCancel={() => {
+          setRecordingResult(null);
+          setRecordingSession(null);
+          setRecordingEvents([]);
+        }}
+        footer={[
+          <Button
+            key="cancel"
+            onClick={() => {
+              setRecordingResult(null);
+              setRecordingSession(null);
+              setRecordingEvents([]);
+            }}
+          >取消</Button>,
+          <Button
+            key="import"
+            type="primary"
+            disabled={Boolean(recordingResult?.requiredBindings.some((binding) => !recordingSecretMap[binding.stepId]))}
+            loading={recordingImportBusy}
+            onClick={() => void importRecordedFlow()}
+          >
+            确认导入
+          </Button>,
+        ]}
+      >
+        {recordingResult && (
+          <div className="recording-result">
+            <p>共录制 {recordingResult.steps.length} 步，{recordingResult.elements.length} 个元素；已收到 {recordingEvents.length} 个事件。</p>
+            <ol>
+              {recordingResult.steps.map((step, index) => (
+                <li key={String(step.id ?? index)}>{String(step.title ?? step.action ?? "录制步骤")} {step.element ? ` · ${String(step.element)}` : ""}</li>
+              ))}
+            </ol>
+            <ul>
+              {recordingResult.elements.map((element, index) => (
+                <li key={String(element.id ?? index)}>
+                  {String(element.name ?? `元素 ${index + 1}`)}：{String(element.method ?? "css")}={String(element.value ?? "")}
+                  {element.matchCount !== undefined ? `（匹配 ${String(element.matchCount)} 个）` : "（待校验）"}
+                </li>
+              ))}
+            </ul>
+            {recordingResult.warnings.length > 0 && (
+              <ul>
+                {recordingResult.warnings.map((warning, index) => (
+                  <li key={index}>{warning}</li>
+                ))}
+              </ul>
+            )}
+            {recordingResult.requiredBindings.length > 0 && (
+              <div className="recording-bindings">
+                <p>以下敏感输入必须绑定现有 secret 变量后才能导入：</p>
+                {recordingResult.requiredBindings.map((binding) => (
+                  <label key={binding.stepId}>
+                    <span>{binding.fieldHint}</span>
+                    <Select
+                      aria-label={`绑定 ${binding.fieldHint}`}
+                      placeholder="选择 secret 变量"
+                      value={recordingSecretMap[binding.stepId]}
+                      onChange={(value) => setRecordingSecretMap((current) => ({ ...current, [binding.stepId]: value }))}
+                      options={variables
+                        .filter((variable) => variable.secret)
+                        .map((variable) => ({ value: variableReference(variable), label: variable.name }))}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

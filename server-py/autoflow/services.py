@@ -7,6 +7,7 @@ import os
 import sqlite3
 import uuid
 import base64
+import concurrent.futures
 import http.client
 import io
 import ipaddress
@@ -37,7 +38,11 @@ from .core import (
 from .crypto import decrypt, encrypt, key_material
 from .migrations import migrate_project_document_resources, run_platform_migrations
 from .managed_runner import ManagedRunner
+from .recorder import RecordingCoordinator
 from .resources import as_record
+
+
+_CHROMIUM_AVAILABLE: bool | None = None
 
 
 BOOTSTRAP_SCHEMA = """
@@ -409,6 +414,14 @@ class PlatformServices:
         self.managed_runner = ManagedRunner(
             Path(data_directory) / "artifacts"
         )
+        self._recording_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="recording"
+        )
+        self.recording_coordinator = RecordingCoordinator(
+            submit=self._recording_executor.submit,
+            on_failed=self._audit_recording_failed,
+        )
+        self.recording_login_state_provider = None
         self.webhook_requests: dict[str, list[float]] = {}
         configured_secret = os.environ.get("PLATFORM_SECRET_KEY")
         if os.environ.get("NODE_ENV") == "production" and not configured_secret:
@@ -447,8 +460,33 @@ class PlatformServices:
                 )
 
     def close(self) -> None:
+        try:
+            self.recording_coordinator.close_all()
+        except Exception:
+            pass
+        self._recording_executor.shutdown(wait=False)
         self.managed_runner.stop()
         self.database.close()
+
+    def _audit_recording_failed(self, session: dict[str, Any]) -> None:
+        """Record a safe lifecycle summary without exposing browser error details."""
+        try:
+            project = self.project_for(session["projectId"])
+            self.audit(
+                project["workspace_id"],
+                {"type": "user", "id": session["ownerId"]},
+                "recording.session_failed",
+                {"type": "recording_session", "id": session["id"]},
+                {
+                    "flowId": session["flowId"],
+                    "environmentId": session["environmentId"],
+                    "status": "failed",
+                },
+                session["projectId"],
+            )
+        except Exception:
+            # Browser startup failures must retain their original error contract.
+            pass
 
     def encrypt(self, value: str) -> dict[str, str]:
         encrypted = encrypt(value, self._configured_secret)
@@ -1178,6 +1216,7 @@ class PlatformServices:
         self.require_chromium_environment(
             environment if isinstance(environment, dict) else {}
         )
+        self.ensure_chromium_available()
         agent = self.managed_agent(project_id)
         dataset_version_id = input.get("datasetVersionId")
         if not dataset_version_id:
@@ -1253,6 +1292,216 @@ class PlatformServices:
             "agent": agent,
         }
 
+    @staticmethod
+    def _required_retry_variable_names(
+        flow: dict[str, Any], secret_names: list[str]
+    ) -> set[str]:
+        secret_set = {str(name) for name in secret_names}
+        required: set[str] = set()
+        steps = flow.get("steps") if isinstance(flow, dict) else []
+        if not isinstance(steps, list):
+            steps = []
+        for step in steps:
+            value = as_record(step).get("value")
+            if not isinstance(value, str):
+                continue
+            for match in re.finditer(r"{{\s*([^}]+)\s*}}", value):
+                expression = match.group(1).strip()
+                if not expression:
+                    continue
+                if (
+                    expression.startswith("secret.")
+                    or expression in secret_set
+                    or expression.startswith("data.")
+                    or expression.startswith("flow.")
+                    or expression.startswith("run.")
+                    or expression == "env.baseUrl"
+                ):
+                    continue
+                required.add(expression)
+        return required
+
+    def _preflight_retry_variables(
+        self, project_id: str, flow: dict[str, Any], secret_names: list[str]
+    ) -> None:
+        from .http import PlatformError
+
+        required = self._required_retry_variable_names(flow, secret_names)
+        if not required:
+            return
+        rows = self.database.execute(
+            """
+            SELECT data FROM project_resources
+            WHERE project_id = ? AND resource_type = 'variables'
+              AND archived_at IS NULL
+            """,
+            (project_id,),
+        ).fetchall()
+        available: set[str] = set()
+        for variable_row in rows:
+            variable = parse_json(variable_row[0], {})
+            if (
+                not isinstance(variable, dict)
+                or variable.get("secret") is True
+                or not isinstance(variable.get("name"), str)
+                or not isinstance(variable.get("value"), str)
+            ):
+                continue
+            scope = (
+                "env"
+                if variable.get("scope") == "环境"
+                else "project"
+                if variable.get("scope") == "项目"
+                else ""
+            )
+            key = f"{scope}.{variable['name']}" if scope else variable["name"]
+            available.add(key)
+        missing = sorted(required - available)
+        if missing:
+            raise PlatformError(409, "RUN_VARIABLE_NOT_CONFIGURED")
+
+    def _preflight_retry_spec(self, project_id: str, spec: dict[str, Any]) -> None:
+        from .http import PlatformError
+
+        snapshot_secret_names = [
+            name
+            for name in spec["secretNames"]
+            if name in spec["requiredSecretNames"]
+        ]
+        missing = self.missing_secret_names(project_id, snapshot_secret_names)
+        if missing:
+            raise PlatformError(409, "RUN_SECRET_NOT_CONFIGURED")
+        self._preflight_retry_variables(
+            project_id, spec["flow"], spec["secretNames"]
+        )
+
+    @staticmethod
+    def _row_from_retry_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+        dataset_row = snapshot.get("datasetRow")
+        if isinstance(dataset_row, dict):
+            return {
+                "rowNumber": dataset_row.get("number"),
+                "data": dataset_row.get("data"),
+            }
+        return {"rowNumber": None, "data": None}
+
+    def clone_retry_spec_from_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        """从源 run 的持久 snapshot 构造一对一 retry spec，不重新解析 revision/dataset。"""
+        from .http import PlatformError
+
+        snapshot = run.get("snapshot")
+        if not isinstance(snapshot, dict):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        flow = snapshot.get("flow")
+        environment = snapshot.get("environment")
+        if not isinstance(flow, dict) or not isinstance(environment, dict):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        revision_id = snapshot.get("flowRevisionId")
+        revision_checksum = snapshot.get("flowRevisionChecksum")
+        if (
+            not isinstance(revision_id, str)
+            or not isinstance(revision_checksum, str)
+            or run.get("revisionId") != revision_id
+        ):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        if environment.get("id") != run.get("environmentId"):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        up_to_step_id = snapshot.get("upToStepId")
+        steps = flow.get("steps") if isinstance(flow.get("steps"), list) else []
+        if up_to_step_id and not any(
+            as_record(step).get("id") == up_to_step_id for step in steps
+        ):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        elements = snapshot.get("elements")
+        if not isinstance(elements, list):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        dataset = snapshot.get("dataset")
+        if dataset is not None and (
+            not isinstance(dataset, dict)
+            or not all(
+                key in dataset
+                for key in ("datasetId", "versionId", "versionNumber", "checksum", "columns")
+            )
+        ):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        dataset_row = snapshot.get("datasetRow")
+        if dataset_row is not None and (
+            not isinstance(dataset_row, dict)
+            or "number" not in dataset_row
+            or "data" not in dataset_row
+        ):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        secret_names = snapshot.get("secretNames", [])
+        if not isinstance(secret_names, list) or not all(
+            isinstance(name, str) for name in secret_names
+        ):
+            raise PlatformError(409, "RUN_SNAPSHOT_NOT_RETRYABLE")
+        return {
+            "projectId": run["projectId"],
+            "revision": {
+                "id": revision_id,
+                "checksum": revision_checksum,
+                "element_snapshot": json(elements),
+            },
+            "environmentId": run["environmentId"],
+            "environment": _json.loads(_json.dumps(environment)),
+            "flow": _json.loads(_json.dumps(flow)),
+            "flowSteps": _json.loads(_json.dumps(steps)),
+            "datasetVersionId": (
+                dataset.get("versionId") if isinstance(dataset, dict) else None
+            ),
+            "datasetVersion": (
+                {
+                    "id": dataset["versionId"],
+                    "datasetId": dataset["datasetId"],
+                    "versionNumber": dataset["versionNumber"],
+                    "checksum": dataset["checksum"],
+                    "columns": dataset["columns"],
+                }
+                if isinstance(dataset, dict)
+                else None
+            ),
+            "secretNames": list(secret_names),
+            "requiredSecretNames": set(secret_names),
+            "upToStepId": up_to_step_id or None,
+            "agent": self.managed_agent(run["projectId"]),
+        }
+
+    def retry_run_snapshot(
+        self, project_id: str, run_id: str, actor_id: str
+    ) -> dict[str, Any]:
+        from .http import PlatformError
+
+        run = self.run_by_id(run_id)
+        if run["projectId"] != project_id:
+            raise PlatformError(404, "RUN_NOT_FOUND")
+        if run["status"] not in ("failed", "canceled"):
+            raise PlatformError(409, "RUN_NOT_RETRYABLE")
+        spec = self.clone_retry_spec_from_run(run)
+        self._preflight_retry_spec(project_id, spec)
+        row = self._row_from_retry_snapshot(run["snapshot"])
+        new_run_id: str | None = None
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            new_run_id = self.insert_run_from_spec(
+                spec,
+                row=row,
+                created_by=actor_id,
+                source="manual",
+                retry_of_run_id=run_id,
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+        if new_run_id is None:
+            raise RuntimeError("retry_run_snapshot failed to create run")
+        self.enqueue_managed_run(new_run_id)
+        return {
+            "runIds": [new_run_id],
+            "runs": [self.run_response(self.run_by_id(new_run_id))],
+        }
+
     def insert_run_from_spec(
         self,
         spec: dict[str, Any],
@@ -1293,11 +1542,14 @@ class PlatformServices:
             raise PlatformError(409, "RUN_SECRET_NOT_CONFIGURED")
         run_id = str(uuid.uuid4())
         created_at = now()
+        # 运行 snapshot 不保存普通变量值；变量在 enqueue/恢复时按项目当前值读取。
+        flow_snapshot = dict(flow)
+        flow_snapshot.pop("variables", None)
         snapshot = {
             "flowRevisionId": revision["id"],
             "flowRevisionChecksum": revision["checksum"],
             "environmentId": environment_id,
-            "flow": flow,
+            "flow": flow_snapshot,
             "environment": environment,
             "elements": parse_json(revision["element_snapshot"], []),
             "dataset": (
@@ -1366,6 +1618,12 @@ class PlatformServices:
                 "datasetRow": row["rowNumber"],
             },
         )
+        if retry_of_run_id:
+            self.append_run_event(
+                run_id,
+                "run.retried",
+                {"priorRunId": retry_of_run_id, "actorId": created_by},
+            )
         return run_id
 
     def queue_published_runs(self, input: dict[str, Any]) -> dict[str, Any]:
@@ -1635,6 +1893,7 @@ class PlatformServices:
         specs: list[dict[str, Any]],
         retry_of_batch_id: str | None = None,
         retry_of_run_ids: list[str] | None = None,
+        retry_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         import sqlite3
 
@@ -1669,7 +1928,11 @@ class PlatformServices:
                 run_ids.append(
                     self.insert_run_from_spec(
                         spec,
-                        row={"rowNumber": None, "data": None},
+                        row=(
+                            retry_rows[index]
+                            if retry_rows
+                            else {"rowNumber": None, "data": None}
+                        ),
                         created_by=created_by,
                         source="manual",
                         batch_id=batch_id,
@@ -1835,8 +2098,10 @@ class PlatformServices:
         except Exception:
             self.database.execute("ROLLBACK")
             raise
-        for row in running_rows:
-            self.cancel_managed_run(row[0])
+        for run_id in affected:
+            # queued 子项也必须在提交后从 ManagedRunner 队列移除，
+            # 否则 DB 已 canceled 但 runner 仍可能继续执行该流程。
+            self.cancel_managed_run(run_id)
         return {
             "batch": self.run_batch_by_id(project_id, batch_id),
             "runs": self.batch_runs(project_id, batch_id),
@@ -1862,27 +2127,31 @@ class PlatformServices:
         ]
         if not retry_items:
             raise PlatformError(409, "BATCH_NOT_RETRYABLE")
-        specs = []
-        for run in retry_items:
-            specs.append(
-                self.resolve_run_spec(
-                    {
-                        "projectId": project_id,
-                        "revisionId": run["revisionId"],
-                        "environmentId": run["environmentId"],
-                        "allowSuperseded": True,
-                    }
-                )
-            )
-        existing = self._existing_run_batch(project_id, client_request_id)
-        if existing is not None:
-            raise PlatformError(409, "IDEMPOTENCY_KEY_REUSED")
         retry_flow_ids: list[str] = []
         for run in retry_items:
             flow_id = as_record(run["snapshot"].get("flow")).get("id")
             retry_flow_ids.append(
                 flow_id if isinstance(flow_id, str) else run["revisionId"]
             )
+        existing = self._existing_run_batch(project_id, client_request_id)
+        if existing is not None:
+            if (
+                existing.get("retryOfBatchId") == batch_id
+                and existing["flowIds"] == retry_flow_ids
+            ):
+                return {
+                    "batch": existing,
+                    "runs": self.batch_runs(project_id, existing["id"]),
+                    "replayed": True,
+                }
+            raise PlatformError(409, "IDEMPOTENCY_KEY_REUSED")
+        specs: list[dict[str, Any]] = []
+        retry_rows: list[dict[str, Any]] = []
+        for run in retry_items:
+            spec = self.clone_retry_spec_from_run(run)
+            self._preflight_retry_spec(project_id, spec)
+            specs.append(spec)
+            retry_rows.append(self._row_from_retry_snapshot(run["snapshot"]))
         return self._insert_run_batch(
             project_id=project_id,
             environment_id=batch["environmentId"],
@@ -1892,6 +2161,7 @@ class PlatformServices:
             specs=specs,
             retry_of_batch_id=batch_id,
             retry_of_run_ids=[run["id"] for run in retry_items],
+            retry_rows=retry_rows,
         )
 
     def run_by_id(self, run_id: str) -> dict[str, Any]:
@@ -1901,7 +2171,7 @@ class PlatformServices:
             """
             SELECT id, project_id, revision_id, environment_id, agent_id,
                    executor_type, status, snapshot, cancellation_requested,
-                   result, created_at, updated_at
+                   result, created_at, updated_at, retry_of_run_id
             FROM platform_runs WHERE id = ?
             """,
             (run_id,),
@@ -1921,6 +2191,7 @@ class PlatformServices:
             "result": parse_json(row[9], None),
             "createdAt": row[10],
             "updatedAt": row[11],
+            "retryOfRunId": row[12],
         }
 
     def run_response(self, run: dict[str, Any]) -> dict[str, Any]:
@@ -2564,6 +2835,27 @@ class PlatformServices:
             browser = "Chromium"
         if browser != "Chromium":
             raise PlatformError(400, "AGENT_BROWSER_UNSUPPORTED")
+
+    def ensure_chromium_available(self) -> None:
+        global _CHROMIUM_AVAILABLE
+        from .http import PlatformError
+
+        if _CHROMIUM_AVAILABLE is not None:
+            if not _CHROMIUM_AVAILABLE:
+                raise PlatformError(409, "AGENT_BROWSER_UNSUPPORTED")
+            return
+        available = False
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as playwright:
+                executable = playwright.chromium.executable_path
+                available = bool(executable) and Path(executable).exists()
+        except Exception:
+            available = False
+        _CHROMIUM_AVAILABLE = available
+        if not available:
+            raise PlatformError(409, "AGENT_BROWSER_UNSUPPORTED")
 
     def put_document(
         self,

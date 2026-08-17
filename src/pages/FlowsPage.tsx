@@ -183,6 +183,7 @@ export function FlowsPage({ project }: { project: Project }) {
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchEnvironmentId, setBatchEnvironmentId] = useState<string | undefined>(undefined);
+  const batchClientRequestIdRef = useRef<string | null>(null);
   useEffect(() => {
     setSelectedFlowIds((ids) => {
       const valid = new Set(items.map((flow) => flow.id));
@@ -211,11 +212,12 @@ export function FlowsPage({ project }: { project: Project }) {
       const result = await createPlatformRunBatch(platformToken, platformProjectIdValue, {
         flowIds: selectedFlows.map((flow) => flow.id),
         environmentId: batchEnvironmentId,
-        clientRequestId: crypto.randomUUID(),
+        clientRequestId: batchClientRequestIdRef.current ?? crypto.randomUUID(),
       });
       message.success(`已创建批次（${result.batch.counts.total} 个流程，串行执行）`);
       setSelectedFlowIds([]);
       setBatchOpen(false);
+      batchClientRequestIdRef.current = null;
       navigate(`/project/${project.id}/runs?batch=${encodeURIComponent(result.batch.id)}`);
     } catch (error) {
       if (
@@ -380,6 +382,7 @@ export function FlowsPage({ project }: { project: Project }) {
             disabled={selectedFlowIds.length < 2 || selectedFlowIds.length > 20}
             onClick={() => {
               setBatchEnvironmentId(activeEnvironment?.id);
+              batchClientRequestIdRef.current = crypto.randomUUID();
               setBatchOpen(true);
             }}
           >
@@ -409,7 +412,7 @@ export function FlowsPage({ project }: { project: Project }) {
         cancelText="取消"
         confirmLoading={batchSubmitting}
         okButtonProps={{ disabled: selectedFlows.length < 2 || !batchEnvironmentId }}
-        onCancel={() => setBatchOpen(false)}
+        onCancel={() => { setBatchOpen(false); batchClientRequestIdRef.current = null; }}
         onOk={() => void submitBatchRun()}
       >
         <Form layout="vertical">
@@ -417,7 +420,10 @@ export function FlowsPage({ project }: { project: Project }) {
             <Select
               aria-label="批量运行环境"
               value={batchEnvironmentId}
-              onChange={setBatchEnvironmentId}
+              onChange={(value) => {
+                setBatchEnvironmentId(value);
+                batchClientRequestIdRef.current = crypto.randomUUID();
+              }}
               options={environments.map((environment) => ({
                 value: environment.id,
                 label: environment.name,

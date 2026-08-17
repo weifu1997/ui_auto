@@ -78,6 +78,68 @@ def _batch_run_summaries(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return summaries
 
 
+def _recording_environment(
+    services: PlatformServices,
+    project_id: str,
+    environment_id: str,
+) -> dict[str, Any]:
+    row = services.database.execute(
+        """
+        SELECT data FROM project_resources
+        WHERE project_id = ? AND resource_type = 'environments'
+          AND resource_id = ? AND archived_at IS NULL
+        """,
+        (project_id, environment_id),
+    ).fetchone()
+    if row:
+        environment = parse_json(row[0], {})
+        if isinstance(environment, dict):
+            return environment
+    document = services.document_for(project_id)
+    environments = document["data"].get("environments", [])
+    for item in environments:
+        if isinstance(item, dict) and item.get("id") == environment_id:
+            return item
+    raise PlatformError(404, "ENVIRONMENT_NOT_FOUND")
+
+
+def _recording_flow(
+    services: PlatformServices,
+    project_id: str,
+    flow_id: str,
+) -> dict[str, Any]:
+    row = services.database.execute(
+        """
+        SELECT data FROM project_resources
+        WHERE project_id = ? AND resource_type = 'flows'
+          AND resource_id = ? AND archived_at IS NULL
+        """,
+        (project_id, flow_id),
+    ).fetchone()
+    if row:
+        flow = parse_json(row[0], {})
+        if isinstance(flow, dict):
+            return flow
+    document = services.document_for(project_id)
+    flows = document["data"].get("flows", [])
+    for item in flows:
+        if isinstance(item, dict) and item.get("id") == flow_id:
+            return item
+    raise PlatformError(404, "FLOW_NOT_FOUND")
+
+
+def _recording_session_for_owner(
+    services: PlatformServices,
+    project_id: str,
+    session_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    session = services.recording_coordinator._require_session(session_id)
+    if session.get("projectId") != project_id or session.get("ownerId") != user_id:
+        raise PlatformError(404, "RECORDING_SESSION_NOT_FOUND")
+    return session
+
+
 def _assert_snapshot_depth(value: Any, limit: int = 100, current: int = 0) -> None:
     if current > limit:
         raise PlatformError(400, "SNAPSHOT_TOO_DEEP")
@@ -3058,16 +3120,32 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         run = services.run_by_id(run_id)
         if run["projectId"] != project_id:
             raise PlatformError(404, "RUN_NOT_FOUND")
-        services.database.execute(
-            """
-            UPDATE platform_runs
-            SET cancellation_requested = 1,
-                status = CASE WHEN status = 'queued' THEN 'canceled' ELSE status END,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (now(), run["id"]),
-        )
+        if run["status"] not in ("queued", "running"):
+            return _send(
+                Response(),
+                202,
+                {"run": services.run_response(run)},
+            )
+        if run["status"] == "queued":
+            services.database.execute(
+                """
+                UPDATE platform_runs
+                SET cancellation_requested = 1,
+                    status = 'canceled',
+                    updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (now(), run["id"]),
+            )
+        else:
+            services.database.execute(
+                """
+                UPDATE platform_runs
+                SET cancellation_requested = 1, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now(), run["id"]),
+            )
         services.cancel_managed_run(run["id"])
         services.append_run_event(
             run["id"], "run.cancel_requested", {"actorId": user.id}
@@ -3092,32 +3170,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             raise PlatformError(404, "RUN_NOT_FOUND")
         if run["status"] not in ("failed", "canceled"):
             raise PlatformError(409, "RUN_NOT_RETRYABLE")
-        queued = services.queue_published_runs(
-            {
-                "projectId": project_id,
-                "revisionId": run["revisionId"],
-                "environmentId": run["environmentId"],
-                "createdBy": user.id,
-                "source": "manual",
-                "allowSuperseded": True,
-            }
-        )
-        new_run_id = queued["runIds"][0]
-        services.database.execute(
-            "UPDATE platform_runs SET retry_of_run_id = ? WHERE id = ?",
-            (run["id"], new_run_id),
-        )
-        services.append_run_event(
-            new_run_id, "run.retried", {"priorRunId": run["id"], "actorId": user.id}
-        )
-        runs = [
-            services.run_response(services.run_by_id(run_id))
-            for run_id in queued["runIds"]
-        ]
+        retried = services.retry_run_snapshot(project_id, run_id, user.id)
         return _send(
             Response(),
             202,
-            {"runIds": queued["runIds"], "runs": runs},
+            {"runIds": retried["runIds"], "runs": retried["runs"]},
         )
 
     @router.api_route(
@@ -3159,20 +3216,21 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             }
         )
         batch = created["batch"]
-        services.audit(
-            project["workspace_id"],
-            {"type": "user", "id": user.id},
-            "run_batch.created",
-            {"type": "run_batch", "id": batch["id"]},
-            {
-                "flowIds": batch["flowIds"],
-                "runIds": [run["id"] for run in created["runs"]],
-                "environmentId": batch["environmentId"],
-                "counts": batch["counts"],
-                "retryOfBatchId": batch["retryOfBatchId"],
-            },
-            project_id,
-        )
+        if not created["replayed"]:
+            services.audit(
+                project["workspace_id"],
+                {"type": "user", "id": user.id},
+                "run_batch.created",
+                {"type": "run_batch", "id": batch["id"]},
+                {
+                    "flowIds": batch["flowIds"],
+                    "runIds": [run["id"] for run in created["runs"]],
+                    "environmentId": batch["environmentId"],
+                    "counts": batch["counts"],
+                    "retryOfBatchId": batch["retryOfBatchId"],
+                },
+                project_id,
+            )
         return _send(
             Response(),
             200 if created["replayed"] else 202,
@@ -3213,17 +3271,18 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         )
         project = result["project"]
         canceled = services.cancel_run_batch(project_id, batch_id, user.id)
-        services.audit(
-            project["workspace_id"],
-            {"type": "user", "id": user.id},
-            "run_batch.cancel_requested",
-            {"type": "run_batch", "id": batch_id},
-            {
-                "affectedQueued": canceled["affectedQueued"],
-                "affectedRunning": canceled["affectedRunning"],
-            },
-            project_id,
-        )
+        if canceled["affectedQueued"] or canceled["affectedRunning"]:
+            services.audit(
+                project["workspace_id"],
+                {"type": "user", "id": user.id},
+                "run_batch.cancel_requested",
+                {"type": "run_batch", "id": batch_id},
+                {
+                    "affectedQueued": canceled["affectedQueued"],
+                    "affectedRunning": canceled["affectedRunning"],
+                },
+                project_id,
+            )
         return _send(
             Response(),
             202,
@@ -3254,18 +3313,19 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         retried = services.retry_run_batch(
             project_id, batch_id, user.id, client_request_id
         )
-        services.audit(
-            project["workspace_id"],
-            {"type": "user", "id": user.id},
-            "run_batch.retried",
-            {"type": "run_batch", "id": retried["batch"]["id"]},
-            {
-                "sourceBatchId": batch_id,
-                "newBatchId": retried["batch"]["id"],
-                "retriedFlowIds": retried["batch"]["flowIds"],
-            },
-            project_id,
-        )
+        if not retried["replayed"]:
+            services.audit(
+                project["workspace_id"],
+                {"type": "user", "id": user.id},
+                "run_batch.retried",
+                {"type": "run_batch", "id": retried["batch"]["id"]},
+                {
+                    "sourceBatchId": batch_id,
+                    "newBatchId": retried["batch"]["id"],
+                    "retriedFlowIds": retried["batch"]["flowIds"],
+                },
+                project_id,
+            )
         return _send(
             Response(),
             202,
@@ -3274,6 +3334,197 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 "runs": _batch_run_summaries(retried["runs"]),
             },
         )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions",
+        methods=["POST"],
+    )
+    async def recording_session_create(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        result = services.require_project_capability(
+            project_id, user.id, "flow.edit"
+        )
+        project = result["project"]
+        try:
+            body = await request.json()
+        except Exception:
+            raise PlatformError(400, "RECORDING_INPUT_INVALID") from None
+        if not isinstance(body, dict):
+            body = {}
+        flow_id = _text(body.get("flowId")).strip()
+        environment_id = _text(body.get("environmentId")).strip()
+        start_url = _text(body.get("startUrl")).strip()
+        fresh_login = bool(body.get("freshLogin"))
+        if not flow_id or not environment_id:
+            raise PlatformError(400, "RECORDING_INPUT_INVALID")
+        _recording_flow(services, project_id, flow_id)
+        environment = _recording_environment(
+            services, project_id, environment_id
+        )
+        session = services.recording_coordinator.create_session(
+            project_id,
+            flow_id,
+            environment,
+            start_url or "/",
+            owner_id=user.id,
+            fresh_login=fresh_login,
+            login_state_provider=services.recording_login_state_provider,
+        )
+        services.audit(
+            project["workspace_id"],
+            {"type": "user", "id": user.id},
+            "recording.session_started",
+            {"type": "recording_session", "id": session["id"]},
+            {
+                "flowId": flow_id,
+                "environmentId": environment_id,
+                "currentUrl": session["currentUrl"],
+            },
+            project_id,
+        )
+        return _send(Response(), 201, {"session": session})
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}",
+        methods=["GET"],
+    )
+    async def recording_session_detail(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "flow.edit")
+        session = services.recording_coordinator.session_response(
+            _recording_session_for_owner(services, project_id, session_id, user.id)
+        )
+        return _send(Response(), 200, {"session": session})
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}/events",
+        methods=["GET"],
+    )
+    async def recording_session_events(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "flow.edit")
+        _recording_session_for_owner(services, project_id, session_id, user.id)
+        query = request.query_params
+        try:
+            after_seq = int(query.get("afterSeq", "0") or "0")
+        except ValueError:
+            raise PlatformError(400, "RECORDING_AFTER_SEQ_INVALID") from None
+        try:
+            limit = max(1, min(int(query.get("limit", "100") or "100"), 500))
+        except ValueError:
+            raise PlatformError(400, "RECORDING_LIMIT_INVALID") from None
+        return _send(
+            Response(),
+            200,
+            services.recording_coordinator.events_after(
+                session_id, after_seq, limit
+            ),
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}/pause",
+        methods=["POST"],
+    )
+    async def recording_session_pause(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "flow.edit")
+        _recording_session_for_owner(services, project_id, session_id, user.id)
+        return _send(
+            Response(),
+            200,
+            {"session": services.recording_coordinator.pause(session_id)},
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}/resume",
+        methods=["POST"],
+    )
+    async def recording_session_resume(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "flow.edit")
+        _recording_session_for_owner(services, project_id, session_id, user.id)
+        return _send(
+            Response(),
+            200,
+            {"session": services.recording_coordinator.resume(session_id)},
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}/stop",
+        methods=["POST"],
+    )
+    async def recording_session_stop(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        capability = services.require_project_capability(
+            project_id, user.id, "flow.edit"
+        )
+        session = _recording_session_for_owner(
+            services, project_id, session_id, user.id
+        )
+        was_active = session["status"] not in ("stopped", "canceled", "expired", "failed")
+        stopped = services.recording_coordinator.stop(session_id)
+        result = services.recording_coordinator.session_result(session_id)
+        if was_active:
+            services.audit(
+                capability["project"]["workspace_id"],
+                {"type": "user", "id": user.id},
+                "recording.session_stopped",
+                {"type": "recording_session", "id": session_id},
+                {
+                    "flowId": stopped["flowId"],
+                    "environmentId": stopped["environmentId"],
+                    "status": stopped["status"],
+                },
+                project_id,
+            )
+        return _send(
+            Response(),
+            200,
+            {"session": stopped, "result": result["result"]},
+        )
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}",
+        methods=["DELETE"],
+    )
+    async def recording_session_cancel(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        capability = services.require_project_capability(
+            project_id, user.id, "flow.edit"
+        )
+        session = _recording_session_for_owner(
+            services, project_id, session_id, user.id
+        )
+        was_active = session["status"] not in ("stopped", "canceled", "expired", "failed")
+        canceled = services.recording_coordinator.cancel(session_id)
+        if was_active:
+            services.audit(
+                capability["project"]["workspace_id"],
+                {"type": "user", "id": user.id},
+                "recording.session_canceled",
+                {"type": "recording_session", "id": session_id},
+                {
+                    "flowId": canceled["flowId"],
+                    "environmentId": canceled["environmentId"],
+                    "status": canceled["status"],
+                },
+                project_id,
+            )
+        return _send(Response(), 200, {"session": canceled})
 
     @router.api_route(
         "/api/platform/projects/{project_id}/element-validations",

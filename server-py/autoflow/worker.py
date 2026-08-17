@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlsplit
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from .browser_session import close_browser_session, launch_browser_session
 from .core import json, now, safe_artifact_name
 from .http import PlatformError
 from .managed_runner import ManagedRunner
@@ -668,6 +669,22 @@ class WorkerService:
     def _touch_picker_session(self, session: dict[str, Any]) -> None:
         session["lastActivityAt"] = time.time() * 1000
 
+    def recording_storage_state(
+        self, project_id: str, environment_id: str
+    ) -> dict[str, Any] | None:
+        for session in self.picker_sessions.values():
+            if (
+                session.get("projectId") == project_id
+                and session.get("environmentId") == environment_id
+            ):
+                try:
+                    return self.submit_picker(
+                        session["context"].storage_state
+                    ).result(timeout=5)
+                except Exception:
+                    return None
+        return None
+
     def submit_picker(self, function, *args):
         future: concurrent.futures.Future = concurrent.futures.Future()
         self.picker_queue.put((future, function, args, None))
@@ -728,8 +745,6 @@ class WorkerService:
         environment: dict[str, Any],
         start_url: str | None = None,
     ) -> dict[str, Any]:
-        from playwright.sync_api import sync_playwright
-
         _project_or_throw(project_id)
         if environment.get("browser") != "Chromium":
             raise PlatformError(400, "PICKER_ENVIRONMENT_UNSUPPORTED")
@@ -757,26 +772,16 @@ class WorkerService:
         self.picker_pending[pending_key] = session
         try:
             target = self._picker_target_url(base_url, start_url or "/")
-            playwright = sync_playwright().start()
             headless = os.environ.get("WORKER_PICKER_HEADLESS", "0") == "1"
-            browser = playwright.chromium.launch(headless=headless)
-            context = browser.new_context(locale="zh-CN")
-            page = context.new_page()
+            browser_session = launch_browser_session(headless)
+            playwright = browser_session["playwright"]
+            browser = browser_session["browser"]
+            context = browser_session["context"]
+            page = browser_session["page"]
             try:
                 page.goto(target, wait_until="commit", timeout=30000)
             except Exception:
-                try:
-                    context.close()
-                except Exception:
-                    pass
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-                try:
-                    playwright.stop()
-                except Exception:
-                    pass
+                close_browser_session(browser_session)
                 raise PlatformError(502, "PICKER_SESSION_LOAD_FAILED") from None
             try:
                 page.wait_for_function(
@@ -869,18 +874,7 @@ class WorkerService:
 
     def end_local_picker_session(self, session: dict[str, Any]) -> None:
         self.picker_sessions.pop(session["id"], None)
-        try:
-            session.get("context").close()
-        except Exception:
-            pass
-        try:
-            session.get("browser").close()
-        except Exception:
-            pass
-        try:
-            session.get("playwright").stop()
-        except Exception:
-            pass
+        close_browser_session(session)
 
     def enable_picker(
         self,

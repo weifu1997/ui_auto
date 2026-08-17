@@ -136,7 +136,7 @@ test("assembles a Platform fixture run and renders the mocked completed report",
   await expect(page.getByText("trace.zip", { exact: true })).toBeVisible();
 
   const completedRunUrl = page.url();
-  await page.getByRole("button", { name: "重新运行" }).click();
+  await page.getByRole("button", { name: "再次运行（新运行）" }).click();
   await expect.poll(() => page.url()).not.toBe(completedRunUrl);
   await expect(page.locator(".report-state strong")).toHaveText("通过", { timeout: 10_000 });
 });

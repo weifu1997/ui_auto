@@ -1,4 +1,9 @@
+import asyncio
+
+from fastapi import Request
+
 from autoflow.core import json
+from autoflow.handler import create_platform_router
 from autoflow.http import PlatformError
 from autoflow.services import AuthUser, PlatformServices
 
@@ -345,6 +350,20 @@ def test_batch_cancel_idempotent_and_scoped(tmp_path):
         services.close()
 
 
+def test_batch_cancel_queued_children_removed_from_runner(tmp_path):
+    services, project_id = _setup_services(tmp_path)
+    try:
+        created = _create_two_flow_batch(services, project_id)
+        cancel_calls: list[str] = []
+        services.cancel_managed_run = lambda run_id: (cancel_calls.append(run_id), True)[1]
+        result = services.cancel_run_batch(project_id, created["batch"]["id"], "owner-1")
+        assert result["affectedQueued"] == 2
+        assert result["affectedRunning"] == 0
+        assert sorted(cancel_calls) == sorted(run["id"] for run in created["runs"])
+    finally:
+        services.close()
+
+
 def test_batch_retry_uses_original_revision_snapshots(tmp_path):
     services, project_id = _setup_services(tmp_path)
     try:
@@ -422,5 +441,106 @@ def test_batch_list_pagination_and_status_filter(tmp_path):
         ]
         single = services.run_batches_page(project_id, 2, 1)
         assert [batch["id"] for batch in single["batches"]] == [first["batch"]["id"]]
+    finally:
+        services.close()
+
+
+def test_batch_route_replays_do_not_write_duplicate_audit_events(tmp_path):
+    services, project_id = _setup_services(tmp_path)
+    try:
+        token = services.create_auth_session(
+            AuthUser("owner-1", "owner@example.test", "Owner")
+        )["token"]
+        router = create_platform_router(services)
+
+        def route(path):
+            return next(item for item in router.routes if getattr(item, "path", None) == path)
+
+        def call(endpoint, method="POST", body=None, **path_params):
+            async def execute():
+                scope = {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": method,
+                    "scheme": "http",
+                    "path": f"/api/platform/projects/{project_id}",
+                    "raw_path": f"/api/platform/projects/{project_id}".encode(),
+                    "query_string": b"",
+                    "headers": [(b"authorization", f"Bearer {token}".encode())],
+                    "client": ("127.0.0.1", 1234),
+                    "server": ("127.0.0.1", 8787),
+                }
+
+                async def receive():
+                    return {"type": "http.request", "body": body or b"", "more_body": False}
+
+                return await endpoint.endpoint(
+                    Request(scope, receive=receive), project_id=project_id, **path_params
+                )
+
+            return asyncio.run(execute())
+
+        batch = {
+            "id": "batch-1",
+            "flowIds": ["flow-a", "flow-b"],
+            "environmentId": "env-1",
+            "counts": {"total": 2},
+            "retryOfBatchId": None,
+        }
+        run = {
+            "id": "run-1",
+            "status": "queued",
+            "revisionId": "revision-1",
+            "environmentId": "env-1",
+            "snapshot": {"flow": {"name": "Flow A"}},
+            "cancellationRequested": False,
+            "createdAt": "2026-08-16T00:00:00.000Z",
+            "updatedAt": "2026-08-16T00:00:00.000Z",
+        }
+        created = iter((
+            {"batch": batch, "runs": [run], "replayed": False},
+            {"batch": batch, "runs": [run], "replayed": True},
+        ))
+        canceled = iter((
+            {"batch": batch, "runs": [run], "affectedQueued": 1, "affectedRunning": 0},
+            {"batch": batch, "runs": [run], "affectedQueued": 0, "affectedRunning": 0},
+        ))
+        retry_batch = {**batch, "id": "batch-2", "retryOfBatchId": "batch-1"}
+        retried = iter((
+            {"batch": retry_batch, "runs": [run], "replayed": False},
+            {"batch": retry_batch, "runs": [run], "replayed": True},
+        ))
+        audit_actions = []
+        services.create_run_batch = lambda _input: next(created)
+        services.cancel_run_batch = lambda *_args: next(canceled)
+        services.retry_run_batch = lambda *_args: next(retried)
+        services.audit = lambda *_args: audit_actions.append(_args[2])
+
+        batches_route = route("/api/platform/projects/{project_id}/run-batches")
+        cancel_route = route(
+            "/api/platform/projects/{project_id}/run-batches/{batch_id}/cancel"
+        )
+        retry_route = route(
+            "/api/platform/projects/{project_id}/run-batches/{batch_id}/retry-failed"
+        )
+        create_body = json({
+            "flowIds": ["flow-a", "flow-b"],
+            "environmentId": "env-1",
+            "clientRequestId": "create-key",
+        }).encode()
+        retry_body = json({"clientRequestId": "retry-key"}).encode()
+
+        assert call(batches_route, body=create_body).status_code == 202
+        assert call(batches_route, body=create_body).status_code == 200
+        assert call(cancel_route, batch_id="batch-1").status_code == 202
+        assert call(cancel_route, batch_id="batch-1").status_code == 202
+        assert call(retry_route, body=retry_body, batch_id="batch-1").status_code == 202
+        assert call(retry_route, body=retry_body, batch_id="batch-1").status_code == 202
+        assert audit_actions == [
+            "run_batch.created",
+            "run_batch.cancel_requested",
+            "run_batch.retried",
+        ]
     finally:
         services.close()

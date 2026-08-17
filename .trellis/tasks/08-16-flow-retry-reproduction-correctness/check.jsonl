@@ -1,0 +1,9 @@
+{"file":".trellis/tasks/08-16-flow-retry-reproduction-correctness/prd.md","reason":"逐条复核 AC1-AC8、已收敛的 retry 变量/secret 时序和不得扩大到 governance audit schema 的范围"}
+{"file":".trellis/spec/backend/index.md","reason":"检查服务层事务、迁移兼容、ManagedRunner 入队和后端回归门禁"}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"检查 run.retried 事件、secret 脱敏和审计 payload 不含 snapshot/明文"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"检查新增 retryOfRunId DTO 后的构建、lint、单测和可选 E2E 门禁"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"检查 snapshot.flow.id 的安全 narrowing、nullable retryOfRunId 和 fresh 多 run 响应不依赖组件内 cast"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核 revision/checksum、datasetRow、upToStepId 和 lineage 从 DB 到 API/runner 的 round-trip"}
+{"file":".trellis/tasks/08-15-next-roadmap-planning/research/evidence-refresh-2026-08-15.md","reason":"验证修复覆盖已记录的 dataset 扩张、步骤边界丢失和第一条关联缺陷"}
+{"file":".trellis/tasks/08-15-flow-batch-execution-mvp/prd.md","reason":"确认 batch failed/canceled retry 继承本任务一对一 clone，不自行改变语义"}
+{"file":".trellis/tasks/08-15-flow-batch-execution-mvp/implement.md","reason":"复核 batch retry external gate、事务/入队顺序和待补的逐条 clone 回归"}

@@ -1,6 +1,6 @@
 import { message } from "../antd-feedback";
 import type { Project, Run } from "../mock-data";
-import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRunBatch } from "../platform-api";
+import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../platform-api";
 import type { PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../platform-api";
 
 import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
@@ -68,11 +68,13 @@ export function RunsPage({ project }: { project: Project }) {
   const [fromFilter, setFromFilter] = useState(() => new URLSearchParams(location.search).get("from") ?? "");
   const [toFilter, setToFilter] = useState(() => new URLSearchParams(location.search).get("to") ?? "");
   const [page, setPage] = useState(() => Math.max(1, Number(new URLSearchParams(location.search).get("page") ?? "1") || 1));
+  const [batchPage, setBatchPage] = useState(() => Math.max(1, Number(new URLSearchParams(location.search).get("batchPage") ?? "1") || 1));
   const [platformPageRuns, setPlatformPageRuns] = useState<Run[]>([]);
   const [platformTotal, setPlatformTotal] = useState(0);
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [batches, setBatches] = useState<PlatformRunBatch[]>([]);
+  const [batchTotal, setBatchTotal] = useState(0);
   const [batchItems, setBatchItems] = useState<Record<string, PlatformRunBatchItem[]>>({});
   const [expandedBatchIds, setExpandedBatchIds] = useState<string[]>(() => {
     const target = new URLSearchParams(window.location.search).get("batch");
@@ -123,9 +125,10 @@ export function RunsPage({ project }: { project: Project }) {
     if (!platformSession || !remotePlatformProjectId) return;
     try {
       const response = await getPlatformRunBatches(
-        platformSession.token, remotePlatformProjectId, { page: 1, pageSize: 20 },
+        platformSession.token, remotePlatformProjectId, { page: batchPage, pageSize: 20 },
       );
       setBatches(response.batches);
+      setBatchTotal(response.total);
       const stale = expandedBatchIds.filter(
         (batchId) => response.batches.some((batch) => batch.id === batchId),
       );
@@ -135,7 +138,7 @@ export function RunsPage({ project }: { project: Project }) {
     } catch {
       // 批次列表轮询失败时保留上次结果，不影响单运行视图。
     }
-  }, [expandedBatchIds, loadBatchItems, platformSession, remotePlatformProjectId]);
+  }, [batchPage, expandedBatchIds, loadBatchItems, platformSession, remotePlatformProjectId]);
   useEffect(() => {
     void refreshBatches();
   }, [refreshBatches]);
@@ -151,11 +154,11 @@ export function RunsPage({ project }: { project: Project }) {
   usePolling(refreshPlatformRuns, pollInterval);
   usePolling(refreshBatches, pollInterval);
   const cancelBatch = async (batch: PlatformRunBatch) => {
-    if (!platformSession || !platformProjectId) return;
+    if (!platformSession || !remotePlatformProjectId) return;
     setBatchUpdatingId(batch.id);
     try {
       const response = await cancelPlatformRunBatch(
-        platformSession.token, platformProjectId, batch.id,
+        platformSession.token, remotePlatformProjectId, batch.id,
       );
       setBatches((current) => current.map(
         (item) => (item.id === response.batch.id ? response.batch : item),
@@ -169,13 +172,15 @@ export function RunsPage({ project }: { project: Project }) {
     }
   };
   const retryBatch = async (batch: PlatformRunBatch) => {
-    if (!platformSession || !platformProjectId) return;
+    if (!platformSession || !remotePlatformProjectId) return;
     setBatchUpdatingId(batch.id);
     try {
-      await retryPlatformRunBatch(
-        platformSession.token, platformProjectId, batch.id, crypto.randomUUID(),
+      const response = await retryPlatformRunBatch(
+        platformSession.token, remotePlatformProjectId, batch.id, crypto.randomUUID(),
       );
       message.success("已创建重试批次，失败与取消项将按原版本快照重新执行");
+      setExpandedBatchIds([response.batch.id]);
+      setBatchPage(1);
       await refreshBatches();
     } catch (error) {
       if (error instanceof Error && error.message === "BATCH_NOT_RETRYABLE") {
@@ -196,9 +201,11 @@ export function RunsPage({ project }: { project: Project }) {
     if (sourceFilter !== "all") params.set("source", sourceFilter);
     if (fromFilter) params.set("from", fromFilter);
     if (toFilter) params.set("to", toFilter);
+    if (batchPage > 1) params.set("batchPage", String(batchPage));
+    if (expandedBatchIds[0]) params.set("batch", expandedBatchIds[0]);
     const search = params.toString();
     navigate(`${location.pathname}${search ? `?${search}` : ""}`, { replace: true });
-  }, [filter, flowFilter, fromFilter, location.pathname, navigate, page, sourceFilter, toFilter]);
+  }, [batchPage, expandedBatchIds, filter, flowFilter, fromFilter, location.pathname, navigate, page, sourceFilter, toFilter]);
   const workerRuns = apiRuns.filter(
     (run) => isWorkerRunId(run.id) && (filter === "all" || run.status === filter),
   );
@@ -229,13 +236,17 @@ export function RunsPage({ project }: { project: Project }) {
       if (!isWorkerRunId(run.id)) {
         if (!platformSession || !platformProjectId) throw new Error("PLATFORM_SESSION_REQUIRED");
         const prior = await getPlatformRun(platformSession.token, platformProjectId, run.id);
-        const created = await createPlatformRun(platformSession.token, platformProjectId, {
-          revisionId: prior.run.revisionId,
-          environmentId: prior.run.environmentId,
-        });
+        const flowId = (prior.run.snapshot.flow as { id?: unknown } | undefined)?.id;
+        const created = prior.run.status === "success"
+          ? await createPlatformRun(platformSession.token, platformProjectId, {
+              flowId: typeof flowId === "string" ? flowId : undefined,
+              environmentId: prior.run.environmentId,
+            })
+          : await retryPlatformRun(platformSession.token, platformProjectId, prior.run.id);
+        if (prior.run.status === "success" && created.runIds.length === 0) throw new Error("PLATFORM_FRESH_RUN_NOT_CREATED");
         created.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsRun(platformRun)));
         if (created.runIds[0]) navigate(`/project/${project.id}/runs/${created.runIds[0]}`);
-        message.success("已重新提交给指定 Agent");
+        message.success(prior.run.status === "success" ? "已按最新已发布版本创建新运行" : "已按原快照重新提交");
         return;
       }
       const { runId } = await retryRun(project.id, run.id);
@@ -526,7 +537,13 @@ export function RunsPage({ project }: { project: Project }) {
             rowKey="id"
             columns={batchColumns}
             dataSource={batches}
-            pagination={false}
+            pagination={{
+              current: batchPage,
+              pageSize: 20,
+              total: batchTotal,
+              showSizeChanger: false,
+              onChange: (nextPage) => setBatchPage(nextPage),
+            }}
             expandable={{
               expandedRowKeys: expandedBatchIds,
               onExpand: (expanded, batch) => {

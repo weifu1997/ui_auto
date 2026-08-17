@@ -15,13 +15,13 @@
 - 执行器已经能解析元素并执行目标基础动作，见 `server-py/autoflow/runner.py:137`、`:177`。
 - 当前 Picker 只捕获一次 click，且旧 `/api/projects/*` Worker 路由按部署约定只适合 loopback；录制需要连续事件、导航后注入和带平台认证的远程控制边界，见 `README.md:74`、`server-py/autoflow/main.py:114`、`:124`。
 
-### 规划刷新（2026-08-15）
+### 规划刷新（2026-08-15；起点证据与当前剩余闭环）
 
-- 本任务仍是需求草案，当前不授权实现。共同前置已锁定为独立 P0 子任务 [`08-15-flow-revision-selection-correctness`](../08-15-flow-revision-selection-correctness/prd.md)；录制的“保存后运行/重放”验收依赖其通过。
+- 本任务文档只表达需求边界，不构成继续实现授权。基础 P0 已归档；录制的“保存后运行/重放”最终验收依赖 [`08-16-flow-retry-reproduction-correctness`](../08-16-flow-retry-reproduction-correctness/prd.md) 的一对一快照契约实现和回归证据。
 - 现有 local-picker API 的确是内存会话，但其 `/api/projects/{project}/local-picker/*` 路由只有项目字符串校验，不能直接当作平台录制 API；新增链路必须重新定义 session owner、项目隔离和 `flow.edit` 能力检查。
 - `server-py/autoflow/picker.py` 当前 role locator 只传 role、不带 accessible name；注入脚本只捕获一次 click，不能直接满足连续事件、导航后重新注入和事件游标要求。
 - `src/flow-store.ts` 只有逐项编辑 action；录制 review 需要新增“确认时一次性导入”的状态边界，但不能在停止前逐事件写入 flow/workspace store。
-- `npm run build`、`npm run lint`、`npm run test:unit`（30 个）和 `npm run test:py`（68 个）在本轮通过；录制相关的真实 Chromium fixture 尚不存在，不能把技术闭环视为已验证。
+- `npm run build`、`npm run lint`、`npm run test:unit`（30 个）和 `npm run test:py`（68 个）在初始规划轮通过；后续并行 PoC 已增加真实 Chromium fixture 并验证录制内核，但认证 API、编辑器导入和保存/重放闭环仍未完成，不能把任务标记为通过。
 
 ## Product Decisions
 
@@ -37,7 +37,8 @@
 
 ### Dependency And Non-Goals For Planning
 
-- 先完成 revision 正确性子任务，再把录制“保存、发布、ManagedRunner 重放”作为可验收闭环；录制本身不能绕过现有 revision/save 链路。
+- 基础 revision 正确性已完成；录制不能绕过现有 revision/save 链路。P0 follow-up 的单 run retry 回归仍是录制“保存、发布、ManagedRunner 重放”最终闭环的硬门，不能把已完成的 PoC 当成保存后验收。
+- 录制保存的敏感步骤仍只持久化 secret 名称引用；后续 retry 按 P0 follow-up 的契约处理变量/secret：请求只预检必需名称，enqueue/重启恢复物化 runner input 时读取当时当前值；预检当下缺失稳定拒绝且零写入，预检后删除则已创建 queued run 保留并在物化阶段稳定失败，任何层都不保留历史明文。
 - MVP 继续只支持单项目、单环境、单用户活动会话；不把跨设备连接、会话持久恢复或新的浏览器自动化依赖作为隐含需求。
 - 起始 URL 同源、登录态快照注入与 query/fragment 剥离已于 2026-08-16 确认，见 Product Decisions；录制实现不得在这些边界上自行放宽。
 
@@ -109,6 +110,7 @@
 - [ ] AC12：起始 URL 与环境 `baseUrl` 不同源、携带 userinfo 或非 HTTP(S) 时创建被拒绝且不启动浏览器；录制中跳转外部域展示 warning 且不生成步骤。
 - [ ] AC13：同环境存在存活 Picker 会话时，录制以其登录态快照启动（登录后页面直接可达）；选择「从头录制」或无 Picker 会话时全新 context 启动；录制结束不影响 Picker 会话存活，登录态只读不回写。
 - [ ] AC14：直接导航携带 query/fragment 时，生成的打开页面步骤、review、事件、日志与审计中的 URL 均只含 scheme+host+path。
+- [ ] AC15：页面刷新恢复策略按最终决策验收：推荐仅在 `sessionStorage` 保存 `sessionId` 并恢复控制视图，不保存事件/结果；若选择刷新即取消，则服务端可靠释放会话并显示明确终态。外域 top-frame 导航只产生 warning，不生成可执行步骤。
 
 ## Out Of Scope
 
@@ -134,4 +136,4 @@
 
 ## Open Questions For Requirement Convergence
 
-（无——录制相关产品决策已全部收敛，见 Product Decisions。）
+1. 编辑器页面刷新时，是否只在 `sessionStorage` 保存 `sessionId` 并恢复录制控制视图（推荐）；还是刷新即取消会话并释放浏览器？推荐前者，因为不持久化事件/结果即可保留用户操作连续性；代价是需要处理过期 session 的恢复错误。

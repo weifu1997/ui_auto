@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/tasks/08-15-next-roadmap-planning/research/evidence-refresh-2026-08-15.md","reason":"复核当前代码证据、已收敛决策与 retry dataset/upToStep/checksum 的实现回归门禁，避免把实现状态误当规划验收"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查多任务依赖、验收映射、兼容性和审计链路是否跨层一致"}
+{"file":".trellis/tasks/08-16-flow-retry-reproduction-correctness/prd.md","reason":"检查 P0 follow-up 的产品决策、错误边界和 batch/recording 硬依赖是否一致"}

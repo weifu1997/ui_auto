@@ -1,3 +1,5 @@
 {"file":".trellis/spec/backend/index.md","reason":"FastAPI、SQLite、Playwright 和后端测试的项目约定"}
 {"file":".trellis/spec/frontend/index.md","reason":"React、Ant Design、Zustand、API 类型和前端测试约定"}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"录制事件跨浏览器、服务端、API、store 和 revision 的契约检查"}
+{"file":".trellis/tasks/08-15-next-roadmap-planning/research/evidence-refresh-2026-08-15.md","reason":"录制保存/发布/重放必须继承 P0 原 revision checksum 与 retry 审计契约"}
+{"file":".trellis/tasks/08-16-flow-retry-reproduction-correctness/prd.md","reason":"录制保存后运行/重放不得绕过 retry reproduction 的原 snapshot 一对一契约"}

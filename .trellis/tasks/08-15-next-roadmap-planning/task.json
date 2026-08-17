@@ -22,7 +22,8 @@
     "08-15-flow-recording-mvp",
     "08-15-flow-batch-execution-mvp",
     "08-15-flow-revision-selection-correctness",
-    "08-16-legacy-e2e-failures"
+    "08-16-legacy-e2e-failures",
+    "08-16-flow-retry-reproduction-correctness"
   ],
   "parent": null,
   "relatedFiles": [],

@@ -123,6 +123,7 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
         ),
     )
     app.state.worker = worker
+    services.recording_login_state_provider = worker.recording_storage_state
     app.include_router(create_worker_router(worker))
 
     @asynccontextmanager
@@ -134,6 +135,7 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
             maintenance_task.cancel()
             await asyncio.gather(maintenance_task, return_exceptions=True)
             worker.close()
+            services.close()
 
     @app.exception_handler(PlatformError)
     async def platform_error_handler(
@@ -231,6 +233,7 @@ async def _maintenance_loop(services: PlatformServices) -> None:
         try:
             await asyncio.to_thread(services.process_due_schedules)
             await asyncio.to_thread(services.deliver_pending_notifications)
+            await asyncio.to_thread(services.recording_coordinator.sweep_expired)
             from datetime import datetime, timedelta, timezone
 
             watchdog_cutoff = (

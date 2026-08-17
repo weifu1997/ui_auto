@@ -78,7 +78,7 @@ async function installAutomationMocks(page: Page) {
     contentType: "application/json",
     body: JSON.stringify({ subscriptions: [] }),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/deliveries", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/platform-sauce/deliveries**", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ deliveries: [] }),
   }));

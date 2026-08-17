@@ -1,0 +1,452 @@
+"""Recording Phase 1: session lifecycle, payload validation, target URL rules."""
+
+import concurrent.futures
+import threading
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+
+import pytest
+
+from autoflow.http import PlatformError
+from autoflow.recorder import (
+    RecordingCoordinator,
+    RecorderNormalizer,
+    recording_target_url,
+    sanitize_url,
+    validate_recorder_event,
+)
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "recorder"
+
+
+class _StubFuture:
+    def __init__(self, value):
+        self._value = value
+
+    def result(self, timeout=None):
+        return self._value
+
+
+class _ImmediateSubmit:
+    """同步执行提交，模拟专用 Playwright 线程。"""
+
+    def __call__(self, function, *args):
+        return _StubFuture(function(*args))
+
+
+class _StubContext:
+    def __init__(self):
+        self.init_scripts = []
+        self.bindings = {}
+        self.closed = False
+
+    def add_init_script(self, script):
+        self.init_scripts.append(script)
+
+    def expose_binding(self, name, callback):
+        self.bindings[name] = callback
+
+    def close(self):
+        self.closed = True
+
+
+class _StubBrowser:
+    def __init__(self):
+        self.closed = False
+        self.handlers = {}
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    def close(self):
+        self.closed = True
+
+
+class _StubPlaywright:
+    def __init__(self):
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+class _StubPage:
+    def __init__(self, context):
+        self.context = context
+        self.goto_targets = []
+        self.handlers = {}
+        self.url = ""
+
+    @property
+    def main_frame(self):
+        return self
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    def goto(self, target, **_kwargs):
+        self.goto_targets.append(target)
+        self.url = target
+        handler = self.handlers.get("framenavigated")
+        if handler:
+            handler(self)
+
+
+def _stub_launch(state):
+    context = _StubContext()
+    return {
+        "playwright": _StubPlaywright(),
+        "browser": _StubBrowser(),
+        "context": context,
+        "page": _StubPage(context),
+        "state": state,
+    }
+
+
+ENVIRONMENT = {
+    "id": "env-1",
+    "name": "测试环境",
+    "browser": "Chromium",
+    "baseUrl": "https://app.test",
+    "testIdAttribute": "data-testid",
+}
+
+
+def test_sanitize_url_strips_userinfo_query_and_fragment():
+    assert sanitize_url("https://user:pw@app.test/path?token=1#x") == (
+        "https://app.test/path"
+    )
+    assert sanitize_url("https://app.test/path?q=1#x") == "https://app.test/path"
+
+
+    assert recording_target_url("https://app.test", "/login?from=nav") == (
+        "https://app.test/login?from=nav"
+    )
+    assert (
+        recording_target_url("https://app.test/base/", "https://app.test/base/one")
+        == "https://app.test/base/one"
+    )
+    for bad in (
+        "https://user:pw@app.test/login",
+        "https://evil.test/login",
+        "http://app.test/login",
+        "javascript:alert(1)",
+        "https://app.test:8443/login",
+        "https://app.test:not-a-port/login",
+    ):
+        with pytest.raises(PlatformError) as error:
+            recording_target_url("https://app.test", bad)
+        assert error.value.code == "RECORDING_START_URL_INVALID"
+    with pytest.raises(PlatformError) as error:
+        recording_target_url("ftp://app.test", "/login")
+    assert error.value.code == "RECORDING_ENVIRONMENT_INVALID"
+    with pytest.raises(PlatformError) as error:
+        recording_target_url("https://app.test:not-a-port", "/login")
+    assert error.value.code == "RECORDING_ENVIRONMENT_INVALID"
+
+
+def test_validate_recorder_event_normalizes_and_drops():
+    assert validate_recorder_event(None) is None
+    assert validate_recorder_event("click") is None
+    assert validate_recorder_event({"kind": "navigate"}) is None
+
+    event = validate_recorder_event({
+        "kind": "click",
+        "frame": "child",
+        "url": "https://app.test/p?token=1#x",
+        "element": {"tag": "button", "testid": "go", "text": "确定" * 50},
+        "at": 123,
+    })
+    assert event["frame"] == "child"
+    assert event["url"] == "https://app.test/p"
+    assert event["element"]["text"] == "确定" * 50
+    assert event["value"] is None
+
+    sensitive = validate_recorder_event({
+        "kind": "input",
+        "element": {"tag": "input", "type": "password", "name": "pwd"},
+        "sensitive": False,
+        "value": "leak-attempt",
+    })
+    assert sensitive["sensitive"] is True
+    assert sensitive["value"] is None
+
+    change = validate_recorder_event({
+        "kind": "change",
+        "element": {"tag": "select", "testid": "role"},
+        "selectedValue": "tester",
+        "checked": True,
+    })
+    assert change["selectedValue"] == "tester"
+    assert change["checked"] is True
+
+    keydown = validate_recorder_event({"kind": "keydown", "key": "Enter"})
+    assert keydown["key"] == "Enter"
+
+    unsupported = validate_recorder_event({
+        "kind": "unsupported",
+        "feature": "contenteditable",
+        "at": "not-a-timestamp",
+    })
+    assert unsupported["feature"] == "contenteditable"
+    assert unsupported["at"] == 0
+
+    normalizer = RecorderNormalizer("https://app.test/login")
+    normalizer.append(unsupported)
+    normalizer.append({"kind": "dragstart", "at": 1})
+    warnings = normalizer.result()["warnings"]
+    assert any("contenteditable" in warning for warning in warnings)
+    assert any("drag" in warning for warning in warnings)
+
+
+def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
+    launched = []
+
+    def launch(headless, storage_state=None):
+        session = _stub_launch({"headless": headless, "storage": storage_state})
+        launched.append(session)
+        return session
+
+    clock = {"now": 1_000_000}
+    coordinator = RecordingCoordinator(
+        submit=_ImmediateSubmit(),
+        launch=launch,
+        idle_ms=1000,
+        max_ms=100_000,
+        now_ms=lambda: clock["now"],
+    )
+    created = coordinator.create_session(
+        "project-1", "flow-1", ENVIRONMENT, "/login?next=/home", headless=True
+    )
+    assert created["status"] == "recording"
+    assert created["currentUrl"] == "https://app.test/login"
+    browser = launched[0]
+    assert browser["page"].goto_targets == ["https://app.test/login?next=/home"]
+    assert browser["context"].init_scripts
+    emit = lambda payload: browser["context"].bindings["__autoflowRecorderEvent"](None, payload)
+
+    with pytest.raises(PlatformError) as error:
+        coordinator.create_session("project-1", "flow-2", ENVIRONMENT, "/login")
+    assert error.value.code == "RECORDING_SESSION_ACTIVE"
+
+    emit({"kind": "input", "url": "https://app.test/login",
+          "element": {"tag": "input", "type": "text", "testid": "login-username",
+                      "label": "用户名"}, "value": "tester", "at": 10})
+    emit({"kind": "click", "url": "https://app.test/login",
+          "element": {"tag": "button", "testid": "login-submit", "text": "登录",
+                      "role": "button", "accessibleName": "登录"}, "at": 20})
+    browser["page"].url = "https://app.test/home?ticket=1"
+    browser["page"].handlers["framenavigated"](browser["page"])
+    assert coordinator.events_after(created["id"], 0)["lastSeq"] >= 3
+
+    coordinator.pause(created["id"])
+    seq_before = coordinator.events_after(created["id"], 0)["lastSeq"]
+    emit({"kind": "input", "url": "https://app.test/home",
+          "element": {"tag": "input", "testid": "search"}, "value": "ignored", "at": 30})
+    after_pause = coordinator.events_after(created["id"], 0)
+    assert after_pause["lastSeq"] == seq_before
+    assert not [
+        event for event in after_pause["events"] if event.get("value") == "ignored"
+    ]
+    coordinator.resume(created["id"])
+
+    stopped = coordinator.stop(created["id"])
+    assert stopped["status"] == "stopped"
+    assert coordinator.stop(created["id"])["status"] == "stopped"
+    result = coordinator.session_result(created["id"])
+    actions = [(step["action"], step.get("value")) for step in result["result"]["steps"]]
+    assert actions == [
+        ("打开页面", "/login"),
+        ("填写", "tester"),
+        ("点击", None),
+        ("打开页面", "/home"),
+    ]
+    assert browser["context"].closed and browser["browser"].closed
+    assert browser["playwright"].stopped
+    assert result["session"]["status"] == "stopped"
+
+    canceled = coordinator.create_session("project-1", "flow-3", ENVIRONMENT, "/login")
+    assert coordinator.cancel(canceled["id"])["status"] == "canceled"
+
+    expiring = coordinator.create_session("project-1", "flow-4", ENVIRONMENT, "/login")
+    clock["now"] += 2000
+    assert coordinator.sweep_expired() == [expiring["id"]]
+    assert coordinator.session_response(coordinator._require_session(expiring["id"]))["status"] == "expired"
+    coordinator.close_all()
+
+
+def test_create_session_failure_closes_launched_browser():
+    launched = []
+
+    class _RaisingPage(_StubPage):
+        def goto(self, target, **_kwargs):
+            self.goto_targets.append(target)
+            raise RuntimeError("boom")
+
+    def launch(headless, storage_state=None):
+        context = _StubContext()
+        session = {
+            "playwright": _StubPlaywright(),
+            "browser": _StubBrowser(),
+            "context": context,
+            "page": _RaisingPage(context),
+        }
+        launched.append(session)
+        return session
+
+    failures = []
+    coordinator = RecordingCoordinator(
+        submit=_ImmediateSubmit(), launch=launch, on_failed=failures.append
+    )
+    with pytest.raises(PlatformError) as error:
+        coordinator.create_session(
+            "project-fail", "flow-1", ENVIRONMENT, "/login", headless=True
+        )
+    assert error.value.status == 409
+    assert error.value.code == "RECORDING_NAVIGATION_FAILED"
+    assert launched
+    browser = launched[0]
+    assert browser["context"].closed is True
+    assert browser["browser"].closed is True
+    assert browser["playwright"].stopped is True
+    assert len(failures) == 1
+    failed = coordinator._require_session(failures[0]["id"])
+    assert failed["status"] == "failed"
+    assert failed["errorCode"] == "RECORDING_NAVIGATION_FAILED"
+
+
+def test_page_close_marks_session_failed_releases_resources_and_audits_once():
+    launched = []
+    failures = []
+
+    def launch(headless, storage_state=None):
+        session = _stub_launch({"headless": headless, "storage": storage_state})
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(
+        submit=_ImmediateSubmit(), launch=launch, on_failed=failures.append
+    )
+    created = coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
+    browser = launched[0]
+    browser["page"].handlers["close"]()
+    browser["page"].handlers["close"]()
+
+    response = coordinator.session_response(coordinator._require_session(created["id"]))
+    assert response["status"] == "failed"
+    assert response["errorCode"] == "RECORDING_PAGE_CLOSED"
+    assert browser["context"].closed is True
+    assert browser["browser"].closed is True
+    assert browser["playwright"].stopped is True
+    assert len(failures) == 1
+    assert coordinator.stop(created["id"])["status"] == "failed"
+
+
+def test_browser_disconnection_marks_session_failed_and_uses_stable_code():
+    launched = []
+
+    def launch(headless, storage_state=None):
+        session = _stub_launch({"headless": headless, "storage": storage_state})
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(submit=_ImmediateSubmit(), launch=launch)
+    created = coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
+    launched[0]["browser"].handlers["disconnected"]()
+
+    response = coordinator.session_response(coordinator._require_session(created["id"]))
+    assert response["status"] == "failed"
+    assert response["errorCode"] == "RECORDING_BROWSER_DISCONNECTED"
+
+
+def test_browser_launch_failure_is_a_stable_4xx_error():
+    def launch(_headless, _storage_state=None):
+        raise RuntimeError("browser executable unavailable")
+
+    coordinator = RecordingCoordinator(submit=_ImmediateSubmit(), launch=launch)
+    with pytest.raises(PlatformError) as error:
+        coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
+    assert error.value.status == 409
+    assert error.value.code == "RECORDING_BROWSER_START_FAILED"
+
+
+@pytest.fixture(scope="module")
+def fixture_server():
+    handler = partial(SimpleHTTPRequestHandler, directory=str(FIXTURES))
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def test_coordinator_real_browser_login_state_and_teardown(fixture_server):
+    # Playwright sync 对象只能在创建线程上使用；生产形态中服务器从不驱动页面（只有
+    # 用户操作触发 binding 回调），本测试用同线程提交器把创建与驱动放在一个线程上。
+    class _SameThreadSubmitter:
+        def __init__(self):
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            self._local = threading.local()
+
+        def __call__(self, function, *args):
+            if getattr(self._local, "on_worker", False):
+                return _StubFuture(function(*args))
+
+            def run():
+                self._local.on_worker = True
+                try:
+                    return function(*args)
+                finally:
+                    self._local.on_worker = False
+
+            return self._executor.submit(run)
+
+        def shutdown(self):
+            self._executor.shutdown(wait=True)
+
+    submitter = _SameThreadSubmitter()
+    try:
+        coordinator = RecordingCoordinator(submit=submitter)
+        environment = {**ENVIRONMENT, "baseUrl": fixture_server}
+        seeded_state = {
+            "origins": [
+                {
+                    "origin": fixture_server,
+                    "localStorage": [{"name": "recorder-seed", "value": "1"}],
+                }
+            ]
+        }
+
+        def scenario():
+            created = coordinator.create_session(
+                "project-1",
+                "flow-1",
+                environment,
+                "/page1.html",
+                login_state_provider=lambda _project, _env: seeded_state,
+                headless=True,
+            )
+            session = coordinator._require_session(created["id"])
+            page = session["browserSession"]["page"]
+            assert page.evaluate("localStorage.getItem('recorder-seed')") == "1"
+            page.get_by_test_id("login-username").type("tester")
+            page.get_by_test_id("login-submit").click()
+            page.wait_for_url("**/page2.html", timeout=5_000)
+            return created
+
+        created = submitter(scenario).result(timeout=60)
+        assert created["status"] == "recording"
+        session = coordinator._require_session(created["id"])
+        stopped = coordinator.stop(created["id"])
+        assert stopped["status"] == "stopped"
+        result = coordinator.session_result(created["id"])
+        actions = [(step["action"], step.get("value")) for step in result["result"]["steps"]]
+        assert actions == [
+            ("打开页面", "/page1.html"),
+            ("填写", "tester"),
+            ("点击", None),
+        ]
+        assert session["browserSession"] is None
+    finally:
+        submitter.shutdown()

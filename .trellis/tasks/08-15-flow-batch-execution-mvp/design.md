@@ -83,7 +83,7 @@ Batch 依赖的规则：
 2. 无 revisionId 时 flowId 必填，查询 `project_id + flow_id + environment_id + published` 的最新 revision。
 3. 不允许退回项目级“最新任意 revision”。
 4. 单运行 API 兼容显式 revisionId；手工 UI 至少传 flowId。
-5. 重试（单 run 与 batch 失败项）按原 run 的 revision 加载快照，接受 superseded；batch retry 复用该能力，不自行放宽状态过滤。
+5. 重试（单 run 与 batch 失败项）按 [`08-16-flow-retry-reproduction-correctness`](../08-16-flow-retry-reproduction-correctness/prd.md) 的原 run snapshot 一对一克隆，接受 superseded；batch retry 复用该 clone 能力，不自行放宽状态过滤或重新展开 dataset。
 
 Revision resolver 和 snapshot validation 只有一个服务层 owner。若 P0 尚未验收，本任务不得通过复制 SQL 绕过依赖。
 
@@ -131,7 +131,7 @@ Revision resolver 和 snapshot validation 只有一个服务层 owner。若 P0 �
 
 相同 project/clientRequestId 的请求：
 
-- payload 等价时返回原批次，`200` 或 `202` 均可，但同一实现必须固定并测试。
+- payload 等价时固定返回原批次并使用 `200`；首次创建使用 `202`。两条响应路径都不得新增 run/event。
 - payload 不一致时返回 `409 IDEMPOTENCY_KEY_REUSED`。
 - 并发请求由数据库 UNIQUE 约束收口，捕获冲突后重新读取并比较 payload。
 
@@ -206,7 +206,7 @@ Preflight 只检查 secret 是否存在，不读取 secret 值。执行时仍沿
 
 ### FlowsPage
 
-- Ant Design Table 增加 `rowSelection`，只选择过滤后可见不是限制，跨分页选择是否保留按现有 8 条客户端分页处理；MVP flow 数量仍来自项目 store。
+- Ant Design Table 增加 `rowSelection`；数据仍是完整过滤后的项目 store、分页仅影响可见行，因此跨 8 条客户端分页切换时保留 controlled `selectedRowKeys`，只在流程删除/离开项目时清理无效选择。MVP flow 数量仍来自项目 store。
 - 批量操作区显示已选数量，按钮使用播放图标和“批量运行”文本命令。
 - 确认 Modal 显示环境、流程清单、总步骤、串行提示和通知提示。
 - 用户点击确认时才生成 clientRequestId；请求失败可用同一 key 重试，用户关闭后重新发起才生成新 key。
@@ -237,7 +237,7 @@ Preflight 只检查 secret 是否存在，不读取 secret 值。执行时仍沿
 
 - Migration：空库、已有 run 库、重复启动 migration、索引唯一性和历史 run 可读。
 - Revision regression：A/B 两流程各自运行正确 revision，flow/revision/environment mismatch。
-- Service：全量 preflight、事务回滚、幂等并发、顺序、limits、聚合状态、取消竞态、retry latest revision。
+- Service：全量 preflight、事务回滚、幂等并发、顺序、limits、聚合状态、取消竞态、按 P0 follow-up 的原 run snapshot 一对一克隆重试（含 superseded revision）；实现必须保留原 dataset 单行、`upToStepId`、checksum 和逐条 retry 关联。
 - Recovery：提交后未 enqueue 的 queued runs 在服务启动时全部恢复，batch aggregate 正确。
 - React/Vitest：选择、确认、稳定 idempotency key、错误定位、取消/retry 和刷新恢复。
 - Playwright：选择多个流程、串行执行、一个失败后继续、部分失败、retry failed、刷新后 batch 仍可见。

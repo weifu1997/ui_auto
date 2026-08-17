@@ -7,6 +7,12 @@ export type PlatformUiCalls = {
   batches: Record<string, unknown>[];
 };
 
+export type RecordingUiCalls = {
+  sessions: Record<string, unknown>[];
+  validations: Record<string, unknown>[];
+  eventCursors: number[];
+};
+
 type FixtureRevision = {
   id: string;
   response: Record<string, unknown>;
@@ -47,16 +53,24 @@ const session = {
   workspaces: [{ id: "platform-ui-workspace", name: "Platform UI workspace", role: "owner" }],
 };
 
-// These routes validate UI request composition only. They do not execute a browser flow.
-export async function configurePlatformRunUiMocks(page: Page, localProjectId: string, platformProjectId = `platform-${localProjectId}`) {
-  const calls: PlatformUiCalls = { revisions: [], secrets: [], runs: [], batches: [] };
-  const runs: MockRun[] = [];
-
+async function configurePlatformSession(
+  page: Page,
+  localProjectId: string,
+  platformProjectId: string,
+) {
   await page.evaluate(({ value, localId, remoteId }) => {
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value));
     localStorage.setItem("autoflow-platform-workspace", value.workspaces[0].id);
     localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ [value.workspaces[0].id]: { [localId]: remoteId } }));
   }, { value: session, localId: localProjectId, remoteId: platformProjectId });
+}
+
+// These routes validate UI request composition only. They do not execute a browser flow.
+export async function configurePlatformRunUiMocks(page: Page, localProjectId: string, platformProjectId = `platform-${localProjectId}`) {
+  const calls: PlatformUiCalls = { revisions: [], secrets: [], runs: [], batches: [] };
+  const runs: MockRun[] = [];
+
+  await configurePlatformSession(page, localProjectId, platformProjectId);
 
   const revisions = await page.evaluate((localId) => {
     const persisted = JSON.parse(localStorage.getItem("autoflow-workspace-projects") ?? "{}") as { state?: Record<string, unknown> };
@@ -350,6 +364,125 @@ export async function configurePlatformRunUiMocks(page: Page, localProjectId: st
       return;
     }
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ batches: batches.map(batchResponse), total: batches.length, page: 1, pageSize: 20 }) });
+  });
+
+  return calls;
+}
+
+export async function configurePlatformRecordingUiMocks(
+  page: Page,
+  localProjectId: string,
+  platformProjectId = `platform-${localProjectId}`,
+) {
+  const calls: RecordingUiCalls = { sessions: [], validations: [], eventCursors: [] };
+  await configurePlatformSession(page, localProjectId, platformProjectId);
+
+  const sessionState = {
+    id: "recording-session-1",
+    projectId: platformProjectId,
+    flowId: "",
+    environmentId: "",
+    status: "recording",
+    currentUrl: "https://default.example.test/login",
+    lastSeq: 101,
+    recordedStepCount: 2,
+    startedAt: 1_700_000_000_000,
+    lastActivityAt: 1_700_000_000_000,
+  };
+  const events = Array.from({ length: 101 }, (_, index) => ({
+    seq: index + 1,
+    kind: "click",
+    url: "https://default.example.test/login",
+  }));
+  const result = {
+    steps: [
+      { id: "recording-open", title: "录制打开页面", action: "打开页面", value: "/login" },
+      { id: "recording-click", title: "录制点击登录", action: "点击", element: "录制登录按钮" },
+    ],
+    elements: [
+      {
+        id: "recording-login-button",
+        name: "录制登录按钮",
+        path: "/login",
+        method: "testid",
+        value: "login-submit",
+      },
+    ],
+    requiredBindings: [],
+    warnings: ["检测到不支持的 iframe 行为，未生成可执行步骤"],
+    lastSeq: 101,
+  };
+
+  await page.route(`**/api/platform/projects/${platformProjectId}/recording-sessions**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname.endsWith("/recording-sessions")) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      calls.sessions.push(body);
+      sessionState.flowId = String(body.flowId ?? "");
+      sessionState.environmentId = String(body.environmentId ?? "");
+      sessionState.currentUrl = String(body.startUrl ?? sessionState.currentUrl).replace(/[?#].*$/, "");
+      sessionState.status = "recording";
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ session: { ...sessionState, lastSeq: 0 } }),
+      });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname.endsWith("/events")) {
+      const afterSeq = Number(url.searchParams.get("afterSeq") ?? "0");
+      calls.eventCursors.push(afterSeq);
+      const pageEvents = events.filter((event) => event.seq > afterSeq).slice(0, 100);
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          events: pageEvents,
+          lastSeq: sessionState.lastSeq,
+          hasMore: events.some((event) => event.seq > (pageEvents.at(-1)?.seq ?? afterSeq)),
+        }),
+      });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/pause")) {
+      sessionState.status = "paused";
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ session: sessionState }) });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/resume")) {
+      sessionState.status = "recording";
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ session: sessionState }) });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/stop")) {
+      sessionState.status = "stopped";
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ session: sessionState, result }) });
+      return;
+    }
+    if (request.method() === "DELETE") {
+      sessionState.status = "canceled";
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ session: sessionState }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ session: sessionState }) });
+  });
+
+  await page.route(`**/api/platform/projects/${platformProjectId}/element-validations**`, async (route) => {
+    if (route.request().method() === "POST") {
+      calls.validations.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ validation: { id: "recording-validation-1", status: "success", result: { count: 1 } } }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        validation: { id: "recording-validation-1", status: "success", result: { count: 1 } },
+      }),
+    });
   });
 
   return calls;

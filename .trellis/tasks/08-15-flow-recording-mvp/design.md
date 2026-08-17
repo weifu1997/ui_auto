@@ -4,7 +4,7 @@
 
 录制功能建立一条从部署机浏览器事件到编辑器草稿的临时链路，不改变 Flow、FlowStep、ElementAsset 的现有持久化结构。录制原始事件不进入 Platform SQLite；只有用户确认导入并点击现有保存后，流程和元素才通过 workspace 同步进入资源表和 published revision。
 
-本设计依赖独立 P0 任务 `08-15-flow-revision-selection-correctness` 已验收。录制不能用自建运行入口绕开 P0；保存后的 replay 必须走修复后的 flow-scoped/manual 或显式 revision 契约。
+本设计依赖基础 P0 任务 [`08-15-flow-revision-selection-correctness`](../archive/2026-08/08-15-flow-revision-selection-correctness/prd.md) 及 [`08-16-flow-retry-reproduction-correctness`](../08-16-flow-retry-reproduction-correctness/prd.md)。录制不能用自建运行入口绕开 P0；保存后的 replay 必须走修复后的 flow-scoped/manual 或显式 revision 契约，并回归已收敛的原 revision checksum/retry 审计链路。
 
 ## Architecture
 
@@ -144,7 +144,7 @@ FlowEditorPage
 2. 同一元素的 input 事件更新 pending buffer；在 change/blur、元素切换、暂停或停止时 flush 为一个填写/清空步骤。
 3. select change 生成下拉动作；checkbox/radio change 生成勾选动作，并抑制相邻同目标 click。
 4. Enter、Escape、Tab 等明确按键生成按键步骤；普通字符 keydown 由 input buffer 吸收。
-5. 记录最近一次用户事件与导航因果窗口。点击触发的 top-frame navigation 不新增打开页面；地址栏或没有用户事件因果的 navigation 新增打开页面。所有导航 URL 一律记录为 scheme+host+path，query/fragment 完全剥离。
+5. 先对导航目标执行 environment-origin guard：目标 origin 与所选环境 `baseUrl` 不同的事件只追加外域 warning，不进入可执行步骤或 flow draft。通过 guard 后再记录最近一次用户事件与导航因果窗口；点击触发的 top-frame navigation 不新增打开页面，地址栏或没有用户事件因果的同源 navigation 才新增打开页面。所有导航 URL 一律记录为 scheme+host+path，query/fragment 完全剥离。
 6. 非 top-frame、popup、file chooser 等事件生成 warning，且不生成可执行步骤。
 
 归并状态机必须是后端纯逻辑，可用事件序列单测；真实 Chromium 测试验证浏览器事件实际符合假设。
@@ -174,7 +174,7 @@ Recorder 返回元素草稿，不直接调用资源写接口。最终 import 先
 - RecordingCoordinator 用锁保护 session map 和 event append；所有 Playwright 操作仍提交到单独线程。
 - 每个 session 保存 bounded event log、last seq、pending input、last user action、warnings 和终态清洗结果。
 - 单 session 最多 1000 个逻辑步骤和有限事件缓冲；超过上限自动暂停并警告，防止内存失控。
-- 前端轮询只保存在组件内存，页面刷新后可用 session id 在 `sessionStorage` 恢复控制视图，但不得保存事件值或最终结果。若不实现恢复，则刷新必须取消会话；二者择一并用测试固定，推荐只保存 session id。
+- 前端轮询只保存在组件内存；页面刷新恢复策略仍是待决产品项。推荐只在 `sessionStorage` 保存 `sessionId` 并恢复控制视图，不保存事件值或最终结果；若选择刷新即取消，则必须在服务端可靠释放会话并向用户展示明确终态。
 
 ## Compatibility And Migration
 
@@ -186,10 +186,12 @@ Recorder 返回元素草稿，不直接调用资源写接口。最终 import 先
 ## Testing Strategy
 
 - `test_recorder.py`：事件归并、导航因果、敏感判定、seq、warning、元素去重和名称唯一性。
+- 纯逻辑/Chromium 测试：外域 top-frame 导航只产生 warning、不生成打开页面或步骤；同源直接导航仍按因果规则生成步骤。
 - handler/service 测试：认证、跨项目、状态机、幂等 stop/cancel、资源回收和响应脱敏。
 - 真实 Chromium fixture：本地静态测试页覆盖导航、输入、select、checkbox、SPA route、password 和 unsupported iframe。
 - React/Vitest：控制按钮、轮询去重、敏感绑定阻断、确认原子导入和取消无副作用。
 - Playwright E2E：录制本地 fixture、导入保存、发起运行并确认成功。
+- Revision/retry regression：录制保存后的 flow-scoped run 使用正确 revision；并回归 P0 最终确定的原 revision checksum、dataset 行/`upToStepId`（如适用）和一对一 retry 审计关联，不能因保存/发布改变重现身份。
 
 测试不得依赖外部网站或真实账号。
 

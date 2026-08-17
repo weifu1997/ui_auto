@@ -195,8 +195,12 @@ def test_capture_normalize_replay_and_sensitive_never_leaves_page(fixture_server
     assert elements_by_name["用户名"] == {
         "id": "element-rec-1",
         "name": "用户名",
+        "path": "/page1.html",
         "method": "testid",
         "value": "login-username",
+        "environment": "",
+        "description": "",
+        "validation": "unverified",
     }
 
     # 绑定 secret 后重放：验证生成的步骤/元素无需扩展 FlowStep 契约即可被现有 runner 执行。

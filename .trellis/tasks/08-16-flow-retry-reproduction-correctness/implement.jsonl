@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"约束 PlatformServices、SQLite 迁移、ManagedRunner 入队和 Python 单测边界"}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"确认 run 生命周期事件、secretNames 过滤和不得写入 secret 明文的审计契约"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"run response DTO 的 nullable retryOfRunId 跨 API/运行详情类型边界"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"校验 snapshot 从数据库到 service、API、runner 和运行详情的字段不丢失数据流"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"要求 fresh run、single retry、batch retry 共用一个插入/事件 owner，避免复制 SQL"}
+{"file":".trellis/tasks/08-15-next-roadmap-planning/research/evidence-refresh-2026-08-15.md","reason":"记录当前 retry 按 revision 重展开 dataset、丢失 upToStepId 和仅第一条关联的代码证据"}
+{"file":".trellis/tasks/archive/2026-08/08-15-flow-revision-selection-correctness/design.md","reason":"继承 published/superseded resolver 状态边界、显式 revision 兼容和普通入口 published-only 规则"}
+{"file":".trellis/tasks/08-15-flow-batch-execution-mvp/design.md","reason":"定义 batch retry 对原 run snapshot clone、retryOfBatchId、事务和 child 顺序的依赖"}
+{"file":".trellis/tasks/08-16-flow-retry-reproduction-correctness/prd.md","reason":"本任务已确认的 snapshot/UI/fresh-run 需求、retry 请求预检与 enqueue/restart 当前值物化契约，以及仍待决的多 run UI 去向"}

@@ -64,6 +64,7 @@ export type PlatformRun = {
   snapshot: Record<string, unknown>;
   result?: Record<string, unknown>;
   cancellationRequested: boolean;
+  retryOfRunId: string | null;
   createdAt: string;
   updatedAt: string;
   agent?: { id: string; name: string; browserVersion: string; os: string; maxConcurrency: number; lastSeenAt: string | null };
@@ -612,6 +613,117 @@ export function getPlatformRun(token: string, projectId: string, runId: string) 
 
 export function cancelPlatformRun(token: string, projectId: string, runId: string) {
   return request<{ run: PlatformRun }>(`/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }, token);
+}
+
+export function retryPlatformRun(token: string, projectId: string, runId: string) {
+  return request<{ runIds: string[]; runs: PlatformRun[] }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/retry`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export type RecordingSessionStatus = "starting" | "recording" | "paused" | "stopped" | "canceled" | "expired" | "failed";
+
+export type RecordingSession = {
+  id: string;
+  projectId: string;
+  flowId: string;
+  environmentId: string;
+  status: RecordingSessionStatus;
+  currentUrl: string;
+  lastSeq: number;
+  recordedStepCount?: number;
+  startedAt: number;
+  lastActivityAt: number;
+};
+
+export type RecordingEvent = {
+  seq: number;
+  kind: string;
+  url?: string;
+  frame?: string;
+  element?: Record<string, unknown>;
+  sensitive?: boolean;
+  value?: string | null;
+  selectedValue?: string;
+  checked?: boolean;
+  key?: string;
+};
+
+export type RecordingResult = {
+  steps: Array<Record<string, unknown>>;
+  elements: Array<Record<string, unknown>>;
+  requiredBindings: Array<{ stepId: string; fieldHint: string }>;
+  warnings: string[];
+  lastSeq: number;
+};
+
+export function createRecordingSession(
+  token: string,
+  projectId: string,
+  input: { flowId: string; environmentId: string; startUrl: string; freshLogin?: boolean },
+) {
+  return request<{ session: RecordingSession }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function getRecordingSession(token: string, projectId: string, sessionId: string) {
+  return request<{ session: RecordingSession }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}`,
+    {},
+    token,
+  );
+}
+
+export function getRecordingEvents(
+  token: string,
+  projectId: string,
+  sessionId: string,
+  afterSeq = 0,
+  limit = 100,
+) {
+  const query = `?afterSeq=${encodeURIComponent(String(afterSeq))}&limit=${encodeURIComponent(String(limit))}`;
+  return request<{ events: RecordingEvent[]; lastSeq: number; hasMore: boolean }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/events${query}`,
+    {},
+    token,
+  );
+}
+
+export function pauseRecordingSession(token: string, projectId: string, sessionId: string) {
+  return request<{ session: RecordingSession }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/pause`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function resumeRecordingSession(token: string, projectId: string, sessionId: string) {
+  return request<{ session: RecordingSession }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/resume`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function stopRecordingSession(token: string, projectId: string, sessionId: string) {
+  return request<{ session: RecordingSession; result: RecordingResult }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/stop`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function cancelRecordingSession(token: string, projectId: string, sessionId: string) {
+  return request<{ session: RecordingSession }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+    token,
+  );
 }
 
 export function createPlatformElementValidation(

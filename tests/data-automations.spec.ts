@@ -24,7 +24,7 @@ test("renders versioned data and creates a published-version schedule", async ({
   await page.route("**/api/platform/projects/platform-sauce/webhook-triggers", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ triggers: [] }) }));
   await page.route("**/api/platform/workspaces/workspace-1/notification-channels", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ channels: [{ id: "channel-1", name: "Quality webhook", type: "webhook", enabled: true, createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z" }] }) }));
   await page.route("**/api/platform/projects/platform-sauce/notification-subscriptions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ subscriptions: [{ channelId: "channel-1", name: "Quality webhook", type: "webhook", channelEnabled: true, onSuccess: false, onFailure: true }] }) }));
-  await page.route("**/api/platform/projects/platform-sauce/deliveries", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ deliveries: [] }) }));
+  await page.route("**/api/platform/projects/platform-sauce/deliveries**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ deliveries: [], total: 0, page: 1, pageSize: 8 }) }));
 
   await page.goto("/project/sauce-demo/data");
   await page.evaluate((value) => {

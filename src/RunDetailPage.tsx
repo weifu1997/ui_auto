@@ -23,6 +23,7 @@ import {
   createPlatformRun,
   fetchPlatformArtifact,
   getPlatformRun,
+  retryPlatformRun,
 } from "./platform-api";
 import type { PlatformRun } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
@@ -396,13 +397,16 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
       setRetrying(true);
       try {
         const prior = platformTask ?? (await getPlatformRun(context.session.token, context.platformProjectId, runId)).run;
-        const created = await createPlatformRun(context.session.token, context.platformProjectId, {
-          revisionId: prior.revisionId,
-          environmentId: prior.environmentId,
-        });
+        const flowId = (prior.snapshot.flow as { id?: unknown } | undefined)?.id;
+        const created = prior.status === "success"
+          ? await createPlatformRun(context.session.token, context.platformProjectId, {
+              flowId: typeof flowId === "string" ? flowId : undefined,
+              environmentId: prior.environmentId,
+            })
+          : await retryPlatformRun(context.session.token, context.platformProjectId, prior.id);
         const nextRunId = created.runIds[0];
         if (!nextRunId) throw new Error("PLATFORM_RUN_NOT_CREATED");
-        message.success("已重新提交运行");
+        message.success(prior.status === "success" ? "已按最新已发布版本创建新运行" : "已按原快照重新提交");
         navigate(`/project/${project.id}/runs/${nextRunId}`);
       } catch {
         message.error("重新提交平台运行失败");
@@ -472,9 +476,11 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
           <>
             {canExecuteRun && (
               <>
-                <Button icon={<ReloadOutlined />} loading={retrying} onClick={() => void retry()}>
-                  重新运行
-                </Button>
+                {isTerminalStatus(run.status) && (
+                  <Button icon={<ReloadOutlined />} loading={retrying} onClick={() => void retry()}>
+                    {run.status === "success" ? "再次运行（新运行）" : "重试"}
+                  </Button>
+                )}
                 {!isTerminalStatus(run.status) && (
                   <Button danger icon={<StopOutlined />} loading={canceling} onClick={() => void cancel()}>
                     停止运行
@@ -486,6 +492,21 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
           </>
         }
       />
+      {!workerRun && platformTask?.retryOfRunId && (
+        <Alert
+          type="info"
+          showIcon
+          message="重试自"
+          description={(
+            <button
+              className="run-link"
+              onClick={() => navigate(`/project/${project.id}/runs/${platformTask.retryOfRunId}`)}
+            >
+              查看源运行 {platformTask.retryOfRunId}
+            </button>
+          )}
+        />
+      )}
       {workerError && (
         <Alert
           className="worker-detail-alert"

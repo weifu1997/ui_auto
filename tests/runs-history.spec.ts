@@ -92,10 +92,13 @@ async function seedRunsPage(page: Page, getRuns: () => Array<Record<string, unkn
       version: 1,
     }),
   }));
-  await page.route("**/api/platform/projects/platform-run/runs", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({ runs: getRuns() }),
-  }));
+  await page.route("**/api/platform/projects/platform-run/runs**", (route) => {
+    const runs = getRuns();
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ runs, total: runs.length, page: 1, pageSize: 8 }),
+    });
+  });
   await page.reload();
 }
 

@@ -108,6 +108,14 @@ test("restores delivery filters and page from URL", async ({ page }) => {
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value.session));
     localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "platform-sauce" }));
   }, { session });
+  await page.route("**/api/workspaces/pagination-workspace/projects", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects: [] }) }));
+  await page.route("**/api/platform/projects/platform-sauce", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { id: "platform-sauce", workspaceId: "pagination-workspace", sourceProjectId: "sauce-demo", name: "Sauce Demo" } }) }));
+  await page.route("**/api/platform/projects/platform-sauce/datasets", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ datasets: [] }) }));
+  await page.route("**/api/platform/projects/platform-sauce/revisions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ revisions: [{ id: "revision-1", revisionNumber: 5, status: "published", checksum: "checksum", createdBy: "user-1", createdAt: "2030-01-01T00:00:00.000Z", publishedAt: "2030-01-01T00:00:00.000Z", environmentId: "sauce-demo-web" }] }) }));
+  await page.route("**/api/platform/projects/platform-sauce/schedules", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ schedules: [] }) }));
+  await page.route("**/api/platform/projects/platform-sauce/webhook-triggers", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ triggers: [] }) }));
+  await page.route("**/api/platform/workspaces/pagination-workspace/notification-channels", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ channels: [] }) }));
+  await page.route("**/api/platform/projects/platform-sauce/notification-subscriptions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ subscriptions: [] }) }));
   await page.route("**/api/platform/projects/platform-sauce/deliveries?*", (route) => {
     deliveryQuery = new URL(route.request().url()).searchParams;
     return route.fulfill({
@@ -133,8 +141,10 @@ test("restores delivery filters and page from URL", async ({ page }) => {
   await page.reload();
   await page.goto("/project/sauce-demo/automations?deliveryStatus=delivered&deliveryChannel=Ops&deliveryPage=2");
 
-  await expect(page.getByText("delivery-paged", { exact: true })).toBeVisible();
-  await expect.poll(() => deliveryQuery?.get("deliveryPage")).toBe("2");
-  await expect.poll(() => deliveryQuery?.get("deliveryStatus")).toBe("delivered");
-  await expect.poll(() => deliveryQuery?.get("deliveryChannel")).toBe("Ops");
+  // 投递表当前渲染 通道/状态/时间 三列，不显示 id；断言真实渲染的数据行。
+  await expect(page.getByRole("row", { name: /Ops/ })).toBeVisible();
+  // API 请求参数为 page/status/channel（页面 URL 参数 deliveryPage 等经 URL 恢复后映射）。
+  await expect.poll(() => deliveryQuery?.get("page")).toBe("2");
+  await expect.poll(() => deliveryQuery?.get("status")).toBe("delivered");
+  await expect.poll(() => deliveryQuery?.get("channel")).toBe("Ops");
 });

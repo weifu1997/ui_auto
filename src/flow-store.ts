@@ -11,6 +11,8 @@ type FlowStore = {
   removeStep: (id: string) => void;
   moveStep: (from: number, to: number) => void;
   loadSteps: (steps: FlowStep[]) => void;
+  appendSteps: (steps: FlowStep[]) => void;
+  importRecordingSteps: (steps: FlowStep[]) => void;
   markSaved: () => void;
   reset: () => void;
 };
@@ -66,6 +68,21 @@ export const useFlowStore = create<FlowStore>((set) => ({
       steps: steps.map((step) => ({ ...step })),
       selectedStepId: steps[0]?.id ?? "",
       isDirty: false,
+    }),
+  appendSteps: (newSteps) =>
+    set((state) => ({
+      steps: [...state.steps, ...newSteps.map((step) => ({ ...step }))],
+      selectedStepId: state.selectedStepId || newSteps[0]?.id || "",
+      isDirty: true,
+    })),
+  importRecordingSteps: (newSteps) =>
+    set((state) => {
+      const imported = newSteps.map((step) => ({ ...step }));
+      return {
+        steps: [...state.steps, ...imported],
+        selectedStepId: imported[0]?.id ?? state.selectedStepId,
+        isDirty: true,
+      };
     }),
   markSaved: () => set({ isDirty: false }),
   reset: () => set({ steps: [], selectedStepId: "", isDirty: false }),

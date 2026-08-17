@@ -3,7 +3,7 @@
   "name": "flow-recording-mvp",
   "title": "流程录制 MVP",
   "description": "基于现有本地 Picker 和 Playwright 会话，录制基础浏览器操作并导入流程编辑器草稿",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

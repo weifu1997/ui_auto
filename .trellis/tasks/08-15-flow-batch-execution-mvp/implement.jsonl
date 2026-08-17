@@ -1,3 +1,5 @@
 {"file":".trellis/spec/backend/index.md","reason":"FastAPI、SQLite migration、运行服务和后端测试约定"}
 {"file":".trellis/spec/frontend/index.md","reason":"流程多选、运行中心、API 类型和前端状态约定"}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Batch 从数据库、服务、API 到 UI 的完整数据流契约"}
+{"file":".trellis/tasks/08-15-next-roadmap-planning/research/evidence-refresh-2026-08-15.md","reason":"继承 P0 superseded retry 与原 run 重现单位的证据；batch retry 不得解析最新 published revision"}
+{"file":".trellis/tasks/08-16-flow-retry-reproduction-correctness/prd.md","reason":"batch failed/canceled retry 必须复用原 run snapshot 一对一克隆契约"}

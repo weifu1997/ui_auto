@@ -18,7 +18,7 @@
 - `src/platform-api.ts:473` 的 `createPlatformRun` 允许省略 `revisionId`，也尚未表达 `flowId`。
 - `server-py/autoflow/services.py:715` 的 `published_revision_for(project_id, revision_id=None)` 在省略 revision 时按项目最近 `published_at` 查询；`queue_published_runs` 在 `services.py:1116` 直接使用该 resolver。
 - `server-py/autoflow/handler.py:1946/2368/3071` 等计划、Webhook、单 run retry 路径传入显式 revision；它们的兼容行为不能被手工入口修复破坏。
-- `server-py/autoflow/handler.py:3401` 发布新 revision 时会把同 `flow_id + environment_id` 的既有 published revision 置为 `superseded`；而显式 revision 查询（`services.py:726`）只接受 `published`。因此当前行为是：该流程发布更新版本后，重试旧 run 必然返回 409 `PUBLISHED_REVISION_REQUIRED`，旧快照今天不可重试。若采纳“按原 revision 重试”，P0 必须为 retry 路径扩展可接受的 revision 状态；若采纳“按最新 published 重试”，retry 入口需改为 flow-scoped 解析。
+- `server-py/autoflow/handler.py:3401` 发布新 revision 时会把同 `flow_id + environment_id` 的既有 published revision 置为 `superseded`；而普通显式 revision 查询（`services.py:726`）只接受 `published`。因此 retry 必须走独立的历史快照读取分支：接受原 revision 的 `published`/`superseded` 状态，普通手工运行仍拒绝 `superseded`，避免例外扩散为任意旧版本运行。
 - `flow_revisions` 已有 `flow_id`、`flow_name`、`environment_id` 列；迁移会为旧快照回填这些字段。当前平台 schema migration 版本为 10。
 
 ## Product Decisions
@@ -84,4 +84,3 @@
 ## Open Questions For Requirement Convergence
 
 （无——P0 相关产品决策已全部收敛，见 Product Decisions。）
-
