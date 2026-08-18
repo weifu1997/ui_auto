@@ -30,6 +30,9 @@ dist
 dist-ssr
 *.local
 .reasonix
+.env
+.env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*

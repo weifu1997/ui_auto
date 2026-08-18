@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/production-startup.md","reason":"Owns the npm run start production environment, static-build validation, and listener contract that configuration loading extends."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Defines the required startup-test, build, lint, and complete-gate validation commands."}

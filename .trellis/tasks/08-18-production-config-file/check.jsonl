@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/production-startup.md","reason":"Review configuration precedence, production validation failures, and unchanged Platform serving boundary."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review focused startup regression coverage and full project quality-gate completion."}

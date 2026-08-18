@@ -7,12 +7,30 @@
 ```bash
 npm install
 npm run setup:py
+cp .env.example .env
+# Edit .env and set PLATFORM_SECRET_KEY
+chmod 600 .env
 npm run build
-set PLATFORM_SECRET_KEY=replace-with-a-long-random-secret
 npm run start
 ```
 
-`npm run start` 是唯一受支持的应用入口。它会自动设置 `NODE_ENV=production`，检查 `dist/index.html` 和非空的 `PLATFORM_SECRET_KEY`，默认监听 `127.0.0.1:8787`。未构建或未设置密钥时，服务会在监听前失败并给出修复提示。
+`npm run start` 是唯一受支持的应用入口，需要 Node.js `>=20.12`。它会自动设置 `NODE_ENV=production`，检查 `dist/index.html` 和非空的 `PLATFORM_SECRET_KEY`，默认监听 `127.0.0.1:8787`。未构建或未设置密钥时，服务会在监听前失败并给出修复提示。
+
+在 WSL/Linux 中，首次在仓库根目录创建受保护的 `.env`，然后填写至少一个
+`PLATFORM_SECRET_KEY`：
+
+```bash
+# 编辑 .env，至少填写 PLATFORM_SECRET_KEY
+chmod 600 .env
+```
+
+也可以通过 `AUTOFLOW_CONFIG_FILE` 指定相对于仓库根目录或绝对路径的配置文件：
+
+```bash
+AUTOFLOW_CONFIG_FILE=/srv/autoflow/production.env npm run start
+```
+
+指定的文件必须是当前用户拥有的普通文件，并且不能包含 group/other 权限；权限错误会提示再次执行 `chmod 600 <file>`。默认 `.env` 不存在时会继续使用继承的进程环境，显式的进程环境变量始终优先于文件值（即使继承值为空，也不会回退到文件）。`.env`、`.env.*` 已加入 Git 忽略，`.env.example` 不包含真实密钥。
 
 局域网访问时显式设置 `AUTOFLOW_LISTEN_HOST=0.0.0.0`；端口可通过 `PORT` 覆盖。CORS 需要跨源访问时再设置 `AUTOFLOW_CORS_ORIGINS`。`npm run server` 仅作为兼容别名，仍执行相同的生产检查；`server:py` 是内部 Python 启动器，不作为部署命令。
 
