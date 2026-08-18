@@ -292,3 +292,27 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: 仅生产模式与统一启动入口
+
+**Date**: 2026-08-18
+**Task**: 仅生产模式与统一启动入口
+**Branch**: `master`
+
+### Summary
+
+移除 legacy Worker 产品路径，统一前后端为 Platform 形态；新增 npm run build 后 npm run start 的生产启动入口与校验；更新生产 E2E、部署文档和 Trellis 契约，并通过完整质量门禁。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7db3ab1` | (see git log) |
+| `45a4e2c` | (see git log) |
+| `d567743` | (see git log) |
+| `02abbcf` | (see git log) |
+
+### Status
+
+[OK] **Completed**
