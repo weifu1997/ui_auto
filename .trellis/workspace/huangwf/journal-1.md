@@ -316,3 +316,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 受保护的生产配置文件启动
+
+**Date**: 2026-08-18
+**Task**: 受保护的生产配置文件启动
+**Branch**: `master`
+
+### Summary
+
+为 npm run start 增加 WSL/Linux 受保护 .env 与 AUTOFLOW_CONFIG_FILE 支持，采用 Node 原生 parseEnv，校验文件描述符的所有者和权限，补齐启动器回归测试、文档与生产启动契约，并通过完整质量门禁。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ec7a762` | (see git log) |
+
+### Status
+
+[OK] **Completed**

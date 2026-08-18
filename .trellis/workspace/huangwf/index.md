@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-08-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~318 | Active |
+| `journal-1.md` | ~339 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-08-18 | 受保护的生产配置文件启动 | `ec7a762` | `master` |
 | 14 | 2026-08-18 | 仅生产模式与统一启动入口 | `7db3ab1`, `45a4e2c`, `d567743`, `02abbcf` | `master` |
 | 13 | 2026-08-18 | 补齐批量执行与流程录制收尾回归 | `a6720a3`, `0fb8631` | `master` |
 | 12 | 2026-08-16 | P0 revision selection implemented; planning converged; E2E legacy failures tracked | `ad8b061`, `68c59e8` | `master` |
