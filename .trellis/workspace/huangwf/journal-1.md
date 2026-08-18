@@ -337,3 +337,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: 修复录制布局与语义步骤捕获
+
+**Date**: 2026-08-18
+**Task**: 修复录制布局与语义步骤捕获
+**Branch**: `master`
+
+### Summary
+
+修复开始录制弹窗字段重叠；录制器现在解析嵌套文本和 SVG 点击到同文档的交互父元素，补充布局与真实 Chromium 回归。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a2eba93` | (see git log) |
+
+### Status
+
+[OK] **Completed**
