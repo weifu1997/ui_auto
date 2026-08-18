@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
+- **Total Sessions**: 17
 - **Last Active**: 2026-08-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~360 | Active |
+| `journal-1.md` | ~381 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-08-18 | 修复录制交互事件采集 | `968014f` | `master` |
 | 16 | 2026-08-18 | 修复录制布局与语义步骤捕获 | `a2eba93` | `master` |
 | 15 | 2026-08-18 | 受保护的生产配置文件启动 | `ec7a762` | `master` |
 | 14 | 2026-08-18 | 仅生产模式与统一启动入口 | `7db3ab1`, `45a4e2c`, `d567743`, `02abbcf` | `master` |

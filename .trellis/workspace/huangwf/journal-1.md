@@ -358,3 +358,24 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: 修复录制交互事件采集
+
+**Date**: 2026-08-18
+**Task**: 修复录制交互事件采集
+**Branch**: `master`
+
+### Summary
+
+让录制线程在启动后持续处理 Playwright sync 回调，修复用户空闲操作仅录制打开页面的问题；新增空闲期真实 Chromium 回归与启动异常清理覆盖。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `968014f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
