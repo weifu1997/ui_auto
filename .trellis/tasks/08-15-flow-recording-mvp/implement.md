@@ -54,30 +54,30 @@
 
 ## Phase 3: Editor State And Review UX
 
-- [ ] 在 `flow-store` 增加单个原子 `importRecording` 或等价 action，同时更新步骤、选中项和 dirty 状态。
-- [ ] 在 workspace store 增加可复用的元素草稿合并逻辑，按规范 key 去重并生成唯一名称。
-- [ ] 流程编辑器顶栏增加录制控制；按钮使用现有 Ant Design 图标和 Tooltip，状态不会导致工具栏布局跳动。
-- [ ] 开始表单选择环境、起始 URL 和「从头录制」选项（默认复用 Picker 登录态快照）；错误明确区分离线、无权限、浏览器不可用和冲突会话。
-- [ ] 增量轮询 events，按 seq 去重；暂停时保持状态，停止后进入 review。
-- [ ] review 展示步骤、元素处置、warning 和 secret variable binding；未绑定或定位器非唯一时禁止确认。
-- [ ] 确认时一次性追加流程和元素；取消时清空临时状态且不触发 workspace 同步。
+- [x] 在 `flow-store` 增加等价的原子导入 action，同时更新步骤、选中项和 dirty 状态。
+- [x] 在录制编辑器 state planner 中按规范 key 去重并生成唯一元素名称。
+- [x] 流程编辑器顶栏增加录制控制；状态显示环境/URL/步数/终态，保持现有 Ant Design 控件。
+- [x] 开始表单选择环境、起始 URL 和「从头录制」选项，默认复用 Picker 登录态快照；API 返回稳定权限/浏览器/冲突错误。
+- [x] 增量轮询 events，按 seq 去重并防止无进展死循环；暂停时保持状态，停止后进入 review。
+- [x] review 展示步骤、元素处置、warning 和 secret variable binding；未绑定或定位器非唯一时禁止确认。
+- [x] 确认前完成全部可失败校验，再一次性追加流程和元素；取消保留明确终态且不触发草稿导入。
 
 **Gate**：Vitest 覆盖状态机、轮询重试/去重、绑定阻断、原子导入和取消无副作用；build/lint 通过。
 
 ## Phase 4: End-To-End Closure
 
-- [ ] Playwright E2E 使用本地 fixture 从开始录制走到停止、确认、保存和运行成功。
-- [ ] 增加 password 泄漏检查：API 捕获、前端 storage、服务端日志测试 sink、资源 snapshot 均不含测试密码。
-- [ ] 覆盖直接导航、点击导航、SPA route、暂停继续、重复轮询、浏览器手动关闭和 unsupported iframe。
-- [ ] 回归本地 Picker、元素验证、手工流程编辑、资源同步、revision canonicalization 和单流程运行。
-- [ ] 补充用户文档：MVP 支持动作、明确不支持项、敏感变量绑定和会话回收行为；不写入真实账号或 secret。
+- [x] Playwright/fixture 使用本地页面从开始录制走到停止、确认和草稿导入；Python fixture 进一步覆盖保存 revision 后 ManagedRunner 成功运行。
+- [x] 增加 password 泄漏检查：API 捕获、前端 storage、服务端日志/审计 sink、资源 snapshot 均不含测试密码；revision POST 拒绝敏感原值并只允许 secret 模板引用。
+- [x] 覆盖直接导航、点击导航、SPA route、暂停继续、重复轮询、浏览器手动关闭和 unsupported iframe；并补 popup/filechooser/download 与外域导航 warning。
+- [x] 回归本地 Picker、元素验证、手工流程编辑、资源同步、revision canonicalization 和单流程运行。
+- [x] 补充用户文档：MVP 支持动作、明确不支持项、敏感变量绑定和会话回收行为；不写入真实账号或 secret。（`docs/流程录制-MVP.md`）
 
 ### 2026-08-18 收尾验证
 
-- `npm run lint`、`npm run build`、`npm run test:unit`（30）、`npm run check:bundle` 和 `npm run test:py`（107）均通过。
-- `npm run test:e2e -- tests/recording.spec.ts`：1/1 通过，覆盖创建录制会话、sessionStorage 恢复控制状态、暂停/继续、停止 review、定位器校验和原子导入草稿。
+- `npm run lint`、`npm run build`、`npm run test:unit`（33）、`npm run check:bundle` 和 `npm run test:py`（108）均通过。
+- `npm run test:e2e -- tests/recording.spec.ts`：1/1 通过；完整 `npm run test:e2e` 39/39 通过，包含 retry fresh-run 多行 dataset fixture。
 - 后端专项覆盖启动/导航稳定错误、页面关闭或浏览器断连后的失败终态与资源回收、暂停 seq、不支持 `contenteditable`/拖拽 warning，以及审计幂等。
-- 尚未以专项闭环验证的部分保持未完成：导入后保存并由 ManagedRunner 重放（AC7）、真实页面的完整敏感变量绑定链路（AC5）、完整 handler 权限矩阵及用户文档；P0 retry snapshot follow-up 仍是最终发布 gate。
+- 用户文档与录制 AC1-AC15 的自动化验收证据已补齐；P0 retry snapshot gate 的 AC8 UI fixture 另见 `tests/retry-reproduction.spec.ts`。完整 `test:all` 的 Windows 子命令仍需在对应环境执行。
 
 ## Validation Commands
 
@@ -94,13 +94,13 @@ npm run test:windows
 
 ## Review Gates
 
-- [ ] 未修改持久 FlowStep/ElementAsset 契约，或已同步更新前后端 snapshot 并证明兼容。
-- [ ] 页面、服务端、API、前端 store、storage、日志和审计均无敏感输入明文。
-- [ ] 录制 API 不依赖或扩大 legacy Worker API 的网络暴露。
-- [ ] 事件归并、seq 去重和导航因果有纯单测及真实浏览器测试。
-- [ ] 确认导入是原子的，取消路径无任何资源副作用。
-- [ ] 现有 Picker 和手工编辑路径保持可用。
-- [ ] P0 retry 回归通过：保存/发布后仍能按最终约定复用原 revision checksum、dataset 行/`upToStepId`（如适用），并为每条重试保留一对一 `retryOfRunId`/审计关联；产品语义已收敛，follow-up 实现/测试未通过前保持阻塞。
+- [x] 未修改持久 FlowStep/ElementAsset 契约；import planner/runner fixture 证明兼容。
+- [x] 页面、服务端、API、前端 store、storage、日志和审计均无敏感输入明文；revision snapshot 只接受 secret 模板，不接受敏感原值。
+- [x] 录制 API 不依赖或扩大 legacy Worker API 的网络暴露。
+- [x] 事件归并、seq 去重和导航因果有纯单测及真实浏览器测试。
+- [x] 确认导入在验证成功后才写入，取消路径无导入副作用。
+- [x] 现有 Picker 和手工编辑路径保持可用，既有 e2e/单测回归通过。
+- [x] P0 retry snapshot 核心 gate 通过：`test_retry_snapshot.py` 覆盖 revision checksum、dataset 行、`upToStepId`、一对一 lineage/event 与 batch retry；与 AC7 ManagedRunner 保存后回放一起通过。AC8 fresh-run 多行 UI fixture 已由 `tests/retry-reproduction.spec.ts` 通过。
 
 ## Risky Files And Rollback Points
 

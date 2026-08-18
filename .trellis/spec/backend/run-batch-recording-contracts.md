@@ -91,6 +91,7 @@ if spec["datasetVersionId"]:
 - Capture descriptors for click and keyboard events must resolve the closest same-document semantic interactive ancestor (`button`, `a[href]`, form control, or explicit `role`) so nested text/SVG nodes retain the parent testid or role/name locator. Unsupported-feature detection still evaluates the raw event path, preserving the Shadow DOM and contenteditable warning contract.
 - Pause is a normalization boundary: flush any pending input before changing status to `paused`, then ignore subsequent business events until resume. This prevents text typed before and after pause from becoming one recorded step.
 - Browser page close/disconnect, startup, and navigation failure produce stable failed terminal states and release context, browser, and Playwright resources. Sensitive inputs carry binding metadata only, never their typed value.
+- A revision save that contains a password/secret/token-like step may persist only a complete `{{scope.name}}` template reference. Materialized sensitive values are rejected before the revision transaction, so a failed save cannot leave a plaintext snapshot.
 
 ### 4. Validation & Error Matrix
 

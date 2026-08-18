@@ -96,21 +96,21 @@
 
 ## Acceptance Criteria
 
-- [ ] AC1：有 `flow.edit` 权限的登录用户可从流程编辑器选择本项目环境，启动部署机有头 Chromium；未登录、跨项目和无权限请求被拒绝。
-- [ ] AC2：在本地测试页依次执行“打开页面 → 填写用户名 → 填写密码 → 点击登录 → 下拉选择 → 勾选 → 按键”，停止后生成顺序正确、无逐字符噪声和重复点击的步骤。
-- [ ] AC3：刷新或 SPA 路由变化后录制仍继续；直接地址导航和点击触发导航按 R2 规则生成步骤。
-- [ ] AC4：候选定位器按稳定性排序并验证匹配数；元素可按环境、路径、方法和值复用，新增元素名称在项目内唯一。
-- [ ] AC5：密码值不会出现在录制 API 响应、服务端日志、前端 store、local/session storage、审计或保存后的 revision 中；绑定 secret 变量前无法导入。
-- [ ] AC6：确认导入一次性追加步骤和元素，流程进入 dirty；取消录制或取消确认后流程和元素库均不变化。
-- [ ] AC7：导入并保存的流程可以由现有 ManagedRunner 成功重放基础动作，运行结果与人工操作一致。
-- [ ] AC8：暂停期间不产生业务步骤，继续后 seq 连续；重复轮询相同 `afterSeq` 不会让编辑器出现重复步骤。
-- [ ] AC9：会话取消、浏览器关闭、空闲超时和服务关闭均释放 page/context/browser；用户看到明确终态。
-- [ ] AC10：iframe、多标签页、上传等非 MVP 行为展示 warning，且不会被标记为已成功录制。
-- [ ] AC11：现有 Picker、元素验证、手工流程编辑、运行、同步和 revision 测试继续通过。
-- [ ] AC12：起始 URL 与环境 `baseUrl` 不同源、携带 userinfo 或非 HTTP(S) 时创建被拒绝且不启动浏览器；录制中跳转外部域展示 warning 且不生成步骤。
-- [ ] AC13：同环境存在存活 Picker 会话时，录制以其登录态快照启动（登录后页面直接可达）；选择「从头录制」或无 Picker 会话时全新 context 启动；录制结束不影响 Picker 会话存活，登录态只读不回写。
-- [ ] AC14：直接导航携带 query/fragment 时，生成的打开页面步骤、review、事件、日志与审计中的 URL 均只含 scheme+host+path。
-- [ ] AC15：页面刷新恢复策略按最终决策验收：推荐仅在 `sessionStorage` 保存 `sessionId` 并恢复控制视图，不保存事件/结果；若选择刷新即取消，则服务端可靠释放会话并显示明确终态。外域 top-frame 导航只产生 warning，不生成可执行步骤。
+- [x] AC1：有 `flow.edit` 权限的登录用户可从流程编辑器选择本项目环境，启动部署机有头 Chromium；未登录、跨项目和无权限请求被拒绝。（录制 API 覆盖未登录、非成员、跨项目、`viewer` 无 `flow.edit` 与 owner 成功矩阵；`member_role`/`role_has_capability` 已接入服务层。）
+- [x] AC2：在本地测试页依次执行“打开页面 → 填写用户名 → 填写密码 → 点击登录 → 下拉选择 → 勾选 → 按键”，停止后生成顺序正确、无逐字符噪声和重复点击的步骤。（`test_recorder_poc.py` 真实 Chromium fixture 覆盖完整动作序列、输入归并、敏感值为空、选择/勾选/按键。）
+- [x] AC3：刷新或 SPA 路由变化后录制仍继续；直接地址导航和点击触发导航按 R2 规则生成步骤。（真实 fixture 覆盖点击导航、SPA 输入与直接导航；编辑器 Playwright 覆盖刷新后控制恢复。）
+- [x] AC4：候选定位器按稳定性排序并验证匹配数；元素可按环境、路径、方法和值复用，新增元素名称在项目内唯一。（RecorderNormalizer 候选优先级、元素验证唯一性、编辑器 import planner 的复用/唯一命名测试已覆盖。）
+- [x] AC5：密码值不会出现在录制 API 响应、服务端日志、前端 store、local/session storage、审计或保存后的 revision 中；绑定 secret 变量前无法导入。（真实浏览器 payload、API DTO、前端 storage/import planner、录制审计脱敏及 revision POST 对敏感原值拒绝/模板快照回归均通过。）
+- [x] AC6：确认导入一次性追加步骤和元素，流程进入 dirty；取消录制或取消确认后流程和元素库均不变化。（planner 在任何异步验证前完成阻断，flow-store 空导入无副作用，录制 Playwright 覆盖确认导入。）
+- [x] AC7：导入并保存的流程可以由现有 ManagedRunner 成功重放基础动作，运行结果与人工操作一致。（`test_saved_recording_revision_replays_through_platform_managed_runner` 将已保存 revision snapshot 经 `queue_published_runs` 送入真实 ManagedRunner，核对 success/3 steps/complete event；retry snapshot P0 专项 5 项测试同样通过。）
+- [x] AC8：暂停期间不产生业务步骤，继续后 seq 连续；重复轮询相同 `afterSeq` 不会让编辑器出现重复步骤。（后端 pause/seq 回归与前端 cursor 无进展保护、seq merge/dedupe 单测通过。）
+- [x] AC9：会话取消、浏览器关闭、空闲超时和服务关闭均释放 page/context/browser；用户看到明确终态。（生命周期 fixture 覆盖 stop/cancel/expiry/page close/browser disconnect、executor 清理 fallback；前端保留 canceled/failed/expired 终态。）
+- [x] AC10：iframe、多标签页、上传等非 MVP 行为展示 warning，且不会被标记为已成功录制。（iframe/contenteditable/drag 与 popup/filechooser/download warning 回归通过，均不生成步骤。）
+- [x] AC11：现有 Picker、元素验证、手工流程编辑、运行、同步和 revision 测试继续通过。（录制专项 Playwright 1/1、retry UI 专项 1/1、元素验证/Worker/运行/同步与历史回归均通过；2026-08-18 完整 `npm run test:e2e` 39/39 通过，Python 与前端单测既有证据保持通过。）
+- [x] AC12：起始 URL 与环境 `baseUrl` 不同源、携带 userinfo 或非 HTTP(S) 时创建被拒绝且不启动浏览器；录制中跳转外部域展示 warning 且不生成步骤。（URL 单测覆盖 origin/userinfo/scheme/port，生命周期回归覆盖外域 top-frame warning 与无步骤。）
+- [x] AC13：同环境存在存活 Picker 会话时，录制以其登录态快照启动（登录后页面直接可达）；选择「从头录制」或无 Picker 会话时全新 context 启动；录制结束不影响 Picker 会话存活，登录态只读不回写。（snapshot 深拷贝/freshLogin 隔离单测与真实浏览器 localStorage fixture 通过。）
+- [x] AC14：直接导航携带 query/fragment 时，生成的打开页面步骤、review、事件、日志与审计中的 URL 均只含 scheme+host+path。（后端 sanitize/审计 API 与前端 DTO/review/storage URL 脱敏测试通过。）
+- [x] AC15：页面刷新恢复策略按最终决策验收：推荐仅在 `sessionStorage` 保存 `sessionId` 并恢复控制视图，不保存事件/结果；若选择刷新即取消，则服务端可靠释放会话并显示明确终态。外域 top-frame 导航只产生 warning，不生成可执行步骤。（sessionStorage 仅存 id、恢复/过期终态与外域 warning 均有前端/后端回归。）
 
 ## Out Of Scope
 

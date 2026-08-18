@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "08-18-recording-environment-layout-and-event-capture"
+    "08-18-recording-environment-layout-and-event-capture",
+    "08-18-recording-interaction-events-not-captured"
   ],
   "parent": "08-15-next-roadmap-planning",
   "relatedFiles": [],
