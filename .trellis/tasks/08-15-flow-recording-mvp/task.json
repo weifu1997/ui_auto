@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "08-18-recording-environment-layout-and-event-capture"
+  ],
   "parent": "08-15-next-roadmap-planning",
   "relatedFiles": [],
   "notes": "",

@@ -1,0 +1,3 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"复核表单标签、构建、lint、单测和录制 Playwright 回归"}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"复核真实 Chromium 录制与敏感输入、导航、暂停兼容性"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"确认事件 descriptor 改动不改变 API 与前端 DTO 边界"}

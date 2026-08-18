@@ -34,6 +34,26 @@ async function createFlow(page: Page) {
   await page.locator(".editor-topbar").getByRole("button").first().click();
 }
 
+async function expectRecordingFormLayout(page: Page) {
+  const form = page.locator(".recording-form");
+  const fields = form.locator(":scope > label");
+  const [formBox, environmentBox, startUrlBox, freshLoginBox] = await Promise.all([
+    form.boundingBox(),
+    fields.nth(0).boundingBox(),
+    fields.nth(1).boundingBox(),
+    form.locator(".ant-checkbox-wrapper").boundingBox(),
+  ]);
+  if (!formBox || !environmentBox || !startUrlBox || !freshLoginBox) {
+    throw new Error("录制表单字段未正确渲染");
+  }
+
+  expect(environmentBox.y + environmentBox.height).toBeLessThanOrEqual(startUrlBox.y);
+  expect(startUrlBox.y + startUrlBox.height).toBeLessThanOrEqual(freshLoginBox.y);
+  expect(environmentBox.width).toBeGreaterThanOrEqual(formBox.width - 1);
+  expect(startUrlBox.width).toBeGreaterThanOrEqual(formBox.width - 1);
+  expect(freshLoginBox.width).toBeGreaterThanOrEqual(formBox.width - 1);
+}
+
 test("records, recovers controls, reviews, validates, and imports a flow draft", async ({ page }) => {
   await createProject(page, "录制回归项目");
   await page.locator(".project-nav-item").filter({ hasText: "环境" }).click();
@@ -44,13 +64,22 @@ test("records, recovers controls, reviews, validates, and imports a flow draft",
   await page.locator(".name-link", { hasText: "录制回归流程" }).click();
 
   await page.getByRole("button", { name: "录制" }).click();
+  await expectRecordingFormLayout(page);
+  await page.setViewportSize({ width: 480, height: 900 });
+  await expectRecordingFormLayout(page);
+  await page.getByLabel("录制环境").click();
+  await page.getByRole("option", { name: "录制环境" }).click();
   await page.getByLabel("录制起始 URL").fill("https://default.example.test/login?token=discarded");
   await page.getByLabel("从头录制（不使用已有登录态）").check();
   await page.getByRole("button", { name: "开始录制" }).click();
   await expect(page.getByRole("button", { name: "暂停录制" })).toBeVisible();
 
   await expect.poll(() => calls.eventCursors).toEqual(expect.arrayContaining([0, 100]));
-  expect(calls.sessions[0]).toMatchObject({ freshLogin: true });
+  expect(calls.sessions[0]).toMatchObject({
+    environmentId: expect.any(String),
+    startUrl: "https://default.example.test/login?token=discarded",
+    freshLogin: true,
+  });
 
   await page.reload();
   await expect(page.getByRole("button", { name: "暂停录制" })).toBeVisible();

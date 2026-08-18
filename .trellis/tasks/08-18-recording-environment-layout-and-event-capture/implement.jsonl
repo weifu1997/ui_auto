@@ -1,0 +1,4 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"开始录制 Modal 的 Ant Design、可访问性与 App.css 样式约定"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端表单与 Playwright 回归测试门禁"}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"浏览器录制事件、敏感字段和既有会话契约不得回归"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"扩展既有 recorder target 解析而不复制 descriptor 或事件校验逻辑"}

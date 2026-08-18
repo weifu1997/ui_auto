@@ -1191,6 +1191,25 @@
 .step-form .ant-input {
   width: 100%;
 }
+.recording-form {
+  display: grid;
+  gap: var(--space-4);
+}
+.recording-form > label {
+  display: block;
+}
+.recording-form > label > span {
+  display: block;
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 7px;
+}
+.recording-form .ant-select,
+.recording-form .ant-input,
+.recording-form .ant-checkbox-wrapper {
+  width: 100%;
+}
 .step-form-footer {
   border-top: 1px solid var(--line);
   margin-top: 2px;

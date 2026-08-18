@@ -113,11 +113,29 @@ RECORDER_INIT_SCRIPT = r"""
     }
   };
   const target = (event) =>
-    event.target instanceof HTMLElement
+    event.target instanceof Element
       ? event.target
-      : event.target && event.target.parentElement instanceof HTMLElement
+      : event.target && event.target.parentElement instanceof Element
         ? event.target.parentElement
         : null;
+  const semanticTarget = (event) => {
+    const source = target(event);
+    if (!source || source.getRootNode() !== document) return source;
+    for (let el = source; el && el.ownerDocument === document; el = el.parentElement) {
+      const tag = el.tagName.toLowerCase();
+      if (
+        tag === "button" ||
+        (tag === "a" && el.hasAttribute("href")) ||
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        Boolean((el.getAttribute("role") || "").trim())
+      ) {
+        return el;
+      }
+    }
+    return source;
+  };
   const unsupportedFeature = (event, el) => {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [];
     if (path.some((node) => typeof ShadowRoot !== "undefined" && node instanceof ShadowRoot)) {
@@ -129,7 +147,7 @@ RECORDER_INIT_SCRIPT = r"""
     return "";
   };
   const emitUnsupported = (event, feature) => {
-    const el = target(event);
+    const el = semanticTarget(event);
     emit({
       kind: "unsupported",
       feature,
@@ -139,9 +157,10 @@ RECORDER_INIT_SCRIPT = r"""
   document.addEventListener(
     "click",
     (event) => {
-      const el = target(event);
+      const source = target(event);
+      const el = semanticTarget(event);
       if (!el) return;
-      const unsupported = unsupportedFeature(event, el);
+      const unsupported = unsupportedFeature(event, source);
       if (unsupported) {
         emitUnsupported(event, unsupported);
         return;
@@ -201,8 +220,9 @@ RECORDER_INIT_SCRIPT = r"""
     "keydown",
     (event) => {
       if (!["Enter", "Escape", "Tab"].includes(event.key)) return;
-      const el = target(event);
-      const unsupported = unsupportedFeature(event, el);
+      const source = target(event);
+      const el = semanticTarget(event);
+      const unsupported = unsupportedFeature(event, source);
       if (unsupported) {
         emitUnsupported(event, unsupported);
         return;

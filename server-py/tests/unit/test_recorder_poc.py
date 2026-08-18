@@ -151,7 +151,8 @@ def test_capture_normalize_replay_and_sensitive_never_leaves_page(fixture_server
             page.get_by_test_id("login-remember").check()
             page.frame_locator("iframe").get_by_test_id("iframe-button").click()
             page.wait_for_timeout(50)
-            page.get_by_test_id("login-submit").click()
+            page.get_by_test_id("recording-help-label").click()
+            page.get_by_test_id("login-submit-icon").click()
             page.wait_for_url("**/page2.html", timeout=5_000)
 
             page.get_by_test_id("search-input").type("订单")
@@ -171,6 +172,7 @@ def test_capture_normalize_replay_and_sensitive_never_leaves_page(fixture_server
         "选择下拉项",
         "勾选",
         "点击",
+        "点击",
         "填写",
         "键盘按键",
         "点击",
@@ -183,9 +185,9 @@ def test_capture_normalize_replay_and_sensitive_never_leaves_page(fixture_server
     assert values[1] == "tester"
     assert values[2] is None  # 密码：值不进入事件与步骤
     assert values[3] == "tester"
-    assert values[6] == "订单"
-    assert values[7] == "Enter"
-    assert values[9] == "录制后仍可输入"
+    assert values[7] == "订单"
+    assert values[8] == "Enter"
+    assert values[10] == "录制后仍可输入"
     assert result["requiredBindings"], "敏感输入必须要求绑定 secret 变量"
     assert any("iframe" in warning for warning in result["warnings"])
     for payload in raw_payloads:
@@ -204,6 +206,12 @@ def test_capture_normalize_replay_and_sensitive_never_leaves_page(fixture_server
         "description": "",
         "validation": "unverified",
     }
+    assert elements_by_name["recording-help"]["method"] == "testid"
+    assert elements_by_name["recording-help"]["value"] == "recording-help"
+    assert elements_by_name["login-submit"]["method"] == "testid"
+    assert elements_by_name["login-submit"]["value"] == "login-submit"
+    assert result["steps"][5]["element"] == "recording-help"
+    assert result["steps"][6]["element"] == "login-submit"
 
     # 绑定 secret 后重放：验证生成的步骤/元素无需扩展 FlowStep 契约即可被现有 runner 执行。
     replay_steps = []
