@@ -379,3 +379,27 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 独立提交现有任务改动
+
+**Date**: 2026-08-18
+**Task**: 独立提交现有任务改动
+**Branch**: `master`
+
+### Summary
+
+复核并按录制编辑器、重试快照、批量执行验收和遗留 E2E 闭环拆分四笔提交；完成前端、Python 与隔离端口 Playwright 验证并推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2f19954` | (see git log) |
+| `e380be5` | (see git log) |
+| `8cf0332` | (see git log) |
+| `23efcae` | (see git log) |
+
+### Status
+
+[OK] **Completed**
