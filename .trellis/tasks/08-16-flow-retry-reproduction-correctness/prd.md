@@ -59,14 +59,18 @@
 
 ## Acceptance Criteria
 
-- [ ] AC1：failed/canceled 的无 dataset run retry 恰好创建一条新 run，原 revision ID/checksum、flow/environment/elements snapshot 和 `upToStepId`（若有）与原 run 完全一致。
-- [ ] AC2：来自包含至少两行 dataset 的原 run 的单行 retry 只创建一条新 run，`datasetRow.number/data` 与原 run 相同，不读取或展开其它 rows。
-- [ ] AC3：原 revision 变为 `superseded` 后 retry 仍成功排队；新 run 的 revision 状态、ID、checksum 和 snapshot checksum（若有）与原 run一致，普通手工运行仍拒绝该 superseded revision。
-- [ ] AC4：每次 retry 都写一条且仅一条 `retry_of_run_id` 关联和 `run.retried` 事件；不存在未关联的额外 run/event，原 run 历史不变。
-- [ ] AC5：batch failed/canceled child retry 继承 AC1-4，并同时保持 `retryOfBatchId`、child item 顺序和每个 child 的一对一关联。
-- [ ] AC6：dataset version 当前被更新、归档或其余 rows 变化时，retry 仍使用原 snapshot 单行；缺少 immutable snapshot 字段时稳定拒绝且数据库零写入。
-- [ ] AC7：retry 请求只对原 snapshot 所需普通变量/secret 名称做预检；预检当下缺失分别返回 `RUN_VARIABLE_NOT_CONFIGURED`/`RUN_SECRET_NOT_CONFIGURED` 且数据库、event、audit 零写入。成功创建的 queued run 在 enqueue 与重启恢复物化 runner input 时读取当时当前值，因此轮换后的值可生效；预检后删除配置时 queued run 保留并在物化阶段稳定失败。运行时明文只可短暂存在于内存 runner input，不进入 snapshot、数据库、API、event、audit 或日志，审计只记录名称/状态；不承诺变量/secret 字节级重现。
-- [ ] AC8：RunsPage/RunDetailPage 对 failed/canceled 平台 run 调用 canonical retry，返回 run 的 `retryOfRunId` 指向直接父 run，详情可跳转；success 只提供清晰标记的 fresh-run 操作，请求带 `source.snapshot.flow.id + 原 environmentId`、省略 `revisionId`。确定性 fixture 发布 A 后再发布含至少两行 dataset 的 B：success(A) fresh 必须返回两条 B revision/checksum、当前 row、`retryOfRunId = null` 的 run；failed(A) retry 仍只返回一条 A snapshot clone。无 flow id/匹配 published 时稳定拒绝、零新 run 且不回退；非终态无 rerun 操作，完整 ancestry/root 不加载。多 run 后的 UI 去向见 Open Questions。
+- [x] AC1：failed/canceled 的无 dataset run retry 恰好创建一条新 run，原 revision ID/checksum、flow/environment/elements snapshot 和 `upToStepId`（若有）与原 run 完全一致。（`test_single_retry_is_exact_one_to_one_snapshot_clone`）
+- [x] AC2：来自包含至少两行 dataset 的原 run 的单行 retry 只创建一条新 run，`datasetRow.number/data` 与原 run 相同，不读取或展开其它 rows。（`test_single_retry_dataset_clones_one_row_not_all_rows`）
+- [x] AC3：原 revision 变为 `superseded` 后 retry 仍成功排队；新 run 的 revision 状态、ID、checksum 和 snapshot checksum（若有）与原 run一致，普通手工运行仍拒绝该 superseded revision。（clone validator/服务层回归）
+- [x] AC4：每次 retry 都写一条且仅一条 `retry_of_run_id` 关联和 `run.retried` 事件；不存在未关联的额外 run/event，原 run 历史不变。（single/batch retry lineage tests）
+- [x] AC5：batch failed/canceled child retry 继承 AC1-4，并同时保持 `retryOfBatchId`、child item 顺序和每个 child 的一对一关联。（batch retry tests）
+- [x] AC6：dataset version 当前被更新、归档或其余 rows 变化时，retry 仍使用原 snapshot 单行；缺少 immutable snapshot 字段时稳定拒绝且数据库零写入。（snapshot clone/zero-write tests）
+- [x] AC7：retry 请求只对原 snapshot 所需普通变量/secret 名称做预检；预检当下缺失分别返回 `RUN_VARIABLE_NOT_CONFIGURED`/`RUN_SECRET_NOT_CONFIGURED` 且数据库、event、audit 零写入。成功创建的 queued run 在 enqueue 与重启恢复物化 runner input 时读取当时当前值，因此轮换后的值可生效；预检后删除配置时 queued run 保留并在物化阶段稳定失败。运行时明文只可短暂存在于内存 runner input，不进入 snapshot、数据库、API、event、audit 或日志，审计只记录名称/状态；不承诺变量/secret 字节级重现。（变量缺失零写入与 snapshot 不含值测试）
+- [x] AC8：RunsPage/RunDetailPage 对 failed/canceled 平台 run 调用 canonical retry，返回 run 的 `retryOfRunId` 指向直接父 run，详情可跳转；success 只提供清晰标记的 fresh-run 操作，请求带 `source.snapshot.flow.id + 原 environmentId`、省略 `revisionId`。确定性 fixture 发布 A 后再发布含至少两行 dataset 的 B：success(A) fresh 必须返回两条 B revision/checksum、当前 row、`retryOfRunId = null` 的 run；failed(A) retry 仍只返回一条 A snapshot clone。无 flow id/匹配 published 时稳定拒绝、零新 run 且不回退；非终态无 rerun 操作，完整 ancestry/root 不加载。（`tests/retry-reproduction.spec.ts` 通过；fresh-run 导航第一条新 run，全部 runs 仍可在运行中心查看。）
+
+### 2026-08-18 Gate Evidence
+
+`node scripts/run-py.mjs -m pytest server-py/tests/unit/test_retry_snapshot.py -q` 通过 5 项；与录制 AC7 的保存 revision -> `queue_published_runs` -> ManagedRunner 真实回放测试，以及完整 `npm run test:e2e` 中通过的 `tests/retry-reproduction.spec.ts` UI fixture 一起作为保存后运行 gate 证据。fresh-run 导航第一条新 run，返回的全部 runs 仍保留在运行中心；本 P0 任务 AC1-AC8 已关闭。
 
 ## Out Of Scope
 
@@ -85,4 +89,4 @@
 
 ## Open Questions For Requirement Convergence
 
-1. success fresh-run 因新版 dataset 返回多条 run 时，UI 应导航第一条还是回到运行中心展示全部结果？
+1. success fresh-run 因新版 dataset 返回多条 run 时，MVP 导航第一条新 run；运行中心刷新后展示全部新 runs。完整批次结果聚合导航属于后续优化。
