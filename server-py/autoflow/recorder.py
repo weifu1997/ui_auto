@@ -570,6 +570,7 @@ BROWSER_EVENT_KINDS = {
 }
 RECORDING_IDLE_MS = 15 * 60_000
 RECORDING_MAX_MS = 2 * 60 * 60_000
+RECORDING_PUMP_INTERVAL_MS = 100
 _TERMINAL_STATUSES = {"stopped", "canceled", "expired", "failed"}
 
 
@@ -782,6 +783,9 @@ class RecordingCoordinator:
                 "expiresAt": self._now_ms() + self._max_ms,
                 "result": None,
                 "browserSession": None,
+                "browserFuture": None,
+                "browserReady": threading.Event(),
+                "startupError": None,
                 "errorCode": None,
                 "failureNotified": False,
             }
@@ -798,24 +802,36 @@ class RecordingCoordinator:
                 # An unreadable snapshot must not make recording unavailable.
                 storage_state = None
         try:
-            self._submit(
-                self._start_browser, session, target, storage_state, headless
-            ).result(timeout=120)
-        except Exception as error:
-            self._release_browser(session, timeout=10)
-            code = (
-                error.code
-                if isinstance(error, _RecordingOperationError)
-                else "RECORDING_BROWSER_START_FAILED"
+            browser_future = self._submit(
+                self._run_browser_session, session, target, storage_state, headless
             )
+            with self._lock:
+                session["browserFuture"] = browser_future
+            if not session["browserReady"].wait(timeout=120):
+                raise TimeoutError("recording browser did not become ready")
+        except Exception:
+            code = "RECORDING_BROWSER_START_FAILED"
             with self._lock:
                 session["status"] = "failed"
                 session["errorCode"] = code
+            # A startup task may already own a browser while it is blocked in
+            # initial navigation. Signal it and give the owner thread a bounded
+            # opportunity to close its Playwright resources before returning.
+            self._release_browser(session, timeout=10)
             self._notify_failed(session)
             from .http import PlatformError
 
             raise PlatformError(409, code) from None
         with self._lock:
+            startup_error = session.get("startupError")
+            if startup_error:
+                code = startup_error
+                session["status"] = "failed"
+                session["errorCode"] = code
+                self._notify_failed(session)
+                from .http import PlatformError
+
+                raise PlatformError(409, code)
             if session["status"] != "starting":
                 code = session.get("errorCode") or "RECORDING_BROWSER_START_FAILED"
                 from .http import PlatformError
@@ -824,53 +840,91 @@ class RecordingCoordinator:
             session["status"] = "recording"
         return self.session_response(session)
 
-    def _start_browser(
+    def _run_browser_session(
         self,
         session: dict[str, Any],
         target: str,
         storage_state: dict[str, Any] | None,
         headless: bool,
     ) -> None:
+        browser_started = False
         try:
-            browser_session = self._launch(headless, storage_state)
-        except Exception as error:
-            raise _RecordingOperationError("RECORDING_BROWSER_START_FAILED", error) from error
-        with self._lock:
-            if session["status"] != "starting":
-                close_browser_session(browser_session)
-                return
-            session["browserSession"] = browser_session
-        try:
+            try:
+                browser_session = self._launch(headless, storage_state)
+            except Exception as error:
+                raise _RecordingOperationError(
+                    "RECORDING_BROWSER_START_FAILED", error
+                ) from error
+            with self._lock:
+                if session["status"] != "starting":
+                    close_browser_session(browser_session)
+                    return
+                session["browserSession"] = browser_session
             context = browser_session["context"]
             page = browser_session["page"]
-            context.add_init_script(RECORDER_INIT_SCRIPT)
-            context.expose_binding(
-                "__autoflowRecorderEvent",
-                lambda _source, payload: self._on_browser_event(session, payload),
-            )
-        except Exception as error:
-            raise _RecordingOperationError("RECORDING_BROWSER_START_FAILED", error) from error
-
-        def on_navigated(frame: Any) -> None:
             try:
-                if frame == page.main_frame:
-                    self._on_navigation(session, frame.url)
-            except Exception:
-                pass
+                context.add_init_script(RECORDER_INIT_SCRIPT)
+                context.expose_binding(
+                    "__autoflowRecorderEvent",
+                    lambda _source, payload: self._on_browser_event(session, payload),
+                )
 
-        page.on("framenavigated", on_navigated)
+                def on_navigated(frame: Any) -> None:
+                    try:
+                        if frame == page.main_frame:
+                            self._on_navigation(session, frame.url)
+                    except Exception:
+                        pass
 
-        def on_unsupported(feature: str):
-            return lambda *_: self._on_unsupported(session, feature)
+                page.on("framenavigated", on_navigated)
 
-        page.on("popup", on_unsupported("popup"))
-        page.on("filechooser", on_unsupported("filechooser"))
-        page.on("download", on_unsupported("download"))
-        self._register_close_handlers(session, browser_session, page, context)
-        try:
-            page.goto(target, wait_until="domcontentloaded", timeout=30000)
-        except Exception as error:
-            raise _RecordingOperationError("RECORDING_NAVIGATION_FAILED", error) from error
+                def on_unsupported(feature: str):
+                    return lambda *_: self._on_unsupported(session, feature)
+
+                page.on("popup", on_unsupported("popup"))
+                page.on("filechooser", on_unsupported("filechooser"))
+                page.on("download", on_unsupported("download"))
+                self._register_close_handlers(session, browser_session, page, context)
+            except Exception as error:
+                raise _RecordingOperationError(
+                    "RECORDING_BROWSER_START_FAILED", error
+                ) from error
+            try:
+                page.goto(target, wait_until="domcontentloaded", timeout=30000)
+            except Exception as error:
+                raise _RecordingOperationError("RECORDING_NAVIGATION_FAILED", error) from error
+
+            # Playwright's sync bindings are dispatched only while its owner
+            # thread is inside a sync API call. A browser-side promise keeps
+            # that protocol call pending while allowing the page event loop to
+            # deliver interaction bindings between bounded pump intervals.
+            browser_started = callable(getattr(page, "wait_for_timeout", None))
+            session["browserReady"].set()
+            if not browser_started:
+                return
+            while True:
+                with self._lock:
+                    if session["status"] in _TERMINAL_STATUSES:
+                        break
+                page.wait_for_timeout(RECORDING_PUMP_INTERVAL_MS)
+        except _RecordingOperationError as error:
+            with self._lock:
+                session["startupError"] = error.code
+                session["status"] = "failed"
+                session["errorCode"] = error.code
+            self._notify_failed(session)
+        except Exception:
+            with self._lock:
+                if session["status"] not in _TERMINAL_STATUSES:
+                    session["status"] = "failed"
+                    session["errorCode"] = "RECORDING_BROWSER_DISCONNECTED"
+            self._notify_failed(session)
+        finally:
+            session["browserReady"].set()
+            # Production pages always run the pump. Test doubles without a
+            # pump retain their historical explicit terminal cleanup behavior.
+            if browser_started or session.get("status") == "failed":
+                self._stop_browser(session)
 
     def _register_close_handlers(
         self,
@@ -919,27 +973,35 @@ class RecordingCoordinator:
             session["status"] = "failed"
             session["errorCode"] = code
             session["lastActivityAt"] = self._now_ms()
-        # This callback runs on the Playwright thread, so close directly rather
-        # than submitting back to the same single-thread executor.
-        try:
-            self._stop_browser(session)
-        except Exception:
-            pass
+        # A live recording task owns Playwright resources and will observe this
+        # terminal state in its bounded pump interval. Completed test doubles
+        # do not have a pump, so preserve their explicit cleanup behavior.
+        future = session.get("browserFuture")
+        if future is None or self._future_is_done(future):
+            self._release_browser(session)
         self._notify_failed(session)
 
+    @staticmethod
+    def _future_is_done(future: Any) -> bool:
+        done = getattr(future, "done", None)
+        return bool(done()) if callable(done) else True
+
     def _release_browser(self, session: dict[str, Any], timeout: int = 30) -> None:
-        """Release a terminal session even if its executor is no longer usable."""
+        """Wait for the recording thread to perform terminal cleanup."""
         if session.get("browserSession") is None:
             return
+        future = session.get("browserFuture")
         try:
-            self._submit(self._stop_browser, session).result(timeout=timeout)
+            if future is not None:
+                future.result(timeout=timeout)
         except Exception:
-            # This mirrors shutdown cleanup and is only a fallback after the
-            # single Playwright worker has failed or timed out.
-            try:
-                self._stop_browser(session)
-            except Exception:
-                pass
+            # A running browser task remains the owner of Playwright objects.
+            # It will clean up in _run_browser_session's finally block.
+            return
+        # Synchronous unit-test submitters intentionally do not emulate the
+        # production event pump, so their completed tasks still need cleanup.
+        if session.get("browserSession") is not None:
+            self._stop_browser(session)
 
     def _on_browser_event(self, session: dict[str, Any], payload: Any) -> None:
         event = validate_recorder_event(payload)

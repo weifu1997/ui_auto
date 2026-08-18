@@ -15,12 +15,22 @@
     <p><label><input data-testid="login-remember" type="checkbox"> 记住我</label></p>
     <p><a href="#recording-help" data-testid="recording-help"><span data-testid="recording-help-label">录制帮助</span></a></p>
     <p><button type="button" data-testid="login-submit" id="login-submit"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path data-testid="login-submit-icon" d="M1 1h14v14H1z"></path></svg><span data-testid="login-submit-label">登录</span></button></p>
+    <p><button type="button" data-testid="idle-submit" id="idle-submit">空闲期点击</button></p>
   </form>
   <iframe src="child.html" title="嵌入选区" width="320" height="60"></iframe>
   <script>
     document.getElementById("login-submit").addEventListener("click", () => {
       location.href = "page2.html";
     });
+    if (new URLSearchParams(location.search).has("delayed-recorder-events")) {
+      setTimeout(() => {
+        const username = document.querySelector('[data-testid="login-username"]');
+        if (!(username instanceof HTMLInputElement)) return;
+        username.value = "idle-user";
+        username.dispatchEvent(new Event("input", { bubbles: true }));
+        document.getElementById("idle-submit").click();
+      }, 1500);
+    }
   </script>
 </body>
 </html>

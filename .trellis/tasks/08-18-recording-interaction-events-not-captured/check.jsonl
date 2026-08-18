@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"复核长期事件泵、线程内资源回收、脱敏和会话状态转换"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核 binding、normalizer、cursor 和 API session DTO 保持一致"}

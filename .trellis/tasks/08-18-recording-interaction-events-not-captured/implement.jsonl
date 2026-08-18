@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"录制 session 生命周期、线程亲和性、事件游标和敏感值契约"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"验证 browser binding 到 in-memory event cursor 的跨线程数据流"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"扩展现有 RecordingCoordinator 而不复制 Playwright 生命周期所有权"}

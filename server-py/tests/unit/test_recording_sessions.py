@@ -36,20 +36,6 @@ class _ImmediateSubmit:
         return _StubFuture(function(*args))
 
 
-class _FailedFuture:
-    def result(self, timeout=None):
-        raise RuntimeError("recording executor unavailable")
-
-
-class _CleanupRejectingSubmit(_ImmediateSubmit):
-    """Only reject teardown work after a session has started successfully."""
-
-    def __call__(self, function, *args):
-        if getattr(function, "__name__", "") == "_stop_browser":
-            return _FailedFuture()
-        return super().__call__(function, *args)
-
-
 class _StubContext:
     def __init__(self):
         self.init_scripts = []
@@ -428,7 +414,7 @@ def test_recording_snapshot_is_detached_from_provider_and_fresh_login_skips_it()
     fresh.cancel(fresh_created["id"])
 
 
-def test_terminal_cleanup_falls_back_when_recording_executor_is_unavailable():
+def test_terminal_cleanup_handles_completed_non_pumping_session():
     launched = []
 
     def launch(headless, storage_state=None):
@@ -436,7 +422,7 @@ def test_terminal_cleanup_falls_back_when_recording_executor_is_unavailable():
         launched.append(session)
         return session
 
-    coordinator = RecordingCoordinator(submit=_CleanupRejectingSubmit(), launch=launch)
+    coordinator = RecordingCoordinator(submit=_ImmediateSubmit(), launch=launch)
     created = coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
     assert coordinator.cancel(created["id"])["status"] == "canceled"
     browser = launched[0]
@@ -500,6 +486,33 @@ def test_browser_launch_failure_is_a_stable_4xx_error():
     assert error.value.code == "RECORDING_BROWSER_START_FAILED"
 
 
+def test_browser_setup_failure_is_reported_as_start_failure_and_cleaned_up():
+    launched = []
+
+    class _BrokenContext(_StubContext):
+        def add_init_script(self, _script):
+            raise RuntimeError("binding setup failed")
+
+    def launch(headless, storage_state=None):
+        context = _BrokenContext()
+        session = {
+            "playwright": _StubPlaywright(),
+            "browser": _StubBrowser(),
+            "context": context,
+            "page": _StubPage(context),
+        }
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(submit=_ImmediateSubmit(), launch=launch)
+    with pytest.raises(PlatformError) as error:
+        coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
+    assert error.value.code == "RECORDING_BROWSER_START_FAILED"
+    assert launched[0]["context"].closed
+    assert launched[0]["browser"].closed
+    assert launched[0]["playwright"].stopped
+
+
 @pytest.fixture(scope="module")
 def fixture_server():
     handler = partial(SimpleHTTPRequestHandler, directory=str(FIXTURES))
@@ -510,72 +523,43 @@ def fixture_server():
     server.shutdown()
 
 
-def test_coordinator_real_browser_login_state_and_teardown(fixture_server):
-    # Playwright sync 对象只能在创建线程上使用；生产形态中服务器从不驱动页面（只有
-    # 用户操作触发 binding 回调），本测试用同线程提交器把创建与驱动放在一个线程上。
-    class _SameThreadSubmitter:
-        def __init__(self):
-            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            self._local = threading.local()
-
-        def __call__(self, function, *args):
-            if getattr(self._local, "on_worker", False):
-                return _StubFuture(function(*args))
-
-            def run():
-                self._local.on_worker = True
-                try:
-                    return function(*args)
-                finally:
-                    self._local.on_worker = False
-
-            return self._executor.submit(run)
-
-        def shutdown(self):
-            self._executor.shutdown(wait=True)
-
-    submitter = _SameThreadSubmitter()
+def test_coordinator_real_browser_pumps_idle_binding_events(fixture_server):
+    submitter = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    coordinator = None
+    created = None
     try:
-        coordinator = RecordingCoordinator(submit=submitter)
+        coordinator = RecordingCoordinator(submit=submitter.submit)
         environment = {**ENVIRONMENT, "baseUrl": fixture_server}
-        seeded_state = {
-            "origins": [
-                {
-                    "origin": fixture_server,
-                    "localStorage": [{"name": "recorder-seed", "value": "1"}],
-                }
-            ]
-        }
-
-        def scenario():
-            created = coordinator.create_session(
-                "project-1",
-                "flow-1",
-                environment,
-                "/page1.html",
-                login_state_provider=lambda _project, _env: seeded_state,
-                headless=True,
-            )
-            session = coordinator._require_session(created["id"])
-            page = session["browserSession"]["page"]
-            assert page.evaluate("localStorage.getItem('recorder-seed')") == "1"
-            page.get_by_test_id("login-username").type("tester")
-            page.get_by_test_id("login-submit").click()
-            page.wait_for_url("**/page2.html", timeout=5_000)
-            return created
-
-        created = submitter(scenario).result(timeout=60)
+        created = coordinator.create_session(
+            "project-1",
+            "flow-1",
+            environment,
+            "/page1.html?delayed-recorder-events=1",
+            headless=True,
+        )
         assert created["status"] == "recording"
-        session = coordinator._require_session(created["id"])
+        deadline = threading.Event()
+        for _attempt in range(50):
+            preview = coordinator.events_after(created["id"], 0)
+            if preview["lastSeq"] >= 3:
+                break
+            deadline.wait(0.1)
+        else:
+            pytest.fail("idle browser interaction did not reach the recorder binding")
+        assert coordinator.session_response(
+            coordinator._require_session(created["id"])
+        )["recordedStepCount"] >= 3
         stopped = coordinator.stop(created["id"])
         assert stopped["status"] == "stopped"
         result = coordinator.session_result(created["id"])
         actions = [(step["action"], step.get("value")) for step in result["result"]["steps"]]
         assert actions == [
             ("打开页面", "/page1.html"),
-            ("填写", "tester"),
+            ("填写", "idle-user"),
             ("点击", None),
         ]
-        assert session["browserSession"] is None
+        assert coordinator._require_session(created["id"])["browserSession"] is None
     finally:
-        submitter.shutdown()
+        if coordinator is not None and created is not None:
+            coordinator.cancel(created["id"])
+        submitter.shutdown(wait=True)

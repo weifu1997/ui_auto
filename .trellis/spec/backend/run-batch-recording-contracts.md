@@ -87,8 +87,9 @@ if spec["datasetVersionId"]:
 - Every route requires `flow.edit`, project membership, and the owning user. A foreign project/session must not reveal whether the session exists.
 - The start URL must be HTTP(S), same-origin with the environment base URL, and free of userinfo. Session and audit URLs are sanitized to scheme, host, and path.
 - Events are retrieved incrementally by `afterSeq`; the client deduplicates by `seq` and may store only the session id in `sessionStorage` for control recovery.
-- Pause is a normalization boundary: flush any pending input before changing status to `paused`, then ignore subsequent business events until resume. This prevents text typed before and after pause from becoming one recorded step.
+- The recording owner thread must remain inside a bounded Playwright sync call after startup so browser binding callbacks from user-idle interactions are dispatched. Stop, cancel, expiry, and browser failure signal the session and let that same owner thread flush results and close Playwright resources; request threads must not close sync objects directly.
 - Capture descriptors for click and keyboard events must resolve the closest same-document semantic interactive ancestor (`button`, `a[href]`, form control, or explicit `role`) so nested text/SVG nodes retain the parent testid or role/name locator. Unsupported-feature detection still evaluates the raw event path, preserving the Shadow DOM and contenteditable warning contract.
+- Pause is a normalization boundary: flush any pending input before changing status to `paused`, then ignore subsequent business events until resume. This prevents text typed before and after pause from becoming one recorded step.
 - Browser page close/disconnect, startup, and navigation failure produce stable failed terminal states and release context, browser, and Playwright resources. Sensitive inputs carry binding metadata only, never their typed value.
 
 ### 4. Validation & Error Matrix
@@ -111,6 +112,7 @@ if spec["datasetVersionId"]:
 ### 6. Tests Required
 
 - `test_recording_sessions.py`: normalization, pause boundary, expiration, launch/navigation failure, close/disconnect cleanup, and real-browser login-state teardown.
+- `test_recording_sessions.py`: the real Chromium coordinator case must trigger input/click after `create_session` returns without issuing another page command, then assert seq, preview steps, and same-thread teardown.
 - `test_recorder_poc.py`: nested text and SVG-path clicks must produce steps that reference their button/link parent locators, then replay successfully.
 - `test_recording_api.py`: capability/project scoping, malformed JSON, and terminal audit idempotence.
 - Playwright `tests/recording.spec.ts`: session recovery, pause/resume controls, review, locator validation, and atomic draft import.
