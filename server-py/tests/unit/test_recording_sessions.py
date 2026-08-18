@@ -1,6 +1,7 @@
 """Recording Phase 1: session lifecycle, payload validation, target URL rules."""
 
 import concurrent.futures
+import json
 import threading
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -33,6 +34,20 @@ class _ImmediateSubmit:
 
     def __call__(self, function, *args):
         return _StubFuture(function(*args))
+
+
+class _FailedFuture:
+    def result(self, timeout=None):
+        raise RuntimeError("recording executor unavailable")
+
+
+class _CleanupRejectingSubmit(_ImmediateSubmit):
+    """Only reject teardown work after a session has started successfully."""
+
+    def __call__(self, function, *args):
+        if getattr(function, "__name__", "") == "_stop_browser":
+            return _FailedFuture()
+        return super().__call__(function, *args)
 
 
 class _StubContext:
@@ -172,6 +187,29 @@ def test_validate_recorder_event_normalizes_and_drops():
     assert sensitive["sensitive"] is True
     assert sensitive["value"] is None
 
+    autocomplete_sensitive = validate_recorder_event({
+        "kind": "input",
+        "element": {
+            "tag": "INPUT",
+            "type": "PASSWORD",
+            "autocomplete": "current-password",
+        },
+        "value": "sensitive-value-must-not-leak",
+    })
+    assert autocomplete_sensitive["element"]["autocomplete"] == "current-password"
+    assert autocomplete_sensitive["sensitive"] is True
+    assert autocomplete_sensitive["value"] is None
+    assert "sensitive-value-must-not-leak" not in json.dumps(autocomplete_sensitive)
+
+    sensitive_change = validate_recorder_event({
+        "kind": "change",
+        "element": {"tag": "select", "autocomplete": "current-password"},
+        "sensitive": True,
+        "selectedValue": "sensitive-selection-must-not-leak",
+    })
+    assert sensitive_change["selectedValue"] is None
+    assert "sensitive-selection-must-not-leak" not in json.dumps(sensitive_change)
+
     change = validate_recorder_event({
         "kind": "change",
         "element": {"tag": "select", "testid": "role"},
@@ -254,6 +292,17 @@ def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
     coordinator.resume(created["id"])
     emit({"kind": "input", "url": "https://app.test/home",
           "element": {"tag": "input", "testid": "search"}, "value": "after-resume", "at": 35})
+    browser["page"].handlers["popup"]()
+    browser["page"].handlers["filechooser"]()
+    browser["page"].handlers["download"]()
+    browser["page"].url = "https://outside.test/account?token=should-not-record"
+    browser["page"].handlers["framenavigated"](browser["page"])
+    emit({
+        "kind": "click",
+        "url": "https://outside.test/account",
+        "element": {"tag": "button", "testid": "outside"},
+        "at": 40,
+    })
 
     stopped = coordinator.stop(created["id"])
     assert stopped["status"] == "stopped"
@@ -268,6 +317,11 @@ def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
         ("填写", "before-pause"),
         ("填写", "after-resume"),
     ]
+    assert any("popup" in warning for warning in result["result"]["warnings"])
+    assert any("filechooser" in warning for warning in result["result"]["warnings"])
+    assert any("download" in warning for warning in result["result"]["warnings"])
+    assert any("外部域" in warning for warning in result["result"]["warnings"])
+    assert all("outside.test" not in json.dumps(step) for step in result["result"]["steps"])
     assert browser["context"].closed and browser["browser"].closed
     assert browser["playwright"].stopped
     assert result["session"]["status"] == "stopped"
@@ -320,6 +374,75 @@ def test_create_session_failure_closes_launched_browser():
     failed = coordinator._require_session(failures[0]["id"])
     assert failed["status"] == "failed"
     assert failed["errorCode"] == "RECORDING_NAVIGATION_FAILED"
+
+
+def test_recording_snapshot_is_detached_from_provider_and_fresh_login_skips_it():
+    launched = []
+    login_state = {
+        "origins": [
+            {"origin": "https://app.test", "localStorage": [{"name": "seed", "value": "1"}]}
+        ]
+    }
+
+    def launch(headless, storage_state=None):
+        assert storage_state is not login_state
+        storage_state["origins"][0]["localStorage"].append(
+            {"name": "recorder-only", "value": "true"}
+        )
+        session = _stub_launch({"headless": headless, "storage": storage_state})
+        launched.append(session)
+        return session
+
+    snapshot_calls = []
+    coordinator = RecordingCoordinator(submit=_ImmediateSubmit(), launch=launch)
+    created = coordinator.create_session(
+        "project-1",
+        "flow-1",
+        ENVIRONMENT,
+        "/login",
+        login_state_provider=lambda project_id, environment_id: (
+            snapshot_calls.append((project_id, environment_id)) or login_state
+        ),
+    )
+    assert snapshot_calls == [("project-1", "env-1")]
+    assert login_state["origins"][0]["localStorage"] == [{"name": "seed", "value": "1"}]
+    assert launched[0]["state"]["storage"]["origins"][0]["localStorage"][-1]["name"] == "recorder-only"
+    coordinator.cancel(created["id"])
+
+    fresh_calls = []
+    fresh = RecordingCoordinator(
+        submit=_ImmediateSubmit(),
+        launch=lambda headless, storage_state=None: _stub_launch(
+            {"headless": headless, "storage": storage_state}
+        ),
+    )
+    fresh_created = fresh.create_session(
+        "project-1",
+        "flow-2",
+        ENVIRONMENT,
+        "/login",
+        fresh_login=True,
+        login_state_provider=lambda *_args: fresh_calls.append("called") or login_state,
+    )
+    assert fresh_calls == []
+    fresh.cancel(fresh_created["id"])
+
+
+def test_terminal_cleanup_falls_back_when_recording_executor_is_unavailable():
+    launched = []
+
+    def launch(headless, storage_state=None):
+        session = _stub_launch({"headless": headless, "storage": storage_state})
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(submit=_CleanupRejectingSubmit(), launch=launch)
+    created = coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
+    assert coordinator.cancel(created["id"])["status"] == "canceled"
+    browser = launched[0]
+    assert browser["context"].closed is True
+    assert browser["browser"].closed is True
+    assert browser["playwright"].stopped is True
 
 
 def test_page_close_marks_session_failed_releases_resources_and_audits_once():

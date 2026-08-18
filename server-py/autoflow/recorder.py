@@ -10,7 +10,7 @@
 - ``validate_recorder_event`` / ``recording_target_url`` / ``RecordingCoordinator``
   负责 DTO 校验、起始 URL 同源规则和有界内存会话生命周期（seq、暂停/继续、
   stop flush、取消、过期回收）。Playwright 操作一律通过注入的 submit 提交器
-  在专用线程上执行；登录态按需从 Picker 会话的 storage_state 快照注入（只读）。
+  在专用线程上执行；登录态按需从 Platform 录制会话的 storage_state 快照注入（只读）。
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from copy import deepcopy
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -89,6 +90,7 @@ RECORDER_INIT_SCRIPT = r"""
     name: el.getAttribute("name") || "",
     id: el.id || "",
     label: labelText(el),
+    autocomplete: el.getAttribute("autocomplete") || "",
     role: roleFor(el),
     accessibleName: labelText(el) || (el.getAttribute("aria-label") || "").trim(),
     testid: el.getAttribute("data-testid") || "",
@@ -116,7 +118,11 @@ RECORDER_INIT_SCRIPT = r"""
       : event.target && event.target.parentElement instanceof HTMLElement
         ? event.target.parentElement
         : null;
-  const unsupportedFeature = (el) => {
+  const unsupportedFeature = (event, el) => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    if (path.some((node) => typeof ShadowRoot !== "undefined" && node instanceof ShadowRoot)) {
+      return "shadow-dom";
+    }
     if (el && (el.isContentEditable || el.getAttribute("contenteditable") === "true")) {
       return "contenteditable";
     }
@@ -135,7 +141,7 @@ RECORDER_INIT_SCRIPT = r"""
     (event) => {
       const el = target(event);
       if (!el) return;
-      const unsupported = unsupportedFeature(el);
+      const unsupported = unsupportedFeature(event, el);
       if (unsupported) {
         emitUnsupported(event, unsupported);
         return;
@@ -150,7 +156,7 @@ RECORDER_INIT_SCRIPT = r"""
     (event) => {
       const el = event.target;
       if (el instanceof HTMLElement) {
-        const unsupported = unsupportedFeature(el);
+        const unsupported = unsupportedFeature(event, el);
         if (unsupported) {
           emitUnsupported(event, unsupported);
           return;
@@ -174,7 +180,7 @@ RECORDER_INIT_SCRIPT = r"""
     (event) => {
       const el = event.target;
       if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return;
-      const unsupported = unsupportedFeature(el);
+      const unsupported = unsupportedFeature(event, el);
       if (unsupported) {
         emitUnsupported(event, unsupported);
         return;
@@ -196,7 +202,7 @@ RECORDER_INIT_SCRIPT = r"""
     (event) => {
       if (!["Enter", "Escape", "Tab"].includes(event.key)) return;
       const el = target(event);
-      const unsupported = unsupportedFeature(el);
+      const unsupported = unsupportedFeature(event, el);
       if (unsupported) {
         emitUnsupported(event, unsupported);
         return;
@@ -229,11 +235,11 @@ def url_path(url: str) -> str:
 def is_sensitive_field(element: dict[str, Any] | None) -> bool:
     if not isinstance(element, dict):
         return False
-    if element.get("type") == "password":
+    if str(element.get("type") or "").lower() == "password":
         return True
     haystack = " ".join(
         str(element.get(field) or "")
-        for field in ("name", "id", "label", "accessibleName")
+        for field in ("name", "id", "label", "accessibleName", "autocomplete")
     )
     return bool(SENSITIVE_FIELD_PATTERN.search(haystack))
 
@@ -625,11 +631,12 @@ def validate_recorder_event(payload: Any) -> dict[str, Any] | None:
     element: dict[str, str] | None = None
     if isinstance(element_source, dict):
         element = {
-            "tag": _bounded_text(element_source.get("tag"), 40),
-            "type": _bounded_text(element_source.get("type"), 40),
+            "tag": _bounded_text(element_source.get("tag"), 40).lower(),
+            "type": _bounded_text(element_source.get("type"), 40).lower(),
             "name": _bounded_text(element_source.get("name"), 120),
             "id": _bounded_text(element_source.get("id"), 120),
             "label": _bounded_text(element_source.get("label"), 120),
+            "autocomplete": _bounded_text(element_source.get("autocomplete"), 120),
             "role": _bounded_text(element_source.get("role"), 60),
             "accessibleName": _bounded_text(element_source.get("accessibleName"), 120),
             "testid": _bounded_text(element_source.get("testid"), 200),
@@ -660,7 +667,9 @@ def validate_recorder_event(payload: Any) -> dict[str, Any] | None:
         event["value"] = value
     if kind == "change":
         selected = payload.get("selectedValue")
-        event["selectedValue"] = _bounded_text(selected, 200)
+        event["selectedValue"] = (
+            None if event["sensitive"] else _bounded_text(selected, 200)
+        )
         event["checked"] = bool(payload.get("checked"))
     if kind == "keydown":
         event["key"] = _bounded_text(payload.get("key"), 20)
@@ -681,6 +690,7 @@ class RecordingCoordinator:
         max_ms: int = RECORDING_MAX_MS,
         now_ms: Callable[[], int] = lambda: int(time.time() * 1000),
         on_failed: Callable[[dict[str, Any]], None] | None = None,
+        on_storage_state: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     ) -> None:
         self._submit = submit
         self._launch = launch
@@ -688,6 +698,7 @@ class RecordingCoordinator:
         self._max_ms = max_ms
         self._now_ms = now_ms
         self._on_failed = on_failed
+        self._on_storage_state = on_storage_state
         self._lock = threading.RLock()
         self._sessions: dict[str, dict[str, Any]] = {}
 
@@ -757,17 +768,21 @@ class RecordingCoordinator:
             self._sessions[session_id] = session
         storage_state = None
         if not fresh_login and login_state_provider is not None:
-            storage_state = login_state_provider(project_id, environment_id)
+            try:
+                login_state = login_state_provider(project_id, environment_id)
+                # The provider owns its state. Recorder receives one detached,
+                # read-only snapshot and must never hand a mutable reference back.
+                if isinstance(login_state, dict):
+                    storage_state = deepcopy(login_state)
+            except Exception:
+                # An unreadable snapshot must not make recording unavailable.
+                storage_state = None
         try:
             self._submit(
                 self._start_browser, session, target, storage_state, headless
             ).result(timeout=120)
         except Exception as error:
-            if session.get("browserSession") is not None:
-                try:
-                    self._submit(self._stop_browser, session).result(timeout=10)
-                except Exception:
-                    pass
+            self._release_browser(session, timeout=10)
             code = (
                 error.code
                 if isinstance(error, _RecordingOperationError)
@@ -892,6 +907,20 @@ class RecordingCoordinator:
             pass
         self._notify_failed(session)
 
+    def _release_browser(self, session: dict[str, Any], timeout: int = 30) -> None:
+        """Release a terminal session even if its executor is no longer usable."""
+        if session.get("browserSession") is None:
+            return
+        try:
+            self._submit(self._stop_browser, session).result(timeout=timeout)
+        except Exception:
+            # This mirrors shutdown cleanup and is only a fallback after the
+            # single Playwright worker has failed or timed out.
+            try:
+                self._stop_browser(session)
+            except Exception:
+                pass
+
     def _on_browser_event(self, session: dict[str, Any], payload: Any) -> None:
         event = validate_recorder_event(payload)
         if event is None:
@@ -977,11 +1006,7 @@ class RecordingCoordinator:
             if session["status"] in _TERMINAL_STATUSES:
                 return self.session_response(session)
             session["status"] = "stopped"
-        if session.get("browserSession") is not None:
-            try:
-                self._submit(self._stop_browser, session).result(timeout=30)
-            except Exception:
-                pass
+        self._release_browser(session)
         with self._lock:
             self._prune_terminal_sessions()
         return self.session_response(session)
@@ -992,11 +1017,7 @@ class RecordingCoordinator:
             if session["status"] in _TERMINAL_STATUSES:
                 return self.session_response(session)
             session["status"] = "canceled"
-        if session.get("browserSession") is not None:
-            try:
-                self._submit(self._stop_browser, session).result(timeout=30)
-            except Exception:
-                pass
+        self._release_browser(session)
         with self._lock:
             self._prune_terminal_sessions()
         return self.session_response(session)
@@ -1009,8 +1030,22 @@ class RecordingCoordinator:
         try:
             session["result"] = session["normalizer"].result()
         finally:
+            self._remember_storage_state(session, browser_session)
             # A normalizer failure must not strand Chromium resources.
             close_browser_session(browser_session)
+
+    def _remember_storage_state(
+        self, session: dict[str, Any], browser_session: dict[str, Any]
+    ) -> None:
+        if session.get("status") != "stopped" or self._on_storage_state is None:
+            return
+        try:
+            storage_state = browser_session["context"].storage_state()
+            if isinstance(storage_state, dict):
+                self._on_storage_state(session, storage_state)
+        except Exception:
+            # A snapshot is optional; failure must not alter the session result.
+            pass
 
     def _prune_terminal_sessions(self) -> None:
         max_terminal = 100
@@ -1073,11 +1108,26 @@ class RecordingCoordinator:
 
     def events_after(self, session_id: str, after_seq: int, limit: int = 100) -> dict[str, Any]:
         session = self._require_session(session_id)
-        limit = max(1, min(int(limit), 500))
         try:
             after_seq = int(after_seq)
         except (TypeError, ValueError):
-            after_seq = 0
+            from .http import PlatformError
+
+            raise PlatformError(400, "RECORDING_AFTER_SEQ_INVALID") from None
+        if after_seq < 0:
+            from .http import PlatformError
+
+            raise PlatformError(400, "RECORDING_AFTER_SEQ_INVALID")
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            from .http import PlatformError
+
+            raise PlatformError(400, "RECORDING_LIMIT_INVALID") from None
+        if limit < 1 or limit > 500:
+            from .http import PlatformError
+
+            raise PlatformError(400, "RECORDING_LIMIT_INVALID")
         with self._lock:
             events = [
                 event for event in session["events"] if event.get("seq", 0) > after_seq
@@ -1107,11 +1157,8 @@ class RecordingCoordinator:
                 expired.append(session["id"])
         for session_id in expired:
             session = self._sessions.get(session_id)
-            if session is not None and session.get("browserSession") is not None:
-                try:
-                    self._submit(self._stop_browser, session).result(timeout=30)
-                except Exception:
-                    pass
+            if session is not None:
+                self._release_browser(session)
         with self._lock:
             self._prune_terminal_sessions()
         return expired
@@ -1126,11 +1173,4 @@ class RecordingCoordinator:
             for session in sessions:
                 session["status"] = "expired"
         for session in sessions:
-            if session.get("browserSession") is not None:
-                try:
-                    self._submit(self._stop_browser, session).result(timeout=30)
-                except Exception:
-                    try:
-                        self._stop_browser(session)
-                    except Exception:
-                        pass
+            self._release_browser(session)

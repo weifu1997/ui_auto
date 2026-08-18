@@ -14,7 +14,9 @@ from autoflow.recorder import (
     RecorderNormalizer,
     sanitize_url,
 )
-from autoflow.runner import execute_browser_run
+from autoflow.managed_runner import ManagedRunner
+from autoflow.core import now
+from autoflow.services import AuthUser, PlatformServices
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "recorder"
 PASSWORD = "Sup3rSecretValue!42"
@@ -223,14 +225,121 @@ def test_capture_normalize_replay_and_sensitive_never_leaves_page(fixture_server
         "secrets": {"password": PASSWORD},
     }
     events: list[tuple[str, dict]] = []
-    hooks = {
-        "browser": lambda browser, context: None,
-        "event": lambda kind, data: events.append((kind, data)),
-        "artifact_path": lambda name, extension: str(tmp_path / f"{name}.{extension}"),
-        "artifact": lambda payload: None,
-    }
+    completed = threading.Event()
+    result_holder: list[dict] = []
+    managed_runner = ManagedRunner(tmp_path / "managed-artifacts")
+    try:
+        # This is the same immutable flow/environment/elements shape persisted
+        # by a published revision. Exercise the production ManagedRunner queue,
+        # rather than calling the runner core directly.
+        managed_runner.enqueue(
+            "saved-recording-run",
+            replay_input,
+            {
+                "started": lambda: None,
+                "event": lambda kind, data: events.append((kind, data)),
+                "artifact": lambda payload: None,
+                "completed": lambda result: (result_holder.append(result), completed.set()),
+            },
+        )
+        assert completed.wait(20), "ManagedRunner did not complete the saved recording replay"
+    finally:
+        managed_runner.stop()
 
-    replay_result = execute_browser_run(replay_input, hooks)
+    assert result_holder
+    replay_result = result_holder[0]
     assert replay_result["status"] == "success", replay_result
     assert replay_result["completedSteps"] == len(replay_steps)
     assert replay_result["totalSteps"] == len(replay_steps)
+
+
+def test_saved_recording_revision_replays_through_platform_managed_runner(fixture_server, tmp_path):
+    services = PlatformServices(str(tmp_path / "platform-data"))
+    user = AuthUser("recording-owner", "recording-owner@example.test", "Recording Owner")
+    project_id = "recording-project"
+    timestamp = now()
+    services.database.execute(
+        "INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)",
+        (user.id, user.email, user.name, timestamp),
+    )
+    workspace = services.create_workspace(user, "Recording replay workspace")
+    services.database.execute(
+        """
+        INSERT INTO platform_projects (
+          id, workspace_id, slug, name, description, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (project_id, workspace["id"], project_id, "Recording project", "", timestamp, timestamp),
+    )
+    environment = {
+        "id": "recording-env",
+        "name": "Recording fixture",
+        "baseUrl": fixture_server,
+        "browser": "Chromium",
+        "headless": True,
+        "testIdAttribute": "data-testid",
+    }
+    flow = {
+        "id": "recorded-flow",
+        "name": "Saved recording",
+        "steps": [
+            {"id": "open", "title": "Open", "action": "打开页面", "value": "/page1.html", "timeout": 10, "failurePolicy": "立即失败"},
+            {"id": "username", "title": "Fill username", "action": "填写", "element": "用户名", "value": "tester", "timeout": 10, "failurePolicy": "立即失败"},
+            {"id": "submit", "title": "Submit", "action": "点击", "element": "登录", "value": "", "timeout": 10, "failurePolicy": "立即失败"},
+        ],
+        "secretNames": [],
+    }
+    elements = [
+        {"id": "recorded-user", "name": "用户名", "path": "/page1.html", "method": "testid", "value": "login-username", "environment": environment["id"]},
+        {"id": "recorded-submit", "name": "登录", "path": "/page1.html", "method": "testid", "value": "login-submit", "environment": environment["id"]},
+    ]
+    services.database.execute(
+        """
+        INSERT INTO flow_revisions (
+          id, project_id, flow_id, flow_name, environment_id,
+          revision_number, status, flow_snapshot, environment_snapshot,
+          element_snapshot, dataset_snapshot, checksum, created_by,
+          created_at, published_at
+        ) VALUES (?, ?, ?, ?, ?, 1, 'published', ?, ?, ?, 'null', ?, ?, ?, ?)
+        """,
+        (
+            "recorded-revision",
+            project_id,
+            flow["id"],
+            flow["name"],
+            environment["id"],
+            json.dumps(flow),
+            json.dumps(environment),
+            json.dumps(elements),
+            "recorded-revision-checksum",
+            user.id,
+            timestamp,
+            timestamp,
+        ),
+    )
+    try:
+        queued = services.queue_published_runs({
+            "projectId": project_id,
+            "flowId": flow["id"],
+            "environmentId": environment["id"],
+            "createdBy": user.id,
+            "source": "manual",
+        })
+        assert len(queued["runIds"]) == 1
+        run_id = queued["runIds"][0]
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            run = services.run_by_id(run_id)
+            if run["status"] in {"success", "failed", "canceled"}:
+                break
+            time.sleep(0.1)
+        run = services.run_by_id(run_id)
+        assert run["status"] == "success", run
+        assert run["result"]["completedSteps"] == 3
+        assert run["result"]["totalSteps"] == 3
+        event_kinds = [row[0] for row in services.database.execute(
+            "SELECT kind FROM platform_run_events WHERE run_id = ? ORDER BY id", (run_id,)
+        ).fetchall()]
+        assert "run.complete" in event_kinds
+    finally:
+        services.close()

@@ -1,7 +1,6 @@
-"""Shared headed-browser session lifecycle for Picker and Recorder.
+"""Shared headed-browser session lifecycle for Platform recording.
 
-Picker 与 Recorder 共用唯一的浏览器/context/page 创建与回收实现；
-两者都通过各自的线程化提交器串行访问 Playwright，本模块不做加锁。
+录制协调器通过专用线程化提交器串行访问 Playwright，本模块不做加锁。
 """
 
 from __future__ import annotations

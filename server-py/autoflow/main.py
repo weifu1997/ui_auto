@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
 from .core import json
@@ -18,7 +18,6 @@ from typing import Any
 
 from .http import PlatformError
 from .services import PlatformServices
-from .worker import WorkerService, create_worker_router
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -107,24 +106,13 @@ class CorsMiddleware:
 def create_app(services: PlatformServices | None = None) -> FastAPI:
     if services is None:
         data_directory = os.environ.get(
-            "WORKER_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
+            "PLATFORM_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
         )
         services = PlatformServices(data_directory)
     app = FastAPI(title="AutoFlow Workbench Python Backend", docs_url=None, redoc_url=None)
     app.state.services = services
     app.add_middleware(CorsMiddleware, allowed_origins=_configured_origins())
     app.include_router(create_platform_router(services))
-    worker = WorkerService(
-        os.environ.get(
-            "WORKER_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
-        ),
-        os.environ.get(
-            "WORKER_ARTIFACT_DIRECTORY", str(REPO_ROOT / "server" / ".artifacts")
-        ),
-    )
-    app.state.worker = worker
-    services.recording_login_state_provider = worker.recording_storage_state
-    app.include_router(create_worker_router(worker))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -134,7 +122,6 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
         finally:
             maintenance_task.cancel()
             await asyncio.gather(maintenance_task, return_exceptions=True)
-            worker.close()
             services.close()
 
     @app.exception_handler(PlatformError)
@@ -180,10 +167,15 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
             media_type="application/json; charset=utf-8",
         )
 
-    if (
-        os.environ.get("NODE_ENV") == "production"
-        or os.environ.get("AUTOFLOW_ENABLE_STATIC") == "1"
-    ):
+    @app.api_route(
+        "/api/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def unsupported_api(path: str) -> None:
+        raise HTTPException(status_code=404)
+
+    if os.environ.get("NODE_ENV") == "production":
         static_directory = Path(
             os.environ.get("AUTOFLOW_STATIC_DIRECTORY", "dist")
         ).resolve()

@@ -148,6 +148,174 @@ def test_recording_session_create_requires_flow_edit_and_returns_session(tmp_pat
         services.close()
 
 
+def test_recording_session_create_rejects_member_without_flow_edit(tmp_path):
+    services, user, session = _setup(tmp_path)
+    try:
+        workspace_id = services.project_for("project-1")["workspace_id"]
+        services.database.execute(
+            "UPDATE workspace_members SET role = 'viewer' WHERE workspace_id = ? AND user_id = ?",
+            (workspace_id, user.id),
+        )
+        router = create_platform_router(services)
+        create_route = _route(
+            router, "/api/platform/projects/{project_id}/recording-sessions"
+        )
+        try:
+            _call(
+                create_route,
+                session["token"],
+                "project-1",
+                method="POST",
+                body=json.dumps({
+                    "flowId": "flow-1",
+                    "environmentId": "env-1",
+                    "startUrl": "/login",
+                }).encode(),
+            )
+            raise AssertionError("viewer must not create recording sessions")
+        except PlatformError as error:
+            assert error.status == 403
+            assert error.code == "CAPABILITY_REQUIRED"
+    finally:
+        services.close()
+
+
+def test_revision_rejects_materialized_sensitive_recording_value(tmp_path):
+    services, user, session = _setup(tmp_path)
+    try:
+        router = create_platform_router(services)
+        revision_route = _route(router, "/api/platform/projects/{project_id}/revisions")
+        base_flow = {
+            "id": "flow-1",
+            "name": "Recorded flow",
+            "steps": [{
+                "id": "password-step",
+                "title": "填写 password",
+                "action": "填写",
+                "element": "password",
+                "value": "plain-text-password",
+            }],
+        }
+        environment = {
+            "id": "env-1",
+            "name": "Env",
+            "browser": "Chromium",
+            "baseUrl": "https://app.test",
+        }
+        body = {"flow": base_flow, "environment": environment, "secretNames": ["secret.password"]}
+        try:
+            _call(
+                revision_route,
+                session["token"],
+                "project-1",
+                method="POST",
+                body=json.dumps(body).encode(),
+            )
+            raise AssertionError("materialized sensitive recording value must be rejected")
+        except PlatformError as error:
+            assert error.status == 400
+            assert error.code == "REVISION_SECRET_VALUE_FORBIDDEN"
+
+        safe_flow = {**base_flow, "steps": [{**base_flow["steps"][0], "value": "{{secret.password}}"}]}
+        response = _call(
+            revision_route,
+            session["token"],
+            "project-1",
+            method="POST",
+            body=json.dumps({**body, "flow": safe_flow}).encode(),
+        )
+        assert response.status_code == 201
+        snapshot = services.database.execute(
+            "SELECT flow_snapshot FROM flow_revisions WHERE project_id = ? ORDER BY created_at DESC LIMIT 1",
+            ("project-1",),
+        ).fetchone()[0]
+        assert "plain-text-password" not in snapshot
+        assert "{{secret.password}}" in snapshot
+    finally:
+        services.close()
+
+
+def test_recording_session_create_enforces_auth_membership_and_resource_scope(tmp_path):
+    services, user, session = _setup(tmp_path)
+    try:
+        router = create_platform_router(services)
+        create_route = _route(
+            router, "/api/platform/projects/{project_id}/recording-sessions"
+        )
+        body = json.dumps({
+            "flowId": "flow-1",
+            "environmentId": "env-1",
+            "startUrl": "/login",
+        }).encode()
+        try:
+            _call(create_route, "", "project-1", method="POST", body=body)
+            raise AssertionError("recording creation requires an authenticated session")
+        except PlatformError as error:
+            assert error.status == 401
+            assert error.code == "AUTH_REQUIRED"
+
+        outsider = AuthUser("outsider-1", "outsider@example.test", "Outsider")
+        services.database.execute(
+            "INSERT INTO platform_users (id, email, name, created_at) VALUES (?, ?, ?, ?)",
+            (outsider.id, outsider.email, outsider.name, now()),
+        )
+        outsider_session = services.create_auth_session(outsider)
+        try:
+            _call(
+                create_route,
+                outsider_session["token"],
+                "project-1",
+                method="POST",
+                body=body,
+            )
+            raise AssertionError("non-members must not create recording sessions")
+        except PlatformError as error:
+            assert error.status == 403
+            assert error.code == "WORKSPACE_ACCESS_DENIED"
+
+        workspace_id = services.project_for("project-1")["workspace_id"]
+        services.database.execute(
+            """
+            INSERT INTO platform_projects (
+              id, workspace_id, slug, name, description, created_at, updated_at
+            ) VALUES (?, ?, 'other-project', 'Other', '', ?, ?)
+            """,
+            ("other-project", workspace_id, now(), now()),
+        )
+        services.database.execute(
+            """
+            INSERT INTO project_resources (
+              project_id, resource_type, resource_id, data, version, updated_at, updated_by
+            ) VALUES (?, 'flows', ?, ?, 1, ?, ?)
+            """,
+            (
+                "other-project",
+                "foreign-flow",
+                json.dumps({"id": "foreign-flow", "name": "Foreign", "steps": []}),
+                now(),
+                user.id,
+            ),
+        )
+        try:
+            _call(
+                create_route,
+                session["token"],
+                "project-1",
+                method="POST",
+                body=json.dumps({
+                    "flowId": "foreign-flow",
+                    "environmentId": "env-1",
+                    "startUrl": "/login",
+                }).encode(),
+            )
+            raise AssertionError("a flow from another project must not be recorded")
+        except PlatformError as error:
+            assert error.status == 404
+            assert error.code == "FLOW_NOT_FOUND"
+    finally:
+        services.close()
+
+
 def test_recording_session_detail_checks_project_scope(tmp_path):
     services, user, session = _setup(tmp_path)
     try:
@@ -191,6 +359,46 @@ def test_recording_session_detail_checks_project_scope(tmp_path):
         except PlatformError as exc:
             assert exc.status == 404
             assert exc.code == "RECORDING_SESSION_NOT_FOUND"
+    finally:
+        services.close()
+
+
+def test_recording_events_reject_invalid_cursors_and_limits(tmp_path):
+    services, user, session = _setup(tmp_path)
+    try:
+        router = create_platform_router(services)
+        services.recording_coordinator._sessions = {
+            "rec_test": {
+                **FAKE_SESSION,
+                "normalizer": RecorderNormalizer("https://app.test/login", "env-1"),
+                "events": [],
+                "result": None,
+                "browserSession": None,
+                "errorCode": None,
+                "failureNotified": False,
+            }
+        }
+        events_route = _route(
+            router,
+            "/api/platform/projects/{project_id}/recording-sessions/{session_id}/events",
+        )
+        for query_string, code in (
+            (b"afterSeq=-1", "RECORDING_AFTER_SEQ_INVALID"),
+            (b"limit=0", "RECORDING_LIMIT_INVALID"),
+            (b"limit=501", "RECORDING_LIMIT_INVALID"),
+        ):
+            try:
+                _call(
+                    events_route,
+                    session["token"],
+                    "project-1",
+                    path_params={"session_id": "rec_test"},
+                    query_string=query_string,
+                )
+                raise AssertionError("invalid recording event pagination must be rejected")
+            except PlatformError as error:
+                assert error.status == 400
+                assert error.code == code
     finally:
         services.close()
 

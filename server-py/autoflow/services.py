@@ -39,6 +39,7 @@ from .crypto import decrypt, encrypt, key_material
 from .migrations import migrate_project_document_resources, run_platform_migrations
 from .managed_runner import ManagedRunner
 from .recorder import RecordingCoordinator
+from .recording_state import RecordingSessionStateStore
 from .resources import as_record
 
 
@@ -417,11 +418,12 @@ class PlatformServices:
         self._recording_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="recording"
         )
+        self.recording_session_state = RecordingSessionStateStore()
         self.recording_coordinator = RecordingCoordinator(
             submit=self._recording_executor.submit,
             on_failed=self._audit_recording_failed,
+            on_storage_state=self.recording_session_state.remember,
         )
-        self.recording_login_state_provider = None
         self.webhook_requests: dict[str, list[float]] = {}
         configured_secret = os.environ.get("PLATFORM_SECRET_KEY")
         if os.environ.get("NODE_ENV") == "production" and not configured_secret:
@@ -487,6 +489,13 @@ class PlatformServices:
         except Exception:
             # Browser startup failures must retain their original error contract.
             pass
+
+    def recording_login_state(
+        self, owner_id: str, project_id: str, environment_id: str
+    ) -> dict[str, Any] | None:
+        return self.recording_session_state.state_for(
+            owner_id, project_id, environment_id
+        )
 
     def encrypt(self, value: str) -> dict[str, str]:
         encrypted = encrypt(value, self._configured_secret)
@@ -612,7 +621,7 @@ class PlatformServices:
         ).fetchone()
         if not row:
             raise PlatformError(403, "WORKSPACE_ACCESS_DENIED")
-        return "owner"
+        return str(row[0])
 
     def require_workspace_role(
         self, workspace_id: str, user_id: str, admin: bool = False
@@ -666,8 +675,8 @@ class PlatformServices:
         self, project_id: str, user_id: str, write: bool = False
     ) -> dict[str, Any]:
         project = self.project_for(project_id)
-        self.member_role(project["workspace_id"], user_id)
-        return {"project": project, "role": "owner"}
+        role = self.member_role(project["workspace_id"], user_id)
+        return {"project": project, "role": role}
 
     def require_project_admin(self, project_id: str, user_id: str) -> dict[str, Any]:
         return self.require_project_role(project_id, user_id, True)
@@ -675,7 +684,13 @@ class PlatformServices:
     def require_project_capability(
         self, project_id: str, user_id: str, capability: str
     ) -> dict[str, Any]:
-        return self.require_project_role(project_id, user_id)
+        from .http import PlatformError
+        from .workspaces import role_has_capability
+
+        result = self.require_project_role(project_id, user_id)
+        if not role_has_capability(result["role"], capability):
+            raise PlatformError(403, "CAPABILITY_REQUIRED")
+        return result
 
     def document_for(self, project_id: str) -> dict[str, Any]:
         row = self.database.execute(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 import uuid
@@ -149,6 +150,47 @@ def _assert_snapshot_depth(value: Any, limit: int = 100, current: int = 0) -> No
     elif isinstance(value, dict):
         for item in value.values():
             _assert_snapshot_depth(item, limit, current + 1)
+
+
+_SENSITIVE_REVISION_HINT = re.compile(
+    r"password|passwd|secret|token|api[\s_-]*key|credential|密码|口令|秘钥|密钥|令牌|凭证",
+    re.IGNORECASE,
+)
+_SECRET_TEMPLATE = re.compile(r"^\{\{\s*[^}]+\s*\}\}$")
+
+
+def _assert_revision_secret_safety(
+    flow: dict[str, Any], secret_names: list[str]
+) -> None:
+    """Reject materialized sensitive input before it reaches a revision snapshot."""
+    names = {name.strip() for name in secret_names if name.strip()}
+    variables = flow.get("variables")
+    if isinstance(variables, dict):
+        for key, value in variables.items():
+            if (
+                isinstance(key, str)
+                and _SENSITIVE_REVISION_HINT.search(key)
+                and isinstance(value, str)
+                and value
+                and not _SECRET_TEMPLATE.fullmatch(value.strip())
+            ):
+                raise PlatformError(400, "REVISION_SECRET_VALUE_FORBIDDEN")
+    steps = flow.get("steps")
+    if not isinstance(steps, list):
+        return
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        hint = " ".join(
+            str(step.get(key) or "") for key in ("title", "element", "name", "fieldHint")
+        )
+        value = step.get("value")
+        if not _SENSITIVE_REVISION_HINT.search(hint) or not isinstance(value, str) or not value:
+            continue
+        if not _SECRET_TEMPLATE.fullmatch(value.strip()):
+            raise PlatformError(400, "REVISION_SECRET_VALUE_FORBIDDEN")
+        if not names or not any(name in value for name in names):
+            raise PlatformError(400, "REVISION_SECRET_BINDING_INVALID")
 
 
 def create_platform_router(services: PlatformServices) -> APIRouter:
@@ -3370,7 +3412,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             start_url or "/",
             owner_id=user.id,
             fresh_login=fresh_login,
-            login_state_provider=services.recording_login_state_provider,
+            login_state_provider=lambda recording_project_id, recording_environment_id: services.recording_login_state(
+                user.id, recording_project_id, recording_environment_id
+            ),
         )
         services.audit(
             project["workspace_id"],
@@ -3415,10 +3459,14 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             after_seq = int(query.get("afterSeq", "0") or "0")
         except ValueError:
             raise PlatformError(400, "RECORDING_AFTER_SEQ_INVALID") from None
+        if after_seq < 0:
+            raise PlatformError(400, "RECORDING_AFTER_SEQ_INVALID")
         try:
-            limit = max(1, min(int(query.get("limit", "100") or "100"), 500))
+            limit = int(query.get("limit", "100") or "100")
         except ValueError:
             raise PlatformError(400, "RECORDING_LIMIT_INVALID") from None
+        if limit < 1 or limit > 500:
+            raise PlatformError(400, "RECORDING_LIMIT_INVALID")
         return _send(
             Response(),
             200,
@@ -3746,6 +3794,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             if isinstance(secret_names, list)
             else []
         )
+        _assert_revision_secret_safety(flow, secret_names)
         dataset_version = (
             services.dataset_version_for(project_id, body["datasetVersionId"])
             if isinstance(body.get("datasetVersionId"), str)
