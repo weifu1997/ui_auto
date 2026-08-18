@@ -21,7 +21,7 @@ export function DatasetsPage({ project }: { project: Project }) {
   const [versionFile, setVersionFile] = useState<File>();
   const [submitting, setSubmitting] = useState(false);
   const [importForm] = Form.useForm();
-  const platformProjectId = platformProjectMap[project.id];
+  const platformProjectId = platformProjectMap[project.id] ?? project.id;
 
   const loadDatasets = useCallback(async () => {
     if (!platformSession || !platformProjectId) return;

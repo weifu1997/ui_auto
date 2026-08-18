@@ -43,7 +43,7 @@ export function GovernancePage({ project }: { project: Project }) {
   const [analyticsRangeKey, setAnalyticsRangeKey] = useState(0);
   const [loading, setLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
-  const platformProjectId = platformProjectMap[project.id];
+  const platformProjectId = platformProjectMap[project.id] ?? project.id;
   const workspaceId = readStoredPlatformWorkspaceId(platformSession);
 
   const loadGovernance = useCallback(async () => {

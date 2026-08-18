@@ -26,20 +26,11 @@ const sectionPages: Record<ProjectSection, ComponentType<{ project: Project }>> 
 export function ProjectShell() {
   const { projectId, section } = useParams();
   const projects = useWorkspaceStore((state) => state.projects);
-  const projectMode = useWorkspaceStore((state) =>
-    projectId ? state.projectModesById?.[projectId] : undefined,
-  );
   const project = projectById(projects, projectId);
   const activeSection = (
     section && section in sectionMeta ? section : "overview"
   ) as ProjectSection;
-  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
   if (!project) return <Navigate to="/projects" replace />;
-  if (production && ["agents"].includes(activeSection)) return <Navigate to={`/project/${project.id}/overview`} replace />;
-  if (
-    projectMode !== "platform-enabled"
-    && ["data", "agents", "automations", "governance"].includes(activeSection)
-  ) return <Navigate to={`/project/${project.id}/platform`} replace />;
   const SectionPage = sectionPages[activeSection];
   return (
     <ProjectLayout project={project} section={activeSection}>

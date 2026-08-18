@@ -113,7 +113,7 @@ export function VariablesPage({ project }: { project: Project }) {
         showIcon
         type="info"
         title="密钥变量不会返回明文"
-        description="接口只返回“已配置”和最后更新时间；运行时由 Worker 解析注入。"
+        description="接口只返回“已配置”和最后更新时间；运行时由 Platform 执行服务解析注入。"
       />
       <div className="list-tools">
         <Input

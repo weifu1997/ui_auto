@@ -78,6 +78,7 @@ export const useFlowStore = create<FlowStore>((set) => ({
   importRecordingSteps: (newSteps) =>
     set((state) => {
       const imported = newSteps.map((step) => ({ ...step }));
+      if (imported.length === 0) return state;
       return {
         steps: [...state.steps, ...imported],
         selectedStepId: imported[0]?.id ?? state.selectedStepId,

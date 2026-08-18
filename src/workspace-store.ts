@@ -1,12 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ElementAsset, Environment, Flow, Project, Variable } from "./mock-data";
-import { createSauceDemoSeed } from "./saucedemo-seed";
-
-type NewProjectInput = {
-  name: string;
-  description?: string;
-};
 
 export type PlatformWorkspaceProject = {
   platformProjectId: string;
@@ -16,7 +10,6 @@ export type PlatformWorkspaceProject = {
   document: Record<string, unknown>;
 };
 
-export type ProjectMode = "local" | "platform-enabled";
 export type PlatformSyncStatus =
   | "queued"
   | "syncing"
@@ -32,11 +25,9 @@ type WorkspaceStore = {
   variablesByProject: Record<string, Variable[]>;
   environmentsByProject: Record<string, Environment[]>;
   activeEnvironmentByProject: Record<string, string>;
-  projectModesById: Record<string, ProjectMode>;
   platformProjectIdsById: Record<string, string>;
   platformSyncStatusById: Record<string, PlatformSyncStatus>;
   platformSyncErrorById: Record<string, string>;
-  createProject: (input: NewProjectInput) => Project;
   persistWorkspace: () => void;
   archiveProject: (projectId: string) => void;
   updateProject: (projectId: string, patch: Pick<Project, "name" | "description">) => void;
@@ -45,8 +36,7 @@ type WorkspaceStore = {
   setVariables: (projectId: string, variables: Variable[]) => void;
   setEnvironments: (projectId: string, environments: Environment[]) => void;
   setActiveEnvironment: (projectId: string, environmentId: string) => void;
-  enablePlatformProject: (projectId: string, platformProjectId: string) => void;
-  disconnectPlatformProject: (projectId: string) => void;
+  setPlatformProjectId: (projectId: string, platformProjectId: string) => void;
   setPlatformSyncStatus: (projectId: string, status: PlatformSyncStatus) => void;
   setPlatformSyncError: (projectId: string, error?: string) => void;
   hydratePlatformProjects: (projects: PlatformWorkspaceProject[]) => void;
@@ -81,39 +71,13 @@ function removeRetiredDemoProjects(value: unknown) {
   };
 }
 
-function addSauceDemoSeed(value: unknown) {
-  const state = removeRetiredDemoProjects(value);
-  if ((state.projects ?? []).some((project) => project.id === "sauce-demo")) return state;
-  const seed = createSauceDemoSeed();
+function ensurePlatformWorkspace(value: unknown) {
+  const platformState = removeRetiredDemoProjects(value) as Partial<WorkspaceStore>;
+  const platformProjectIdsById = platformState.platformProjectIdsById ?? legacyPlatformProjectIds();
   return {
-    ...state,
-    projects: [seed.project, ...(state.projects ?? [])],
-    flowsByProject: { ...(state.flowsByProject ?? {}), [seed.project.id]: seed.flows },
-    elementsByProject: { ...(state.elementsByProject ?? {}), [seed.project.id]: seed.elements },
-    variablesByProject: { ...(state.variablesByProject ?? {}), [seed.project.id]: seed.variables },
-    environmentsByProject: {
-      ...(state.environmentsByProject ?? {}),
-      [seed.project.id]: [seed.environment],
-    },
-    activeEnvironmentByProject: {
-      ...(state.activeEnvironmentByProject ?? {}),
-      [seed.project.id]: seed.environment.id,
-    },
-  };
-}
-
-function ensureProjectModes(value: unknown) {
-  const state = addSauceDemoSeed(value) as Partial<WorkspaceStore>;
-  const projects = state.projects ?? [];
-  const platformProjectIdsById = state.platformProjectIdsById ?? legacyPlatformProjectIds();
-  return {
-    ...state,
-    projectModesById: Object.fromEntries(projects.map((project) => [
-      project.id,
-      state.projectModesById?.[project.id] ?? (platformProjectIdsById[project.id] ? "platform-enabled" : "local"),
-    ])),
+    ...platformState,
     platformProjectIdsById,
-    platformSyncErrorById: state.platformSyncErrorById ?? {},
+    platformSyncErrorById: platformState.platformSyncErrorById ?? {},
   };
 }
 
@@ -129,60 +93,22 @@ function legacyPlatformProjectIds() {
   }
 }
 
-function projectIdFrom(name: string, existing: Project[]) {
-  const base = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "project";
-  let id = base;
-  let suffix = 2;
-  while (existing.some((project) => project.id === id)) {
-    id = `${base}-${suffix}`;
-    suffix += 1;
-  }
-  return id;
-}
-
 function documentArray<T>(document: Record<string, unknown>, key: string, fallback: T[]) {
   return Array.isArray(document[key]) ? document[key] as T[] : fallback;
 }
 
-const initialSauceDemoSeed = createSauceDemoSeed();
-
 export const useWorkspaceStore = create<WorkspaceStore>()(
   persist(
-    (set, get) => ({
-      projects: import.meta.env.PROD ? [] as Project[] : [initialSauceDemoSeed.project],
-      flowsByProject: import.meta.env.PROD ? {} as Record<string, Flow[]> : { "sauce-demo": initialSauceDemoSeed.flows },
-      elementsByProject: import.meta.env.PROD ? {} as Record<string, ElementAsset[]> : { "sauce-demo": initialSauceDemoSeed.elements },
-      variablesByProject: import.meta.env.PROD ? {} as Record<string, Variable[]> : { "sauce-demo": initialSauceDemoSeed.variables },
-      environmentsByProject: import.meta.env.PROD ? {} as Record<string, Environment[]> : { "sauce-demo": [initialSauceDemoSeed.environment] },
-      activeEnvironmentByProject: import.meta.env.PROD ? {} as Record<string, string> : { "sauce-demo": "sauce-demo-web" },
-      projectModesById: import.meta.env.PROD ? {} as Record<string, ProjectMode> : { "sauce-demo": "local" },
+    (set) => ({
+      projects: [] as Project[],
+      flowsByProject: {} as Record<string, Flow[]>,
+      elementsByProject: {} as Record<string, ElementAsset[]>,
+      variablesByProject: {} as Record<string, Variable[]>,
+      environmentsByProject: {} as Record<string, Environment[]>,
+      activeEnvironmentByProject: {} as Record<string, string>,
       platformProjectIdsById: {},
       platformSyncStatusById: {},
       platformSyncErrorById: {},
-      createProject: ({ name, description }) => {
-        const project: Project = {
-          id: projectIdFrom(name, get().projects),
-          name: name.trim(),
-          description: description?.trim() || "尚未添加项目说明",
-        };
-        set((state) => ({
-          projects: [project, ...state.projects],
-          flowsByProject: { ...state.flowsByProject, [project.id]: [] },
-          elementsByProject: { ...state.elementsByProject, [project.id]: [] },
-          variablesByProject: { ...state.variablesByProject, [project.id]: [] },
-          environmentsByProject: { ...state.environmentsByProject, [project.id]: [] },
-          activeEnvironmentByProject: {
-            ...state.activeEnvironmentByProject,
-            [project.id]: "",
-          },
-          projectModesById: { ...state.projectModesById, [project.id]: "local" },
-        }));
-        return project;
-      },
       persistWorkspace: () => {
         set((state) => ({ projects: state.projects }));
       },
@@ -197,7 +123,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             state.activeEnvironmentByProject,
             projectId,
           ),
-          projectModesById: withoutProject(state.projectModesById, projectId),
           platformProjectIdsById: withoutProject(state.platformProjectIdsById, projectId),
           platformSyncStatusById: withoutProject(state.platformSyncStatusById, projectId),
           platformSyncErrorById: withoutProject(state.platformSyncErrorById, projectId),
@@ -243,18 +168,10 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             [projectId]: environmentId,
           },
         })),
-      enablePlatformProject: (projectId, platformProjectId) =>
+      setPlatformProjectId: (projectId, platformProjectId) =>
         set((state) => ({
-          projectModesById: { ...state.projectModesById, [projectId]: "platform-enabled" },
           platformProjectIdsById: { ...state.platformProjectIdsById, [projectId]: platformProjectId },
           platformSyncStatusById: { ...state.platformSyncStatusById, [projectId]: "syncing" },
-          platformSyncErrorById: withoutProject(state.platformSyncErrorById, projectId),
-        })),
-      disconnectPlatformProject: (projectId) =>
-        set((state) => ({
-          projectModesById: { ...state.projectModesById, [projectId]: "local" },
-          platformProjectIdsById: withoutProject(state.platformProjectIdsById, projectId),
-          platformSyncStatusById: withoutProject(state.platformSyncStatusById, projectId),
           platformSyncErrorById: withoutProject(state.platformSyncErrorById, projectId),
         })),
       setPlatformSyncStatus: (projectId, status) =>
@@ -320,10 +237,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             variablesByProject: nextVariables,
             environmentsByProject: nextEnvironments,
             activeEnvironmentByProject: nextActiveEnvironments,
-            projectModesById: {
-              ...state.projectModesById,
-              ...Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "platform-enabled"])),
-            },
             platformProjectIdsById: {
               ...state.platformProjectIdsById,
               ...Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, item.platformProjectId])),
@@ -347,7 +260,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             const selected = typeof item.document.activeEnvironmentId === "string" ? item.document.activeEnvironmentId : "";
             return [item.sourceProjectId, environments.some((environment) => environment.id === selected) ? selected : environments[0]?.id ?? ""];
           })),
-          projectModesById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "platform-enabled" as const])),
           platformProjectIdsById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, item.platformProjectId])),
           platformSyncStatusById: Object.fromEntries(platformProjects.map((item) => [item.sourceProjectId, "synced" as const])),
           platformSyncErrorById: {},
@@ -371,19 +283,17 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
     }),
     {
       name: "autoflow-workspace-projects",
-      version: 7,
-      migrate: (persistedState) => ensureProjectModes(persistedState) as WorkspaceStore,
+      version: 8,
+      migrate: (persistedState) => ensurePlatformWorkspace(persistedState) as WorkspaceStore,
       merge: (persistedState, currentState) =>
-        ensureProjectModes({
+        ensurePlatformWorkspace({
           ...currentState,
           ...(persistedState && typeof persistedState === "object" ? persistedState : {}),
         }) as WorkspaceStore,
       onRehydrateStorage: () => (state) => {
         state?.persistWorkspace();
       },
-      partialize: (state) => import.meta.env.PROD ? ({
-        activeEnvironmentByProject: state.activeEnvironmentByProject,
-      }) : ({
+      partialize: (state) => ({
         projects: state.projects,
         flowsByProject: state.flowsByProject,
         elementsByProject: state.elementsByProject,
@@ -397,7 +307,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         ),
         environmentsByProject: state.environmentsByProject,
         activeEnvironmentByProject: state.activeEnvironmentByProject,
-        projectModesById: state.projectModesById,
         platformProjectIdsById: state.platformProjectIdsById,
         platformSyncStatusById: state.platformSyncStatusById,
         platformSyncErrorById: state.platformSyncErrorById,

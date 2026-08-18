@@ -1,10 +1,8 @@
 import { message } from "../antd-feedback";
 import type { ElementAsset, Environment, Project } from "../mock-data";
 import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements, emptyEnvironments } from "./shared";
-import { artifactUrl, createValidation, subscribeToTask } from "../worker-api";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
-import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Checkbox, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
@@ -35,7 +33,7 @@ export function ElementsPage({ project }: { project: Project }) {
     elapsedMs?: number;
     firstMatch?: string;
     reason?: string;
-    source?: "platform" | "worker";
+    source?: "platform";
   } | null>(null);
   const [validationTarget, setValidationTarget] =
     useState<ElementAsset | null>(null);
@@ -64,7 +62,7 @@ export function ElementsPage({ project }: { project: Project }) {
     setValidating(target);
     try {
       const platformContext = platformProjectContext(project.id);
-      if (platformContext && !target.requiresLogin) {
+      if (platformContext) {
         const created = await createPlatformElementValidation(
           platformContext.session.token,
           platformContext.projectId,
@@ -96,56 +94,10 @@ export function ElementsPage({ project }: { project: Project }) {
         });
         return;
       }
-      const { validationId } = await createValidation(project.id, environment, target);
-      const unsubscribe = subscribeToTask(
-        project.id,
-        "validations",
-        validationId,
-        (event) => {
-          if (event.kind !== "result") return;
-          const count = Number(event.data.count ?? 0);
-          const screenshotId = event.data.screenshotId;
-          const validationStatus =
-            count === 1 ? "valid" : count > 1 ? "multiple" : "unverified";
-          updateItems((list) =>
-            list.map((item) =>
-              item.id === target.id
-                ? { ...item, validation: validationStatus, updatedAt: "刚刚" }
-                : item,
-            ),
-          );
-          setValidating(null);
-          setValidation({
-            element: target,
-            count,
-            environment: environment.name,
-            screenshotUrl:
-              typeof screenshotId === "string"
-                ? artifactUrl(project.id, screenshotId)
-                : undefined,
-            elapsedMs: Number(event.data.elapsedMs ?? 0),
-            firstMatch:
-              typeof event.data.firstMatch === "string" ? event.data.firstMatch : undefined,
-            reason: typeof event.data.reason === "string" ? event.data.reason : undefined,
-            source: "worker",
-          });
-          if (event.data.error === "LOGIN_SESSION_REQUIRED") {
-            message.warning("请先创建并登录本地调试会话，再验证需要登录态的元素");
-          } else if (event.data.error === "LOGIN_SESSION_INVALID") {
-            message.error("本地调试会话登录态已失效，请重新登录后再验证");
-          }
-          unsubscribe();
-        },
-        () => {
-          setValidating(null);
-          message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
-        },
-      );
+      throw new Error("PLATFORM_SESSION_REQUIRED");
     } catch {
       setValidating(null);
-      message.error(platformProjectContext(project.id)
-        ? "元素验证失败，请检查执行服务和目标环境。"
-        : "创建元素验证任务失败，请检查 Playwright Worker。");
+      message.error("元素验证失败，请检查执行服务和目标环境。");
     }
   };
   const columns: TableColumnsType<ElementAsset> = [
@@ -308,9 +260,7 @@ export function ElementsPage({ project }: { project: Project }) {
       <ElementDrawer
         open={editor !== null}
         element={editor === "new" ? undefined : editor}
-        project={project}
         environments={environments}
-        elements={items}
         onClose={() => setEditor(null)}
         onSave={(element) => {
           updateItems((list) => {
@@ -370,24 +320,18 @@ export function ElementsPage({ project }: { project: Project }) {
 export function ElementDrawer({
   open,
   element,
-  project,
   environments,
-  elements,
   onClose,
   onSave,
 }: {
   open: boolean;
   element?: ElementAsset | null;
-  project: Project;
   environments: Environment[];
-  elements: ElementAsset[];
   onClose: () => void;
   onSave: (element: ElementAsset) => void;
 }) {
   const [form] = Form.useForm();
-  const [pickerOpen, setPickerOpen] = useState(false);
   const method = Form.useWatch("method", form);
-  const selectedEnvironment = Form.useWatch("environment", form);
   useEffect(() => {
     if (!open) return;
     // 先清空上次表单内容，避免新建时残留上一次输入的名称/定位值。
@@ -400,24 +344,6 @@ export function ElementDrawer({
       },
     );
   }, [element, environments, form, open]);
-  const applyPickerSelection = (selection: { candidate: { method: string; value: string }; path: string; environmentId: string; suggestedName: string }) => {
-    const method = selection.candidate.method === "css" ? "CSS" : selection.candidate.method;
-    form.setFieldsValue({
-      method,
-      value: selection.candidate.value,
-      path: selection.path,
-      environment: selection.environmentId,
-      name: form.getFieldValue("name") || selection.suggestedName,
-    });
-    const duplicate = elements.some((item) =>
-      item.method.toLowerCase() === method.toLowerCase() && item.value === selection.candidate.value,
-    );
-    if (duplicate) {
-      message.warning("元素库中已存在相同定位器，保存后可能产生重复元素");
-    }
-    setPickerOpen(false);
-    message.success("已回填定位信息");
-  };
   return (
     <Drawer
       title={element ? "编辑元素" : "新建元素"}
@@ -451,25 +377,6 @@ export function ElementDrawer({
         </Button>
       }
     >
-      <div className="element-picker-toolbar">
-        <Button
-          icon={<FileSearchOutlined />}
-          onClick={() => {
-            const environmentValue = typeof form.getFieldValue("environment") === "string"
-              ? form.getFieldValue("environment")
-              : selectedEnvironment;
-            if (!environmentValue) {
-              message.warning("请先在表单中选择默认验证环境");
-              return;
-            }
-            // 采集统一走本地通道（部署机本机 headed Chromium + 截图反馈）。
-            setPickerOpen(true);
-          }}
-        >
-          从页面获取
-        </Button>
-        <span className="table-secondary">在调试浏览器中点击元素，自动生成并回填定位器</span>
-      </div>
       <Form form={form} layout="vertical">
         <Form.Item
           name="name"
@@ -535,21 +442,6 @@ export function ElementDrawer({
           <Input.TextArea rows={3} placeholder="说明元素用途及使用注意事项" />
         </Form.Item>
       </Form>
-      <Modal
-        title="从页面获取元素（本地通道）"
-        open={pickerOpen}
-        width={720}
-        footer={null}
-        onCancel={() => setPickerOpen(false)}
-      >
-        <div className="element-picker-modal-body">
-          <LocalElementPickerPanel
-            project={project}
-            preferredEnvironmentId={selectedEnvironment}
-            onSelectCandidate={(selection) => applyPickerSelection(selection)}
-          />
-        </div>
-      </Modal>
     </Drawer>
   );
 }
@@ -566,7 +458,7 @@ function ValidationModal({
     elapsedMs?: number;
     firstMatch?: string;
     reason?: string;
-    source?: "platform" | "worker";
+    source?: "platform";
   } | null;
   onClose: () => void;
 }) {
@@ -605,8 +497,8 @@ function ValidationModal({
         </div>
       </div>
       {result.screenshotUrl && (
-        <div className="browser-shot worker-shot">
-          <img src={result.screenshotUrl} alt={result.source === "worker" ? "Worker 验证截图" : "元素验证截图"} />
+        <div className="browser-shot">
+          <img src={result.screenshotUrl} alt="元素验证截图" />
         </div>
       )}
       {result.firstMatch && (

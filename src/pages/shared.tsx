@@ -2,13 +2,12 @@
 /* oxlint-disable react/only-export-components */
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
+import { getPlatformHealth, PlatformApiError } from "../platform-api";
 import type { PlatformRun, PlatformSession } from "../platform-api";
 import { readStoredPlatformSession, storePlatformSession } from "../platform-context";
 import { logoutPlatform } from "../platform-api";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
-import { WorkerApiError, getWorkerHealth, subscribeToTask } from "../worker-api";
-import type { WorkerTask } from "../worker-api";
 import { useWorkspaceStore } from "../workspace-store";
 import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
 import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, MenuOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
@@ -149,10 +148,7 @@ export function ProjectLayout({
   useEffect(() => {
     setProjectNavOpen(false);
   }, [location.pathname]);
-  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
-  const visibleSections = production
-    ? (["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] as ProjectSection[])
-    : (Object.keys(sectionMeta) as ProjectSection[]).filter((key) => !["data", "agents", "automations", "governance"].includes(key));
+  const visibleSections = ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] as ProjectSection[];
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],
   );
@@ -170,7 +166,7 @@ export function ProjectLayout({
   const environment =
     environments.find((item) => item.id === activeEnvironmentId) ?? environments[0];
   const runningRunCount = projectRuns.filter((run) => run.status === "running").length;
-  const [workerStatus, setWorkerStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [platformStatus, setPlatformStatus] = useState<"checking" | "online" | "offline">("checking");
 
   useEffect(() => {
     let mounted = true;
@@ -179,10 +175,10 @@ export function ProjectLayout({
       request?.abort();
       request = new AbortController();
       try {
-        const health = await getWorkerHealth(request.signal);
-        if (mounted) setWorkerStatus(health.ok ? "online" : "offline");
+        const health = await getPlatformHealth(request.signal);
+        if (mounted) setPlatformStatus(health.ok ? "online" : "offline");
       } catch {
-        if (mounted) setWorkerStatus("offline");
+        if (mounted) setPlatformStatus("offline");
       }
     };
     void refresh();
@@ -194,11 +190,11 @@ export function ProjectLayout({
     };
   }, []);
 
-  const workerLabel = workerStatus === "online"
-    ? (production ? "执行服务在线" : "Worker 在线")
-    : workerStatus === "offline"
-      ? (production ? "执行服务离线" : "Worker 离线")
-      : (production ? "正在检查执行服务" : "正在检查 Worker");
+  const platformLabel = platformStatus === "online"
+    ? "执行服务在线"
+    : platformStatus === "offline"
+      ? "执行服务离线"
+      : "正在检查执行服务";
   return (
     <div className="app-shell">
       <WorkspaceSide compact />
@@ -260,8 +256,8 @@ export function ProjectLayout({
             <strong>{sectionMeta[section].label}</strong>
           </div>
           <div className="topbar-actions">
-            <span className={`worker-status ${workerStatus}`} title={workerLabel}>
-              <i /> {workerLabel}
+            <span className={`platform-status ${platformStatus}`} title={platformLabel}>
+              <i /> {platformLabel}
             </span>
             <Select
               className="environment-select"
@@ -312,12 +308,8 @@ export function PageHeading({
   );
 }
 
-export function isWorkerRunId(id?: string) {
-  return Boolean(id?.startsWith("run_"));
-}
-
 export function reportRetryError(error: unknown) {
-  if (error instanceof WorkerApiError && error.code === "RUN_SECRETS_REQUIRED") {
+  if (error instanceof PlatformApiError && error.code === "RUN_SECRETS_REQUIRED") {
     message.info("此运行包含会话密钥，请从流程重新运行并重新注入密钥。");
     return true;
   }
@@ -403,29 +395,6 @@ export function durationFromMilliseconds(value: unknown) {
     : `${milliseconds}ms`;
 }
 
-export function workerTaskAsRun(task: WorkerTask, fallback?: Run): Run {
-  const totalSteps = Number(task.result?.totalSteps ?? task.summary?.totalSteps ?? fallback?.totalSteps ?? 0);
-  const completedSteps = Number(task.result?.completedSteps ?? fallback?.completedSteps ?? 0);
-  const terminal = isTerminalStatus(task.status);
-  return {
-    id: task.id,
-    flowName: task.summary?.flowName ?? fallback?.flowName ?? "运行任务",
-    status: task.status,
-    environment: task.summary?.environmentName ?? fallback?.environment ?? "-",
-    progress: totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0,
-    completedSteps,
-    totalSteps,
-    startedAt: fallback?.startedAt ?? new Date(task.createdAt).toLocaleString(),
-    duration: terminal
-      ? durationFromMilliseconds(task.result?.elapsedMs) !== "-"
-        ? durationFromMilliseconds(task.result?.elapsedMs)
-        : fallback?.duration ?? "已完成"
-      : "进行中",
-    screenshots: task.artifacts.filter((artifact) => artifact.contentType.startsWith("image/")).length,
-    retries: fallback?.retries ?? 0,
-  };
-}
-
 export function platformRunAsRun(run: PlatformRun): Run {
   const snapshot = run.snapshot;
   const flow = snapshot.flow && typeof snapshot.flow === "object" ? snapshot.flow as Record<string, unknown> : {};
@@ -446,52 +415,6 @@ export function platformRunAsRun(run: PlatformRun): Run {
     screenshots: run.artifacts.filter((artifact) => artifact.contentType.startsWith("image/")).length,
     retries: 0,
   };
-}
-
-export function watchWorkerRun(
-  projectId: string,
-  run: Run,
-  upsertRun: (projectId: string, run: Run) => void,
-  onTerminal?: (status: Run["status"]) => void,
-) {  let current = run;
-  const unsubscribe = subscribeToTask(projectId, "runs", run.id, (event) => {
-    if (event.kind === "status") {
-      const status = event.data.status as Run["status"];
-      if (!Object.hasOwn(statusMeta, status)) return;
-      current = {
-        ...current,
-        status,
-        progress: status === "success" ? 100 : current.progress,
-        completedSteps: status === "success" ? current.totalSteps : current.completedSteps,
-        duration: isTerminalStatus(status) ? "已完成" : "进行中",
-      };
-    }
-    if (event.kind === "step") {
-      const completedSteps =
-        event.data.status === "success"
-          ? Math.max(current.completedSteps, Number(event.data.index ?? -1) + 1)
-          : current.completedSteps;
-      current = {
-        ...current,
-        status: event.data.status === "failed" ? "failed" : "running",
-        completedSteps,
-        progress:
-          current.totalSteps > 0
-            ? Math.round((completedSteps / current.totalSteps) * 100)
-            : 0,
-        screenshots:
-          event.data.artifactId && event.data.status === "failed"
-            ? current.screenshots + 1
-            : current.screenshots,
-      };
-    }
-    upsertRun(projectId, current);
-    if (isTerminalStatus(current.status)) {
-      onTerminal?.(current.status);
-      unsubscribe();
-    }
-  });
-  return unsubscribe;
 }
 
 // 统一轮询 hook：页面隐藏时暂停定时器，恢复可见时重新调度。
@@ -537,11 +460,10 @@ export function readFileAsBase64(file: File) {
 
 export function PlatformProjectRequired({ project, title, description }: { project: Project; title: string; description: string }) {
   const [session] = useState<PlatformSession | undefined>(readStoredPlatformSession);
-  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
   return (
     <>
       <PageHeading title={title} description={description} />
-      <Alert type="info" showIcon title={production ? "项目数据尚未就绪" : session ? "当前项目尚未导入平台" : "请先连接平台账户"} action={<Link to={production ? "/projects" : `/project/${project.id}/agents`}>{production ? "返回项目列表" : session ? "导入并发布" : "前往发布与运行"}</Link>} />
+      <Alert type="info" showIcon title={session ? "项目数据尚未就绪" : "请先连接平台账户"} action={<Link to={session ? "/projects" : `/project/${project.id}/platform`}>{session ? "返回项目列表" : "前往平台"}</Link>} />
     </>
   );
 }

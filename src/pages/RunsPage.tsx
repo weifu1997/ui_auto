@@ -7,12 +7,11 @@ import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-c
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useWorkspaceStore } from "../workspace-store";
-import { PageHeading, canUseCapability, emptyRuns, isTerminalStatus, isWorkerRunId, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling, watchWorkerRun, workerTaskAsRun } from "./shared";
-import { cancelRun, getRun, retryRun } from "../worker-api";
+import { PageHeading, canUseCapability, isTerminalStatus, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling } from "./shared";
 import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 const batchStatusMeta = {
   queued: { label: "排队中", color: "default" },
   running: { label: "运行中", color: "processing" },
@@ -27,42 +26,13 @@ export function RunsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
   const location = useLocation();
   const canExecuteRun = canUseCapability("run.execute");
-  const watchCleanups = useRef<Array<() => void>>([]);
-  useEffect(() => () => {
-    for (const cleanup of watchCleanups.current) cleanup();
-    watchCleanups.current = [];
-  }, []);
   const [platformSession] = useState<PlatformSession | undefined>(readStoredPlatformSession);
   const legacyPlatformProjectId = readPlatformProjectMap()[project.id];
-  const enablePlatformProject = useWorkspaceStore((state) => state.enablePlatformProject);
-  const platformProjectId = useWorkspaceStore((state) =>
-    state.projectModesById?.[project.id] === "platform-enabled"
-      ? state.platformProjectIdsById?.[project.id]
-      : undefined,
-  );
-  const remotePlatformProjectId = platformProjectId ?? legacyPlatformProjectId;
-  const storedApiRuns = useRunStore((state) => state.apiRuns[project.id]);
-  const apiRuns = storedApiRuns ?? emptyRuns;
+  const setPlatformProjectId = useWorkspaceStore((state) => state.setPlatformProjectId);
+  const platformProjectId = useWorkspaceStore((state) => state.platformProjectIdsById?.[project.id]);
+  const remotePlatformProjectId = platformProjectId ?? legacyPlatformProjectId ?? project.id;
   const upsertRun = useRunStore((state) => state.upsertRun);
-  useEffect(() => {
-    const cleanups = new Map<string, () => void>();
-    const subscribe = (runs: Run[]) => {
-      for (const run of runs) {
-        if (!isWorkerRunId(run.id) || isTerminalStatus(run.status)) continue;
-        if (cleanups.has(run.id)) continue;
-        cleanups.set(run.id, watchWorkerRun(project.id, run, upsertRun));
-      }
-    };
-    const unsubscribeStore = useRunStore.subscribe((state) => {
-      subscribe(state.apiRuns[project.id] ?? []);
-    });
-    subscribe(useRunStore.getState().apiRuns[project.id] ?? []);
-    return () => {
-      unsubscribeStore();
-      for (const cleanup of cleanups.values()) cleanup();
-    };
-  }, [project.id, upsertRun]);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(() => new URLSearchParams(location.search).get("status") ?? "all");
   const [flowFilter, setFlowFilter] = useState(() => new URLSearchParams(location.search).get("flow") ?? "");
   const [sourceFilter, setSourceFilter] = useState(() => new URLSearchParams(location.search).get("source") ?? "all");
   const [fromFilter, setFromFilter] = useState(() => new URLSearchParams(location.search).get("from") ?? "");
@@ -81,12 +51,12 @@ export function RunsPage({ project }: { project: Project }) {
     return target ? [target] : [];
   });
   const [batchUpdatingId, setBatchUpdatingId] = useState<string | null>(null);
-
   useEffect(() => {
     if (platformSession && legacyPlatformProjectId && !platformProjectId) {
-      enablePlatformProject(project.id, legacyPlatformProjectId);
+      setPlatformProjectId(project.id, legacyPlatformProjectId);
     }
-  }, [enablePlatformProject, legacyPlatformProjectId, platformProjectId, platformSession, project.id]);
+  }, [legacyPlatformProjectId, platformProjectId, platformSession, project.id, setPlatformProjectId]);
+
   const refreshPlatformRuns = useCallback(async () => {
     if (!platformSession || !remotePlatformProjectId) return;
     try {
@@ -104,7 +74,7 @@ export function RunsPage({ project }: { project: Project }) {
       setPlatformTotal(response.total);
       pageRuns.forEach((run) => upsertRun(project.id, run));
     } catch {
-      // The legacy Worker run center remains usable when Platform is offline.
+      message.error("平台运行列表加载失败，请稍后重试");
     }
   }, [filter, flowFilter, fromFilter, page, platformSession, project.id, remotePlatformProjectId, sourceFilter, toFilter, upsertRun]);
   useEffect(() => {
@@ -142,9 +112,7 @@ export function RunsPage({ project }: { project: Project }) {
   useEffect(() => {
     void refreshBatches();
   }, [refreshBatches]);
-  const hasActivePlatformRuns = apiRuns.some(
-    (run) => !isWorkerRunId(run.id) && !isTerminalStatus(run.status),
-  );
+  const hasActivePlatformRuns = platformPageRuns.some((run) => !isTerminalStatus(run.status));
   const hasActiveBatches = batches.some(
     (batch) => batch.status === "queued" || batch.status === "running",
   );
@@ -206,19 +174,12 @@ export function RunsPage({ project }: { project: Project }) {
     const search = params.toString();
     navigate(`${location.pathname}${search ? `?${search}` : ""}`, { replace: true });
   }, [batchPage, expandedBatchIds, filter, flowFilter, fromFilter, location.pathname, navigate, page, sourceFilter, toFilter]);
-  const workerRuns = apiRuns.filter(
-    (run) => isWorkerRunId(run.id) && (filter === "all" || run.status === filter),
-  );
-  const dataSource = [...workerRuns, ...platformPageRuns];
+  const dataSource = platformPageRuns;
   const cancel = async (run: Run) => {
     setUpdatingRunId(run.id);
     try {
-      if (isWorkerRunId(run.id)) {
-        const task = await cancelRun(project.id, run.id);
-        upsertRun(project.id, workerTaskAsRun(task, run));
-        message.info("运行已停止，浏览器窗口已关闭。");
-      } else if (platformSession && platformProjectId) {
-        const response = await cancelPlatformRun(platformSession.token, platformProjectId, run.id);
+      if (platformSession && remotePlatformProjectId) {
+        const response = await cancelPlatformRun(platformSession.token, remotePlatformProjectId, run.id);
         upsertRun(project.id, platformRunAsRun(response.run));
         message.info("已向 Agent 发送取消请求。");
       } else {
@@ -233,38 +194,27 @@ export function RunsPage({ project }: { project: Project }) {
   const retry = async (run: Run) => {
     setUpdatingRunId(run.id);
     try {
-      if (!isWorkerRunId(run.id)) {
-        if (!platformSession || !platformProjectId) throw new Error("PLATFORM_SESSION_REQUIRED");
-        const prior = await getPlatformRun(platformSession.token, platformProjectId, run.id);
+      if (platformSession && remotePlatformProjectId) {
+        const prior = await getPlatformRun(platformSession.token, remotePlatformProjectId, run.id);
         const flowId = (prior.run.snapshot.flow as { id?: unknown } | undefined)?.id;
-        const created = prior.run.status === "success"
-          ? await createPlatformRun(platformSession.token, platformProjectId, {
-              flowId: typeof flowId === "string" ? flowId : undefined,
-              environmentId: prior.run.environmentId,
-            })
-          : await retryPlatformRun(platformSession.token, platformProjectId, prior.run.id);
+        let created;
+        if (prior.run.status === "success") {
+          if (typeof flowId !== "string" || !flowId) throw new Error("PLATFORM_FRESH_RUN_FLOW_REQUIRED");
+          created = await createPlatformRun(platformSession.token, remotePlatformProjectId, {
+            flowId,
+            environmentId: prior.run.environmentId,
+          });
+        } else {
+          created = await retryPlatformRun(platformSession.token, remotePlatformProjectId, prior.run.id);
+        }
         if (prior.run.status === "success" && created.runIds.length === 0) throw new Error("PLATFORM_FRESH_RUN_NOT_CREATED");
         created.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsRun(platformRun)));
         if (created.runIds[0]) navigate(`/project/${project.id}/runs/${created.runIds[0]}`);
         message.success(prior.run.status === "success" ? "已按最新已发布版本创建新运行" : "已按原快照重新提交");
         return;
+      } else {
+        throw new Error("PLATFORM_SESSION_REQUIRED");
       }
-      const { runId } = await retryRun(project.id, run.id);
-      const retriedRun: Run = {
-        ...run,
-        id: runId,
-        status: "queued",
-        progress: 0,
-        completedSteps: 0,
-        startedAt: "刚刚",
-        duration: "排队中",
-        screenshots: 0,
-        retries: run.retries + 1,
-      };
-      upsertRun(project.id, retriedRun);
-      watchCleanups.current.push(watchWorkerRun(project.id, retriedRun, upsertRun));
-      message.success("已重新提交给 Playwright Worker");
-      navigate(`/project/${project.id}/runs/${runId}`);
     } catch (error) {
       if (!reportRetryError(error)) message.error("重新提交失败，请稍后重试");
     } finally {
@@ -272,23 +222,12 @@ export function RunsPage({ project }: { project: Project }) {
     }
   };
   const refresh = async () => {
-    const workerRuns = apiRuns.filter((run) => isWorkerRunId(run.id));
-    if (workerRuns.length === 0 && !platformProjectId) {
-      message.info("当前没有需要刷新的 Worker 运行任务");
+    if (!platformSession || !remotePlatformProjectId) {
+      message.info("当前项目尚未连接 Platform");
       return;
     }
     setRefreshing(true);
-    const results = await Promise.allSettled([
-      ...workerRuns.map(async (run) => {
-        const task = await getRun(project.id, run.id);
-        upsertRun(project.id, workerTaskAsRun(task, run));
-      }),
-      ...(platformSession && remotePlatformProjectId ? [
-        getPlatformRuns(platformSession.token, remotePlatformProjectId).then((response) => {
-          response.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsRun(platformRun)));
-        }),
-      ] : []),
-    ]);
+    const results = await Promise.allSettled([refreshPlatformRuns()]);
     setRefreshing(false);
     const failed = results.filter((result) => result.status === "rejected").length;
     if (failed === 0) message.success("运行状态已刷新");
@@ -456,12 +395,12 @@ export function RunsPage({ project }: { project: Project }) {
                 />
               </Tooltip>
             ) : (
-              <Tooltip title="重新运行">
+              <Tooltip title={run.status === "success" ? "再次运行（新运行）" : "重试"}>
                 <Button
                   type="text"
                   size="small"
                   icon={<ReloadOutlined />}
-                  aria-label={`重新运行 ${run.flowName}`}
+                  aria-label={`${run.status === "success" ? "再次运行（新运行）" : "重试"} ${run.flowName}`}
                   loading={updatingRunId === run.id}
                   onClick={() => void retry(run)}
                 />
@@ -475,7 +414,7 @@ export function RunsPage({ project }: { project: Project }) {
     <>
       <PageHeading
         title="运行中心"
-        description="查看当前与历史执行任务。实时状态通过 Worker 事件持续刷新。"
+        description="查看当前与历史执行任务。状态由 Platform 执行服务持续刷新。"
         actions={
           <Button
             icon={<ReloadOutlined />}
@@ -579,7 +518,7 @@ export function RunsPage({ project }: { project: Project }) {
           pagination={{
             current: page,
             pageSize: 8,
-            total: platformTotal + workerRuns.length,
+            total: platformTotal,
             showSizeChanger: false,
             onChange: (nextPage) => setPage(nextPage),
           }}

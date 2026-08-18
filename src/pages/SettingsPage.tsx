@@ -12,8 +12,6 @@ import { PauseCircleOutlined } from "@ant-design/icons";
 import { Button, Form, Input, Popconfirm, Segmented } from "antd";
 import { useEffect } from "react";
 
-const serverWorkspaceEnabled = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
-
 export function SettingsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -93,19 +91,17 @@ export function SettingsPage({ project }: { project: Project }) {
             cancelText="取消"
             okButtonProps={{ danger: true }}
             onConfirm={async () => {
-              if (serverWorkspaceEnabled) {
-                const session = readStoredPlatformSession();
-                if (!session) {
-                  message.error("归档失败：未登录平台");
-                  return;
-                }
-                try {
-                  await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: true });
-                  await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
-                } catch {
-                  message.error("归档失败，请稍后重试");
-                  return;
-                }
+              const session = readStoredPlatformSession();
+              if (!session) {
+                message.error("归档失败：未登录平台");
+                return;
+              }
+              try {
+                await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: true });
+                await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
+              } catch {
+                message.error("归档失败，请稍后重试");
+                return;
               }
               archiveProject(project.id);
               message.info(`“${project.name}”已归档`);

@@ -27,4 +27,33 @@ describe('flow editor draft store', () => {
     expect(useFlowStore.getState().steps).toHaveLength(3)
     expect(useFlowStore.getState().steps[2].id).toBe(originalFirst)
   })
+
+  it('imports recording steps in one draft update and selects the first imported step', () => {
+    useFlowStore.getState().loadSteps([
+      { id: 'manual', title: 'Manual', action: '点击', value: '', timeout: 10, failurePolicy: '立即失败', status: 'pending' },
+    ])
+    const recorded = [
+      { id: 'recorded-1', title: 'Open', action: '打开页面', value: '/login', timeout: 10, failurePolicy: '立即失败', status: 'pending' as const },
+      { id: 'recorded-2', title: 'Click', action: '点击', value: '', timeout: 10, failurePolicy: '立即失败', status: 'pending' as const },
+    ]
+
+    useFlowStore.getState().importRecordingSteps(recorded)
+    recorded[0].title = 'mutated outside the store'
+
+    expect(useFlowStore.getState()).toMatchObject({
+      selectedStepId: 'recorded-1',
+      isDirty: true,
+    })
+    expect(useFlowStore.getState().steps.map((step) => step.title)).toEqual(['Manual', 'Open', 'Click'])
+  })
+
+  it('does not dirty a draft when an empty recording result is confirmed', () => {
+    useFlowStore.getState().loadSteps([
+      { id: 'manual', title: 'Manual', action: '点击', value: '', timeout: 10, failurePolicy: '立即失败', status: 'pending' },
+    ])
+
+    useFlowStore.getState().importRecordingSteps([])
+
+    expect(useFlowStore.getState()).toMatchObject({ selectedStepId: 'manual', isDirty: false })
+  })
 })

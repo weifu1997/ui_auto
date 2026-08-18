@@ -459,14 +459,17 @@ export function ServerWorkspaceSynchronizer() {
       }
     }
     const replaceItems: PlatformWorkspaceProject[] = [];
-    const keepLocalProjectIds: string[] = [];
+    const draftProjectIds: string[] = [];
     for (const item of query.data) {
       const projectId = item.project.id;
       const serverSerialized = serverDocumentSerialized(item);
       const localSerialized = localDocumentSerialized(projectId);
       const baseline = lastApplied.current.get(projectId);
       const forcedServerWins = forceServerWins.current.delete(projectId);
-      const serverWins = forcedServerWins || baseline === undefined || localSerialized === serverSerialized || localSerialized === baseline;
+      const hasStoredDraft = Boolean(readProjectDraft(workspaceId, projectId));
+      const serverWins = forcedServerWins || (!hasStoredDraft && (
+        baseline === undefined || localSerialized === serverSerialized || localSerialized === baseline
+      ));
       if (serverWins) {
         replaceItems.push(replaceProject(projectId, item.project.name, item.project.description, {
           flows: item.resources.flows.map((resource) => resource.data),
@@ -486,7 +489,7 @@ export function ServerWorkspaceSynchronizer() {
           environments: state.environmentsByProject[projectId] ?? [],
           activeEnvironmentId: state.activeEnvironmentByProject[projectId] ?? "",
         }));
-        keepLocalProjectIds.push(projectId);
+        draftProjectIds.push(projectId);
       }
     }
     useWorkspaceStore.getState().replaceServerWorkspace(replaceItems);
@@ -497,7 +500,7 @@ export function ServerWorkspaceSynchronizer() {
       );
     }
     queueMicrotask(() => {
-      for (const projectId of keepLocalProjectIds) {
+      for (const projectId of draftProjectIds) {
         useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "queued");
       }
     });
@@ -527,7 +530,7 @@ export function ServerWorkspaceSynchronizer() {
       }
       syncApi.schedulePendingDrafts();
     });
-  }, [query.data, workspaceId, syncApi]);
+  }, [query.data, query.dataUpdatedAt, workspaceId, syncApi]);
 
   useEffect(() => {
     if (!session || !workspaceId) return;
@@ -548,9 +551,6 @@ export function ServerWorkspaceSynchronizer() {
         const metadata = JSON.stringify({ name: project.name, description: project.description });
         if (metadata !== projectMetadata.current.get(project.id)) {
           changed = true;
-        }
-        if (state.projectModesById[project.id] === "local" && previous.projectModesById[project.id] === "platform-enabled") {
-          removeProjectDraft(workspaceId, project.id);
         }
         if (changed) syncApi.queueProject(project.id);
       }

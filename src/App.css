@@ -448,7 +448,7 @@
   gap: var(--space-5);
 }
 .agent-status,
-.worker-status {
+.platform-status {
   font-size: var(--text-footnote);
   color: var(--text-secondary);
   display: flex;
@@ -456,7 +456,7 @@
   gap: var(--space-2);
 }
 .agent-status i,
-.worker-status i,
+.platform-status i,
 .live-note i,
 .environment-footer i {
   width: 7px;
@@ -466,11 +466,11 @@
   display: inline-block;
 }
 .agent-status.checking i,
-.worker-status.checking i {
+.platform-status.checking i {
   background: var(--warning);
 }
 .agent-status.offline i,
-.worker-status.offline i {
+.platform-status.offline i {
   background: var(--error);
 }
 .agent-status.unbound i,
@@ -1489,7 +1489,7 @@
   line-height: 1.6;
   margin: 10px 0 0;
 }
-.worker-detail-alert {
+.platform-detail-alert {
   margin: 0 0 14px;
 }
 .settings-stack {
@@ -1951,7 +1951,7 @@
   .project-main {
     grid-column: 2;
   }
-  .topbar-actions .worker-status {
+  .topbar-actions .platform-status {
     display: none;
   }
   .environment-select {

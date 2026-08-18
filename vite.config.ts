@@ -8,6 +8,9 @@ export default defineConfig({
     sourcemap: false,
     rolldownOptions: {
       output: {
+        // Preserve package initialization order when a lazy route shares
+        // Ant Design modules with the initial application chunk.
+        strictExecutionOrder: true,
         codeSplitting: {
           minSize: 20 * 1024,
           groups: [
@@ -30,7 +33,10 @@ export default defineConfig({
               name: "antd",
               test: /[\\/]node_modules[\\/]antd[\\/]/,
               minSize: 20 * 1024,
-              maxSize: 400 * 1024,
+              // Ant Design has initialization cycles between feedback and
+              // overlay components. Splitting this package breaks production
+              // ESM evaluation before the application can render.
+              maxSize: 1024 * 1024,
               priority: 20,
             },
             {

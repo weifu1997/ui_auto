@@ -1,9 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Run } from "./mock-data";
-import type { RunRequest } from "./worker-api";
 
-export type ApiRun = Run & { request?: RunRequest };
+export type ApiRun = Run;
 
 type RunStore = {
   apiRuns: Record<string, ApiRun[]>;
@@ -30,14 +29,7 @@ export const useRunStore = create<RunStore>()(
     }),
     {
       name: "autoflow-run-records",
-      partialize: (state) => ({
-        apiRuns: Object.fromEntries(
-          Object.entries(state.apiRuns).map(([projectId, runs]) => [
-            projectId,
-            runs.map(({ request: _request, ...run }) => run),
-          ]),
-        ),
-      }),
+      partialize: (state) => ({ apiRuns: state.apiRuns }),
     },
   ),
 );

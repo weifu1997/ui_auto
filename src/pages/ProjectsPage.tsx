@@ -13,8 +13,6 @@ import { createWorkspaceProject, getWorkspaceProjects, updatePlatformProject } f
 import type { PlatformProject } from "../platform-api";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
 
-const serverWorkspaceEnabled = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
-
 type ProjectListRow = Project & {
   environmentCount: number;
   flowCount: number;
@@ -33,7 +31,6 @@ export function ProjectsPage() {
   const flowsByProject = useWorkspaceStore((state) => state.flowsByProject);
   const environmentsByProject = useWorkspaceStore((state) => state.environmentsByProject);
   const runRecords = useRunStore((state) => state.apiRuns);
-  const createProject = useWorkspaceStore((state) => state.createProject);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
@@ -161,12 +158,10 @@ export function ProjectsPage() {
                     cancelText: "取消",
                     okButtonProps: { danger: true },
                     onOk: async () => {
-                      if (serverWorkspaceEnabled) {
-                        const session = readStoredPlatformSession();
-                        if (!session) throw new Error("AUTH_REQUIRED");
-                        await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: true });
-                        await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
-                      }
+                      const session = readStoredPlatformSession();
+                      if (!session) throw new Error("AUTH_REQUIRED");
+                      await updatePlatformProject(session.token, project.id, { name: project.name, description: project.description, archived: true });
+                      await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
                       archiveProject(project.id);
                       message.info(`“${project.name}”已归档`);
                     },
@@ -241,16 +236,11 @@ export function ProjectsPage() {
         okText="创建项目"
         onOk={() =>
           form.validateFields().then(async (values) => {
-            let project: Project;
-            if (serverWorkspaceEnabled) {
-              const session = readStoredPlatformSession();
-              const workspaceId = readStoredPlatformWorkspaceId(session);
-              if (!session || !workspaceId) throw new Error("AUTH_REQUIRED");
-              project = (await createWorkspaceProject(session.token, workspaceId, values)).project;
-              await queryClient.invalidateQueries({ queryKey: ["server-workspace", workspaceId] });
-            } else {
-              project = createProject(values);
-            }
+            const session = readStoredPlatformSession();
+            const workspaceId = readStoredPlatformWorkspaceId(session);
+            if (!session || !workspaceId) throw new Error("AUTH_REQUIRED");
+            const project = (await createWorkspaceProject(session.token, workspaceId, values)).project;
+            await queryClient.invalidateQueries({ queryKey: ["server-workspace", workspaceId] });
             setCreateOpen(false);
             form.resetFields();
             message.success("项目已创建");

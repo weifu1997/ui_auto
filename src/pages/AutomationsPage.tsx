@@ -42,7 +42,7 @@ export function AutomationsPage({ project }: { project: Project }) {
   const [scheduleForm] = Form.useForm();
   const [triggerForm] = Form.useForm();
   const [channelForm] = Form.useForm();
-  const platformProjectId = platformProjectMap[project.id];
+  const platformProjectId = platformProjectMap[project.id] ?? project.id;
   const workspaceId = readStoredPlatformWorkspaceId(platformSession);
   const publishedRevisions = revisions.filter((revision) => revision.status === "published");
   const datasetOptions = datasets.flatMap((dataset) => dataset.latestVersion ? [{ value: dataset.latestVersion.id, label: `${dataset.name} v${dataset.latestVersion.versionNumber} (${dataset.latestVersion.rowCount} 行)` }] : []);

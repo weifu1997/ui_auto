@@ -24,12 +24,21 @@ import { useRunStore } from "./run-store";
 import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { message, modal } from "./antd-feedback";
-import { localWorkerRunRequest } from "./local-worker-run";
 import { PlatformApiError, cancelRecordingSession, createPlatformElementValidation, createPlatformRun, createRecordingSession, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
 import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
 import { platformRunAsRun } from "./pages/shared";
-import { createRun } from "./worker-api";
+import {
+  clearStoredRecordingSession,
+  isTerminalRecordingStatus,
+  mergeRecordingEvents,
+  nextRecordingEventPage,
+  planRecordingImport,
+  readStoredRecordingSession,
+  recordingEventCursor,
+  recordingSessionStorageKey,
+  storeRecordingSessionId,
+} from "./recording-editor-state";
 import { actionOptions } from "./mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "./mock-data";
 
@@ -187,10 +196,10 @@ export default function FlowEditorPage() {
   }, []);
 
   const recordingStorageKey = project && flow
-    ? `autoflow-recording-session:${project.id}:${flow.id}`
+    ? recordingSessionStorageKey(project.id, flow.id)
     : "";
   const clearRecordingStorage = useCallback(() => {
-    if (recordingStorageKey) window.sessionStorage.removeItem(recordingStorageKey);
+    if (recordingStorageKey) clearStoredRecordingSession(window.sessionStorage, recordingStorageKey);
   }, [recordingStorageKey]);
   const clearRecordingPoll = useCallback(() => {
     if (recordingPollRef.current !== undefined) {
@@ -213,14 +222,12 @@ export default function FlowEditorPage() {
           100,
         );
         setRecordingEvents((current) => {
-          const bySeq = new Map(current.map((event) => [event.seq, event]));
-          for (const event of page.events) bySeq.set(event.seq, event);
-          return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
+          return mergeRecordingEvents(current, page.events);
         });
-        const pageSeq = page.events.reduce((max, event) => Math.max(max, event.seq), cursor);
-        cursor = pageSeq;
+        const nextPage = nextRecordingEventPage(cursor, page);
+        cursor = recordingEventCursor(cursor, page.events);
         recordingLastSeqRef.current = cursor;
-        hasMore = page.hasMore;
+        hasMore = nextPage !== undefined;
       }
       const detail = await getRecordingSession(
         platformContext.session.token,
@@ -228,7 +235,7 @@ export default function FlowEditorPage() {
         sessionId,
       );
       setRecordingSession(detail.session);
-      if (["stopped", "canceled", "expired", "failed"].includes(detail.session.status)) {
+      if (isTerminalRecordingStatus(detail.session.status)) {
         clearRecordingPoll();
         clearRecordingStorage();
       }
@@ -246,7 +253,7 @@ export default function FlowEditorPage() {
 
   useEffect(() => {
     if (!platformContext || !recordingStorageKey || recordingSession || recordingRestoreInFlightRef.current) return;
-    const recoveredId = window.sessionStorage.getItem(recordingStorageKey);
+    const recoveredId = readStoredRecordingSession(window.sessionStorage, recordingStorageKey);
     if (!recoveredId) return;
     recordingRestoreInFlightRef.current = true;
     void getRecordingSession(
@@ -256,7 +263,7 @@ export default function FlowEditorPage() {
     ).then(({ session }) => {
       setRecordingSession(session);
       recordingLastSeqRef.current = session.lastSeq;
-      if (["stopped", "canceled", "expired", "failed"].includes(session.status)) {
+      if (isTerminalRecordingStatus(session.status)) {
         clearRecordingStorage();
         return;
       }
@@ -290,7 +297,7 @@ export default function FlowEditorPage() {
       );
       setRecordingSession(created.session);
       setRecordingEnvironmentId(created.session.environmentId);
-      window.sessionStorage.setItem(recordingStorageKey, created.session.id);
+      storeRecordingSessionId(window.sessionStorage, recordingStorageKey, created.session.id);
       setRecordingOpen(false);
       recordingLastSeqRef.current = 0;
       setRecordingEvents([]);
@@ -332,13 +339,13 @@ export default function FlowEditorPage() {
     if (!platformContext || !recordingSession) return;
     setRecordingBusy(true);
     try {
-      await cancelRecordingSession(
+      const canceled = await cancelRecordingSession(
         platformContext.session.token,
         platformContext.projectId,
         recordingSession.id,
       );
       clearRecordingPoll();
-      setRecordingSession(null);
+      setRecordingSession(canceled.session);
       setRecordingResult(null);
       setRecordingEvents([]);
       clearRecordingStorage();
@@ -380,74 +387,33 @@ export default function FlowEditorPage() {
 
   const importRecordedFlow = async () => {
     if (!recordingResult || !project || !recordingEnvironment) return;
-    const unresolved = recordingResult.requiredBindings.filter(
-      (binding) => !recordingSecretMap[binding.stepId],
-    );
-    if (unresolved.length > 0) {
-      message.error("请先为所有敏感输入绑定 secret 变量");
+    let plan;
+    try {
+      plan = planRecordingImport(
+        recordingResult,
+        recordingEnvironment.id,
+        elements,
+        recordingSecretMap,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "RECORDING_SECRET_BINDING_REQUIRED") {
+        message.error("请先为所有敏感输入绑定 secret 变量");
+      } else {
+        message.error("录制结果包含无法解析的元素引用，未导入任何步骤或元素");
+      }
       return;
     }
-    const existingNames = new Set(elements.map((element) => element.name));
-    const nameMap: Record<string, string> = {};
-    const newElements: ElementAsset[] = [];
-    for (const [index, raw] of recordingResult.elements.entries()) {
-      const rawName = String(raw.name ?? `录制元素 ${index + 1}`);
-      const path = String(raw.path ?? "/");
-      const method = String(raw.method ?? "css");
-      const value = String(raw.value ?? "");
-      const existing = elements.find(
-        (element) =>
-          element.environment === recordingEnvironment.id &&
-          element.path === path &&
-          element.method === method &&
-          element.value === value,
-      );
-      if (existing) {
-        nameMap[rawName] = existing.name;
-        continue;
-      }
-      const name = existingNames.has(rawName) ? `${rawName} ${Date.now()}` : rawName;
-      existingNames.add(name);
-      nameMap[rawName] = name;
-      newElements.push({
-        id: `rec-el-${Date.now()}-${index}`,
-        name,
-        path,
-        method,
-        value,
-        environment: recordingEnvironment.id,
-        description: "",
-        validation: "unverified" as const,
-        updatedAt: "刚刚",
-      });
-    }
-    const importedSteps: FlowStep[] = recordingResult.steps.map((raw, index) => {
-      const rawId = String(raw.id ?? `rec-step-${index}`);
-      const bound = recordingSecretMap[rawId];
-      const rawElement = raw.element ? String(raw.element) : undefined;
-      return {
-        id: `step-${Date.now()}-${index}`,
-        title: String(raw.title ?? raw.action ?? "录制步骤"),
-        action: String(raw.action ?? "点击"),
-        element: rawElement ? nameMap[rawElement] ?? rawElement : undefined,
-        value: bound ? `{{${bound}}}` : String(raw.value ?? ""),
-        timeout: 10,
-        failurePolicy: "立即失败",
-        status: "pending" as const,
-      };
-    });
     setRecordingImportBusy(true);
     try {
-      const unique = await verifyRecordingElements([
-        ...newElements,
-        ...elements.filter((element) => Object.values(nameMap).includes(element.name)),
-      ]);
+      const unique = await verifyRecordingElements(plan.elementsToValidate);
       if (!unique) {
         message.error("存在未唯一匹配的定位器，未导入任何步骤或元素");
         return;
       }
-      setElements(project.id, [...elements, ...newElements]);
-      importRecordingSteps(importedSteps);
+      // All fallible work completes first. The two synchronous store writes then
+      // expose one confirmed recording draft, never incremental event imports.
+      setElements(project.id, [...elements, ...plan.newElements]);
+      importRecordingSteps(plan.importedSteps);
     } finally {
       setRecordingImportBusy(false);
     }
@@ -547,42 +513,8 @@ export default function FlowEditorPage() {
       }
       return;
     }
-    try {
-      const request = localWorkerRunRequest({
-        environment,
-        flow: { id: flow.id, name: flow.name },
-        steps,
-        elements,
-        variables,
-        secretValues,
-        secretVariables: requiredSecretVariables(variables, stepsToRun),
-        upToStepId,
-      });
-      const { runId } = await createRun(project.id, request);
-      const totalSteps = upToStepId
-        ? steps.findIndex((step) => step.id === upToStepId) + 1
-        : steps.length;
-      upsertRun(project.id, {
-        id: runId,
-        flowName: flow.name,
-        status: "queued",
-        environment: environment.name,
-        progress: 0,
-        completedSteps: 0,
-        totalSteps,
-        startedAt: "刚刚",
-        duration: "排队中",
-        screenshots: 0,
-        retries: 0,
-        request,
-      });
-      navigate(`/project/${project.id}/runs/${runId}`);
-    } catch {
-      message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
-    } finally {
-      setRunToStep(false);
-    }
-    return;
+    message.error("当前项目尚未连接 Platform，请先完成项目同步");
+    setRunToStep(false);
   };
   return (
     <div className="editor-page">
@@ -596,8 +528,14 @@ export default function FlowEditorPage() {
           <span>{isDirty ? "未保存修改" : "已保存"}</span>
         </div>
         <div className="editor-actions">
-          {recordingSession && !["stopped", "canceled", "expired", "failed"].includes(recordingSession.status) ? (
+          {recordingSession && !isTerminalRecordingStatus(recordingSession.status) ? (
             <>
+              <span className="recording-status" aria-live="polite">
+                {recordingSession.status === "paused" ? "录制已暂停" : "录制中"}
+                {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
+                {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
+                {` · ${recordingSession.recordedStepCount ?? recordingEvents.length} 步`}
+              </span>
               {recordingSession.status === "paused" ? (
                 <Button
                   icon={<AudioOutlined />}
@@ -647,11 +585,12 @@ export default function FlowEditorPage() {
               录制
             </Button>
           ) : null}
-          {recordingSession && ["stopped", "canceled", "expired", "failed"].includes(recordingSession.status) && (
+          {recordingSession && isTerminalRecordingStatus(recordingSession.status) && (
             <span className="recording-status" aria-live="polite">
               录制{recordingSession.status === "stopped" ? "已停止" : recordingSession.status === "expired" ? "已过期" : recordingSession.status === "failed" ? "失败" : "已取消"}
               {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
               {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
+              {recordingSession.errorCode ? ` · ${recordingSession.errorCode}` : ""}
             </span>
           )}
           <Button icon={<PlayCircleFilled />} loading={runToStep} onClick={() => run()}>
@@ -934,7 +873,7 @@ export default function FlowEditorPage() {
                       value={recordingSecretMap[binding.stepId]}
                       onChange={(value) => setRecordingSecretMap((current) => ({ ...current, [binding.stepId]: value }))}
                       options={variables
-                        .filter((variable) => variable.secret)
+                        .filter((variable) => variable.secret && (variable.scope === "环境" || variable.scope === "项目"))
                         .map((variable) => ({ value: variableReference(variable), label: variable.name }))}
                     />
                   </label>

@@ -1,7 +1,13 @@
-const apiBase = (import.meta.env.VITE_WORKER_API_URL ?? (import.meta.env.PROD ? "/api" : "http://127.0.0.1:8787/api")).replace(/\/$/, "");
+const apiBase = "/api";
 
 export function platformApiOrigin() {
   return new URL(apiBase, window.location.origin).origin;
+}
+
+export async function getPlatformHealth(signal?: AbortSignal) {
+  const response = await fetch(`${platformApiOrigin()}/health`, { signal, credentials: "include" });
+  if (!response.ok) throw new PlatformApiError(response.status, `PLATFORM_HEALTH_${response.status}`);
+  return (await response.json()) as { ok: boolean; queue?: string };
 }
 
 export type PlatformSession = {
@@ -636,47 +642,222 @@ export type RecordingSession = {
   recordedStepCount?: number;
   startedAt: number;
   lastActivityAt: number;
+  errorCode?: string;
 };
 
+// Events are only used for the safe progress cursor in the editor. Deliberately
+// discard browser payload fields so a recorder regression cannot retain input
+// values in React state.
 export type RecordingEvent = {
   seq: number;
   kind: string;
-  url?: string;
-  frame?: string;
-  element?: Record<string, unknown>;
-  sensitive?: boolean;
+  warnings: string[];
+};
+
+export type RecordingEventPage = {
+  events: RecordingEvent[];
+  lastSeq: number;
+  hasMore: boolean;
+};
+
+export type RecordedStep = {
+  id: string;
+  title: string;
+  action: string;
+  element?: string;
   value?: string | null;
-  selectedValue?: string;
-  checked?: boolean;
-  key?: string;
+};
+
+export type RecordedElement = {
+  id: string;
+  name: string;
+  path: string;
+  method: string;
+  value: string;
+  matchCount?: number;
+};
+
+export type RecordingRequiredBinding = {
+  stepId: string;
+  fieldHint: string;
 };
 
 export type RecordingResult = {
-  steps: Array<Record<string, unknown>>;
-  elements: Array<Record<string, unknown>>;
-  requiredBindings: Array<{ stepId: string; fieldHint: string }>;
+  steps: RecordedStep[];
+  elements: RecordedElement[];
+  requiredBindings: RecordingRequiredBinding[];
   warnings: string[];
   lastSeq: number;
 };
+
+function recordingContractError() {
+  return new PlatformApiError(0, "RECORDING_RESPONSE_INVALID");
+}
+
+function asRecordingObject(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw recordingContractError();
+  return value as Record<string, unknown>;
+}
+
+function requiredRecordingString(value: unknown) {
+  if (typeof value !== "string" || !value) throw recordingContractError();
+  return value;
+}
+
+function optionalRecordingString(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function recordingNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function safeRecordingUrl(value: unknown) {
+  if (typeof value !== "string" || !value) return "";
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? `${url.protocol}//${url.host}${url.pathname}`
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function safeRecordedStepValue(action: string, value: string | null) {
+  if (value === null || action !== "打开页面") return value;
+  if (value.startsWith("http://") || value.startsWith("https://")) return safeRecordingUrl(value);
+  return value.split(/[?#]/, 1)[0] || "/";
+}
+
+function likelySensitiveRecordedStep(step: RecordedStep) {
+  return /password|passwd|secret|token|api[\s_-]*key|credential|密码|口令|秘钥|密钥|令牌|凭证/i.test(
+    `${step.title} ${step.element ?? ""}`,
+  );
+}
+
+function decodeRecordingSession(value: unknown): RecordingSession {
+  const source = asRecordingObject(value);
+  const status = requiredRecordingString(source.status);
+  if (!(["starting", "recording", "paused", "stopped", "canceled", "expired", "failed"] as string[]).includes(status)) {
+    throw recordingContractError();
+  }
+  return {
+    id: requiredRecordingString(source.id),
+    projectId: requiredRecordingString(source.projectId),
+    flowId: requiredRecordingString(source.flowId),
+    environmentId: requiredRecordingString(source.environmentId),
+    status: status as RecordingSessionStatus,
+    currentUrl: safeRecordingUrl(source.currentUrl),
+    lastSeq: recordingNumber(source.lastSeq),
+    recordedStepCount: recordingNumber(source.recordedStepCount),
+    startedAt: recordingNumber(source.startedAt),
+    lastActivityAt: recordingNumber(source.lastActivityAt),
+    errorCode: optionalRecordingString(source.errorCode),
+  };
+}
+
+function decodeRecordedStep(value: unknown, index: number): RecordedStep {
+  const source = asRecordingObject(value);
+  const action = requiredRecordingString(source.action);
+  const step: RecordedStep = {
+    id: optionalRecordingString(source.id) ?? `recording-step-${index}`,
+    title: optionalRecordingString(source.title) ?? action,
+    action,
+    element: optionalRecordingString(source.element),
+    value: safeRecordedStepValue(action, typeof source.value === "string" ? source.value : null),
+  };
+  return likelySensitiveRecordedStep(step) ? { ...step, value: null } : step;
+}
+
+function decodeRecordedElement(value: unknown, index: number): RecordedElement {
+  const source = asRecordingObject(value);
+  const matchCount = recordingNumber(source.matchCount);
+  return {
+    id: optionalRecordingString(source.id) ?? `recording-element-${index}`,
+    name: requiredRecordingString(source.name),
+    path: requiredRecordingString(source.path),
+    method: requiredRecordingString(source.method),
+    value: requiredRecordingString(source.value),
+    ...(typeof source.matchCount === "number" ? { matchCount } : {}),
+  };
+}
+
+function decodeRecordingResult(value: unknown): RecordingResult {
+  const source = asRecordingObject(value);
+  if (!Array.isArray(source.steps) || !Array.isArray(source.elements) || !Array.isArray(source.requiredBindings)) {
+    throw recordingContractError();
+  }
+  const requiredBindings = source.requiredBindings.map((binding) => {
+    const item = asRecordingObject(binding);
+    return {
+      stepId: requiredRecordingString(item.stepId),
+      fieldHint: requiredRecordingString(item.fieldHint),
+    };
+  });
+  const bindingStepIds = new Set(requiredBindings.map((binding) => binding.stepId));
+  const steps = source.steps.map((step, index) => decodeRecordedStep(step, index));
+  const inferredBindings = steps.flatMap((step) => (
+    likelySensitiveRecordedStep(step) && !bindingStepIds.has(step.id)
+      ? [{ stepId: step.id, fieldHint: step.element || "sensitive input" }]
+      : []
+  ));
+  return {
+    steps: steps.map((step) => bindingStepIds.has(step.id) ? { ...step, value: null } : step),
+    elements: source.elements.map(decodeRecordedElement),
+    requiredBindings: [...requiredBindings, ...inferredBindings],
+    warnings: Array.isArray(source.warnings)
+      ? source.warnings.filter((warning): warning is string => typeof warning === "string")
+      : [],
+    lastSeq: recordingNumber(source.lastSeq),
+  };
+}
+
+function decodeRecordingEvent(value: unknown): RecordingEvent | undefined {
+  const source = asRecordingObject(value);
+  const seq = recordingNumber(source.seq);
+  const kind = optionalRecordingString(source.kind);
+  if (!Number.isInteger(seq) || seq < 1 || !kind) return undefined;
+  return {
+    seq,
+    kind,
+    warnings: Array.isArray(source.warnings)
+      ? source.warnings.filter((warning): warning is string => typeof warning === "string")
+      : [],
+  };
+}
+
+function decodeRecordingEventPage(value: unknown): RecordingEventPage {
+  const source = asRecordingObject(value);
+  if (!Array.isArray(source.events) || typeof source.hasMore !== "boolean") throw recordingContractError();
+  return {
+    events: source.events.flatMap((event) => {
+      const decoded = decodeRecordingEvent(event);
+      return decoded ? [decoded] : [];
+    }),
+    lastSeq: recordingNumber(source.lastSeq),
+    hasMore: source.hasMore,
+  };
+}
 
 export function createRecordingSession(
   token: string,
   projectId: string,
   input: { flowId: string; environmentId: string; startUrl: string; freshLogin?: boolean },
 ) {
-  return request<{ session: RecordingSession }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions`,
     { method: "POST", body: JSON.stringify(input) },
     token,
-  );
+  ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
 }
 
 export function getRecordingSession(token: string, projectId: string, sessionId: string) {
-  return request<{ session: RecordingSession }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}`,
     {},
     token,
-  );
+  ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
 }
 
 export function getRecordingEvents(
@@ -687,43 +868,49 @@ export function getRecordingEvents(
   limit = 100,
 ) {
   const query = `?afterSeq=${encodeURIComponent(String(afterSeq))}&limit=${encodeURIComponent(String(limit))}`;
-  return request<{ events: RecordingEvent[]; lastSeq: number; hasMore: boolean }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/events${query}`,
     {},
     token,
-  );
+  ).then(decodeRecordingEventPage);
 }
 
 export function pauseRecordingSession(token: string, projectId: string, sessionId: string) {
-  return request<{ session: RecordingSession }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/pause`,
     { method: "POST" },
     token,
-  );
+  ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
 }
 
 export function resumeRecordingSession(token: string, projectId: string, sessionId: string) {
-  return request<{ session: RecordingSession }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/resume`,
     { method: "POST" },
     token,
-  );
+  ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
 }
 
 export function stopRecordingSession(token: string, projectId: string, sessionId: string) {
-  return request<{ session: RecordingSession; result: RecordingResult }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/stop`,
     { method: "POST" },
     token,
-  );
+  ).then((response) => {
+    const body = asRecordingObject(response);
+    return {
+      session: decodeRecordingSession(body.session),
+      result: decodeRecordingResult(body.result),
+    };
+  });
 }
 
 export function cancelRecordingSession(token: string, projectId: string, sessionId: string) {
-  return request<{ session: RecordingSession }>(
+  return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
     token,
-  );
+  ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
 }
 
 export function createPlatformElementValidation(

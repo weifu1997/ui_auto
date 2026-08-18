@@ -34,43 +34,6 @@ export function storePlatformWorkspaceId(workspaceId: string) {
   localStorage.setItem(platformWorkspaceStorageKey, workspaceId);
 }
 
-function allProjectMaps(session = readStoredPlatformSession()): ProjectMaps {
-  try {
-    const value = JSON.parse(localStorage.getItem(platformProjectMapStorageKey) ?? "{}") as Record<string, unknown>;
-    if (Object.values(value).every((item) => typeof item === "string")) {
-      const workspaceId = readStoredPlatformWorkspaceId(session);
-      return workspaceId ? { [workspaceId]: value as Record<string, string> } : {};
-    }
-    return Object.fromEntries(
-      Object.entries(value).flatMap(([workspaceId, mappings]) => (
-        mappings && typeof mappings === "object" && !Array.isArray(mappings)
-          ? [[workspaceId, Object.fromEntries(Object.entries(mappings).filter(([, projectId]) => typeof projectId === "string"))]]
-          : []
-      )),
-    );
-  } catch {
-    return {};
-  }
-}
-
-export function readPlatformProjectMap(workspaceId = readStoredPlatformWorkspaceId()) {
-  return allProjectMaps()[workspaceId] ?? {};
-}
-
-export function storePlatformProjectMap(projectMap: Record<string, string>, workspaceId = readStoredPlatformWorkspaceId()) {
-  if (!workspaceId) return;
-  const maps = allProjectMaps();
-  maps[workspaceId] = projectMap;
-  localStorage.setItem(platformProjectMapStorageKey, JSON.stringify(maps));
-}
-
-export function disconnectPlatformProject(localProjectId: string, workspaceId = readStoredPlatformWorkspaceId()) {
-  if (!workspaceId) return;
-  const projectMap = readPlatformProjectMap(workspaceId);
-  const { [localProjectId]: _removed, ...remaining } = projectMap;
-  storePlatformProjectMap(remaining, workspaceId);
-}
-
 function allDocumentVersions(): DocumentVersionMaps {
   try {
     const value = JSON.parse(localStorage.getItem(platformDocumentVersionsStorageKey) ?? "{}") as Record<string, unknown>;
@@ -107,9 +70,38 @@ export function notifyPlatformContextChanged() {
   window.dispatchEvent(new Event(platformContextChangedEvent));
 }
 
-export function platformProjectContext(localProjectId: string) {
+export function platformProjectContext(projectId: string) {
   const session = readStoredPlatformSession();
   const workspaceId = readStoredPlatformWorkspaceId(session);
-  const projectId = readPlatformProjectMap(workspaceId)[localProjectId];
-  return session?.token && workspaceId && projectId ? { session, workspaceId, projectId } : undefined;
+  const mappedProjectId = readPlatformProjectMap(workspaceId)[projectId] ?? projectId;
+  return session?.token && workspaceId && mappedProjectId ? { session, workspaceId, projectId: mappedProjectId } : undefined;
+}
+function allProjectMaps(session = readStoredPlatformSession()): ProjectMaps {
+  try {
+    const value = JSON.parse(localStorage.getItem(platformProjectMapStorageKey) ?? "{}") as Record<string, unknown>;
+    if (Object.values(value).every((item) => typeof item === "string")) {
+      const workspaceId = readStoredPlatformWorkspaceId(session);
+      return workspaceId ? { [workspaceId]: value as Record<string, string> } : {};
+    }
+    return Object.fromEntries(
+      Object.entries(value).flatMap(([workspaceId, mappings]) => (
+        mappings && typeof mappings === "object" && !Array.isArray(mappings)
+          ? [[workspaceId, Object.fromEntries(Object.entries(mappings).filter(([, projectId]) => typeof projectId === "string"))]]
+          : []
+      )),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function readPlatformProjectMap(workspaceId = readStoredPlatformWorkspaceId()) {
+  return allProjectMaps()[workspaceId] ?? {};
+}
+
+export function storePlatformProjectMap(projectMap: Record<string, string>, workspaceId = readStoredPlatformWorkspaceId()) {
+  if (!workspaceId) return;
+  const maps = allProjectMaps();
+  maps[workspaceId] = projectMap;
+  localStorage.setItem(platformProjectMapStorageKey, JSON.stringify(maps));
 }

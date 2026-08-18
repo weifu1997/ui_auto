@@ -1,5 +1,4 @@
 import { message } from "../antd-feedback";
-import { localWorkerRunRequest } from "../local-worker-run";
 import type { Flow, Project, Run } from "../mock-data";
 import { PlatformApiError, createPlatformRun, createPlatformRunBatch, getPlatformRevisions, savePlatformSecret } from "../platform-api";
 import type { PlatformRevision } from "../platform-api";
@@ -7,8 +6,7 @@ import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, canUseCapability, emptyElements, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, variableReference, watchWorkerRun } from "./shared";
-import { createRun } from "../worker-api";
+import { PageHeading, canUseCapability, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, variableReference } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -19,18 +17,9 @@ export function FlowsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
   const canEditFlow = canUseCapability("flow.edit");
   const canRunFlow = canUseCapability("run.execute");
-  const production = import.meta.env.PROD || import.meta.env.VITE_AUTH_REQUIRED === "1";
-  const watchCleanups = useRef<Array<() => void>>([]);
-  useEffect(() => () => {
-    for (const cleanup of watchCleanups.current) cleanup();
-    watchCleanups.current = [];
-  }, []);
   const storedFlows = useWorkspaceStore((state) => state.flowsByProject[project.id]);
   const storedVariables = useWorkspaceStore(
     (state) => state.variablesByProject[project.id],
-  );
-  const storedElements = useWorkspaceStore(
-    (state) => state.elementsByProject[project.id],
   );
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],
@@ -46,7 +35,6 @@ export function FlowsPage({ project }: { project: Project }) {
   const setSecretValues = useSecretStore((state) => state.setValues);
   const items = storedFlows ?? emptyFlows;
   const variables = storedVariables ?? emptyVariables;
-  const elements = storedElements ?? emptyElements;
   const environments = storedEnvironments ?? emptyEnvironments;
   const activeEnvironment =
     environments.find((environment) => environment.id === activeEnvironmentId) ??
@@ -137,44 +125,7 @@ export function FlowsPage({ project }: { project: Project }) {
       }
       return;
     }
-    try {
-      const secretVariables = requiredSecretVariables(variables, steps);
-      if (secretVariables.length > 0 && production) {
-        message.error("生产环境已禁用本机 Worker 明文密钥路径，请通过平台运行");
-        return;
-      }
-      const request = localWorkerRunRequest({
-        environment: activeEnvironment,
-        flow: { id: flow.id, name: flow.name },
-        steps,
-        elements,
-        variables,
-        secretValues,
-        secretVariables,
-      });
-      const { runId } = await createRun(project.id, request);
-      const run: Run = {
-        id: runId,
-        flowName: flow.name,
-        status: "queued",
-        environment: activeEnvironment.name,
-        progress: 0,
-        completedSteps: 0,
-        totalSteps: steps.length,
-        startedAt: "刚刚",
-        duration: "排队中",
-        screenshots: 0,
-        retries: 0,
-      };
-      upsertRun(project.id, run);
-      watchCleanups.current.push(watchWorkerRun(project.id, run, upsertRun, (status) => {
-        updateFlowStatus(flow.id, status);
-      }));
-      navigate(`/project/${project.id}/runs`);
-    } catch {
-      message.error("本机 Playwright Worker 不可用，请先运行 npm run server 后重试。");
-    }
-    return;
+    message.error("当前项目尚未连接 Platform，请先完成项目同步");
   };
   const isFlowRunnable = (flowId: string) =>
     publishedFlowIds === null || publishedFlowIds.has(flowId);

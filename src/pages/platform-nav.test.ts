@@ -17,9 +17,9 @@ describe("平台入口收敛（方案C 裁剪后）", () => {
     expect(keys).toEqual(["publish"]);
   });
 
-  it("dev 下保留数据集/持续回归/治理分析 Tab 以维持可达性", () => {
+  it("构建工具模式也只暴露 Platform 产品入口", () => {
     const keys = platformTabItems(false, project).map((item) => item.key);
-    expect(keys).toEqual(["publish", "data", "automation", "governance"]);
+    expect(keys).toEqual(["publish"]);
   });
 
   it("两个模式下发布与运行均可达", () => {
