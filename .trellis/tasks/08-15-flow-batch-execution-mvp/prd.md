@@ -108,7 +108,7 @@ MVP 的“批量”是批量提交和批次级跟踪，继续使用现有 Manage
 - [~] AC8：服务重启后 queued 子项恢复排队，批次页面刷新后从服务端显示正确进度，不依赖 localStorage。（启动恢复复用既有 queued 重排逻辑、create 测试断言 queued 可恢复；`tests/batch-run.spec.ts` 覆盖 URL 定位后的刷新恢复；进程退出级重启模拟未做）
 - [~] AC9：运行中心能分页查看批次并展开子 run，孤立单 run 仍可见，单 run 详情/取消/重试保持可用。（服务层 `test_batch_list_pagination_and_status_filter` 覆盖分页；`tests/batch-run.spec.ts` 覆盖列表、展开、取消、重试和刷新恢复；孤立单 run 与单 run 详情由既有回归保护）
 - [~] AC10：无权限、跨项目 batch/run、非法 flowId 和批次上限请求被拒绝；API 和审计不泄漏 secret 或 snapshot 明文。（上限/非法输入由服务层测试覆盖；权限/跨项目由 handler capability + `run_batch_by_id` 项目范围 404 保证，未加 handler 专项测试；批次详情响应只含摘要不含 snapshot）
-- [x] AC11：既有手工运行、dataset 单流程运行、schedule、webhook、通知、运行历史分页和 ManagedRunner 测试继续通过。（107 Python + 30 前端单测；批次专项 Playwright 2/2 通过。完整 E2E 的遗留失败另由 `08-16-legacy-e2e-failures` 跟踪。）
+- [x] AC11：既有手工运行、dataset 单流程运行、schedule、webhook、通知、运行历史分页和 ManagedRunner 测试继续通过。（107 Python + 30 前端单测；批次专项 Playwright 2/2；2026-08-18 完整 `npm run test:e2e` 38/38 通过，遗留 E2E 已关闭。）
 
 ## Out Of Scope
 
