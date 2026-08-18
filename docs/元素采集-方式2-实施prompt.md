@@ -1,5 +1,7 @@
 ﻿# 实施 Prompt：元素库「新建元素 → 从页面获取」+ 环境表单下拉优化 + 自测
 
+> 历史任务记录：其中的 local Worker、双服务 `npm run server` / `npm run dev` 和相关测试命令均已废弃，不可作为当前实现或部署指令。当前只支持 `npm run build` 后设置 `PLATFORM_SECRET_KEY` 并执行 `npm run start`。
+
 > 用途：交给 AI 编码 Agent（或开发者）直接执行的完整任务说明。
 > 项目根目录：`D:\pythonProject\ui_auto`（AutoFlow Workbench，Trellis 管理）
 

@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const testRoot = mkdtempSync(join(tmpdir(), "autoflow-e2e-"));
-const workerEnvironment = {
-  WORKER_DATA_DIRECTORY: join(testRoot, "data"),
-  WORKER_ARTIFACT_DIRECTORY: join(testRoot, "artifacts"),
+const productionEnvironment = {
+  PLATFORM_DATA_DIRECTORY: join(testRoot, "data"),
+  PLATFORM_ARTIFACT_DIRECTORY: join(testRoot, "artifacts"),
+  PLATFORM_SECRET_KEY: "playwright-production-secret",
 };
 
 export default defineConfig({
@@ -15,40 +16,19 @@ export default defineConfig({
   workers: 1,
   outputDir: join(testRoot, "test-results"),
   use: {
-    baseURL: "http://127.0.0.1:4174",
+    baseURL: "http://127.0.0.1:8787",
     trace: "on-first-retry",
   },
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: ["tests/production-sync.spec.ts"],
-    },
-    {
-      name: "production-auth",
-      use: {
-        baseURL: "http://127.0.0.1:4175",
-        ...devices["Desktop Chrome"],
-      },
-      testMatch: ["tests/production-sync.spec.ts"],
     },
   ],
-  webServer: [
-    {
-      command: "npm run server:py",
-      url: "http://127.0.0.1:8787/health",
-      env: workerEnvironment,
-      reuseExistingServer: false,
-    },
-    {
-      command: "npm run dev -- --host 127.0.0.1 --port 4174",
-      url: "http://127.0.0.1:4174",
-      reuseExistingServer: true,
-    },
-    {
-      command: "node scripts/dev-auth.mjs --port 4175",
-      url: "http://127.0.0.1:4175",
-      reuseExistingServer: true,
-    },
-  ],
+  webServer: {
+    command: "npm run start",
+    url: "http://127.0.0.1:8787/health",
+    env: productionEnvironment,
+    reuseExistingServer: false,
+  },
 });

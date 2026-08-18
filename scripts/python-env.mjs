@@ -32,6 +32,12 @@ export function projectVenvs() {
       pip: venvPip(join(repoRoot, "server-py", ".venv-linux")),
       label: "server-py/.venv-linux",
     },
+    {
+      root: join(repoRoot, "venv"),
+      python: venvPython(join(repoRoot, "venv")),
+      pip: venvPip(join(repoRoot, "venv")),
+      label: "venv",
+    },
   ];
 }
 

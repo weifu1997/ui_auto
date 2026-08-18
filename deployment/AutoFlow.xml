@@ -2,13 +2,11 @@
   <id>AutoFlow</id>
   <name>AutoFlow Workbench</name>
   <description>AutoFlow internal web automation platform and ManagedRunner</description>
-  <executable>%BASE%\app\venv\Scripts\python.exe</executable>
-  <arguments>-m autoflow.main</arguments>
-  <workingdirectory>%BASE%\app\server-py</workingdirectory>
-  <env name="NODE_ENV" value="production" />
+  <executable>%BASE%\runtime\node.exe</executable>
+  <arguments>scripts\start-production.mjs</arguments>
+  <workingdirectory>%BASE%\app</workingdirectory>
   <env name="AUTOFLOW_LISTEN_HOST" value="0.0.0.0" />
-  <env name="WORKER_DATA_DIRECTORY" value="%BASE%\data" />
-  <env name="WORKER_ARTIFACT_DIRECTORY" value="%BASE%\artifacts" />
+  <env name="PLATFORM_DATA_DIRECTORY" value="%BASE%\data" />
   <env name="PLATFORM_ARTIFACT_DIRECTORY" value="%BASE%\artifacts\platform" />
   <env name="AUTOFLOW_STATIC_DIRECTORY" value="%BASE%\app\dist" />
   <env name="PLAYWRIGHT_BROWSERS_PATH" value="%BASE%\browsers" />

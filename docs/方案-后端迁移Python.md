@@ -1,5 +1,7 @@
 # 方案：后端 TypeScript → Python 全量迁移
 
+> 历史迁移方案：其中的 local Worker、SSE、local picker、旧 Windows 直接 Python 启动和旧测试矩阵已被替换或移除。当前部署统一通过 `npm run build` 后的 `npm run start`。
+
 > 状态：已批准，P3-P7 已完成
 > 日期：2026-08-15
 > 范围：`server/*.ts`（8.5k 行）→ `server-py/`（Python）；前端 `src/` 不动

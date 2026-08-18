@@ -11,12 +11,13 @@
     "setup:py": "node scripts/setup-py.mjs",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "test:unit": "vitest run",
+    "test:startup": "node --test scripts/start-production.test.mjs",
     "test:e2e": "playwright test",
     "server:py": "node scripts/server-py.mjs",
     "test:py": "node scripts/run-py.mjs -m pytest server-py/tests",
-    "server": "npm run server:py",
-    "start": "npm run server:py",
-    "test:all": "npm run build && npm run lint && npm run test:unit && npm run test:py && npm run check:bundle && npm run test:e2e && npm run test:windows",
+    "server": "npm run start",
+    "start": "node scripts/start-production.mjs",
+    "test:all": "npm run build && npm run lint && npm run test:unit && npm run test:startup && npm run test:py && npm run check:bundle && npm run test:e2e && npm run test:windows",
     "test:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-scripts-smoke.ps1"
   },
   "dependencies": {
