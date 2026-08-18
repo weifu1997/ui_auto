@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"核对 URL 筛选恢复、持久化同步 outbox、水合优先级与 TanStack Query 冲突刷新行为"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"核对 RunsPage 路由位置读取、同步器 effect 依赖和异步清理约定"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"核对 Playwright fixture 数据边界、资源版本与回调类型的安全性"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"核对回归证据、lint、构建、单测和 E2E 门禁记录"}

@@ -33,7 +33,7 @@
 
 ## 排查记录（2026-08-16）
 
-### 已修复 8/11（全量干净运行从 24 通过 / 11 失败 → 30 通过 / 6 失败）
+### 2026-08-16 首轮修复记录（8/11）
 
 | 失败 | 根因 | 修复 |
 | --- | --- | --- |
@@ -41,10 +41,18 @@
 | runs-history ×2 | 同上：`**/runs` 不匹配 `?page=1&pageSize=8`；且响应缺分页字段 | glob 改 `**/runs**` + 响应补 `{runs,total,page,pageSize}` |
 | history-pagination ×2 | ①真实产品 bug：RunsPage 的 status 过滤器只写 URL 不读 URL（`useState("all")`），URL 恢复遗漏 status——已修 `src/pages/RunsPage.tsx:65`；②delivery 用例缺其余 6 个端点 mock（Promise.all 全有或全无）+ 断言过期（投递表渲染 通道/状态/时间 三列不显示 id、API 请求参数为 page/status/channel 而非 deliveryPage 等） | RunsPage 状态初始化从 URL 读取 + fixture 补全 + 断言改为真实渲染的行与请求参数 |
 
-### 未修复 3/11：production-auth（production-sync.spec.ts ×3）
+### 首轮未修复 3/11：production-auth（production-sync.spec.ts ×3）
 
 - 证据：`page.route("**/*")` 全局拦截显示 auth 模式（4175 + VITE_AUTH_REQUIRED=1）下应用只发出 `GET /api/auth/session`，工作区项目与 resources 请求从未经网络发出（应用从本地态渲染出项目与元素页），fixture 的“应用会网络加载工作区/资源”前提与实际行为不符；outbox 草稿创建正常、同步调度存在但资源写入请求不产生。
 - 结论：需进一步分析 auth 必需模式下的应用启动链路（会话 cookie/认证端点是否被 mock 补齐、本地态来源），或按产品现状重写 fixture。判定为 fixture/应用行为错位，非静默跳过；本 PRD 保留为后续任务。
+
+### 2026-08-18 收尾验证：11/11 已关闭
+
+- `npx playwright test tests/history-pagination.spec.ts --trace=on --reporter=line`：2 passed（6.9m）。通过 trace：`/tmp/autoflow-e2e-ZuwUfN/test-results/history-pagination-restores-run-filters-and-page-from-URL-chromium/trace.zip`、`/tmp/autoflow-e2e-ZuwUfN/test-results/history-pagination-restore-d23ad-y-filters-and-page-from-URL-chromium/trace.zip`。首轮失败的 trace/error context 仍保留在 `/tmp/autoflow-e2e-TyT5jC/`。
+- `npx playwright test tests/production-sync.spec.ts --trace=on --reporter=line`：3 passed（7.3m）。通过 trace 保留在 `/tmp/autoflow-e2e-EpzmWV/test-results/`；修复前的失败 trace/error context 保留在 `/tmp/autoflow-e2e-gqZNH7/` 与 `/tmp/autoflow-e2e-m8xaj2/`。
+- `npm run test:e2e`：38 passed（9.7m），覆盖 `[chromium]` 35 项和 `[production-auth]` 3 项，无失败。
+
+本轮修复闭环：RunsPage 从 URL 初始化 status；分页 fixture 匹配带路径和 query 的 resources/runs/deliveries；production-auth fixture 使用真实资源路径并区分写入尝试次数与资源版本；ServerWorkspaceSynchronizer 在 outbox 草稿存在时不让首次服务端水合覆盖本地修改，并以 `query.dataUpdatedAt` 触发相同响应内容的冲突刷新/重提交流程。
 
 ### 环境抖动（与本任务无关，干净重跑后消失）
 
@@ -52,7 +60,7 @@
 
 ## Acceptance Criteria
 
-- [x] AC1：`npm run test:e2e` 在干净环境全量通过（35/35），Windows 门禁另行验证。（2026-08-16：30/36，剩余 3 个 production-auth 待后续任务 + 3 个环境抖动）
+- [x] AC1：`npm run test:e2e` 在干净环境全量通过（38/38），Windows 门禁另行验证。（2026-08-18：38 passed，含 production-auth 3/3）
 - [x] AC2：每个失败项有归因记录（根因 + 修复方式或移除理由）写入本 PRD 或 research 文件。
 - [x] AC3：修复过程不修改与失败无关的断言；被修复的产品缺陷有对应回归测试。（RunsPage status 恢复为产品缺陷修复；其余为 fixture 修复）
 
