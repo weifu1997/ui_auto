@@ -20,9 +20,10 @@ object types over TypeScript constructs that emit runtime code.
   `FlowStep`, `Run`, `Environment`, `Variable`, `ElementAsset`).
 - Platform request/response models live beside their functions in
   `src/platform-api.ts`.
-- Worker request/event/task models live in `src/worker-api.ts`.
+- Platform request/response models stay in `src/platform-api.ts`; no local
+  Worker API model or client is supported.
 - Store-only state/action types remain private in their store module; export a
-  type only when another module consumes it (`ProjectMode`, `ApiRun`).
+  type only when another module consumes it (`PlatformSyncStatus`, `ApiRun`).
 - Component-only form or props types stay in the component file, such as
   `TemplateForm` in `src/pages/TemplatesPage.tsx` and `RunDetailPageProps` in
   `src/RunDetailPage.tsx`.
@@ -36,7 +37,6 @@ API, store, and page modules.
 Use literal unions for closed states:
 
 ```ts
-export type ProjectMode = "local" | "platform-enabled";
 export type PlatformSyncStatus = "synced" | "syncing" | "retrying" | "failed";
 ```
 

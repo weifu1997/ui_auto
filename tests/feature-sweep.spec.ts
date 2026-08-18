@@ -1,10 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
+import { installPlatformWorkspaceMock } from "./platform-workspace-fixtures";
 
 async function createProject(page: Page) {
+  await installPlatformWorkspaceMock(page);
   await page.goto("/projects");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
   await page.getByRole("button", { name: "新建项目" }).click();
   await page.getByLabel("项目名称").fill("流程资产回归");
   await page.getByRole("button", { name: "创建项目" }).click();
@@ -15,10 +15,10 @@ test("creates isolated environment, element, and a flow with user-authored steps
 
   await page.locator(".project-nav-item").filter({ hasText: "环境" }).click();
   await page.getByRole("button", { name: "新建环境" }).click();
-  await page.getByLabel("环境名称").fill("Worker 目标环境");
+  await page.getByLabel("环境名称").fill("远程执行环境");
   await page.getByLabel("基础地址").fill("https://example.test");
   await page.getByRole("button", { name: "保存配置" }).click();
-  await expect(page.getByRole("heading", { name: "Worker 目标环境" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "远程执行环境" })).toBeVisible();
 
   await page.locator(".project-nav-item").filter({ hasText: "元素库" }).click();
   await page.getByRole("button", { name: "新建元素" }).click();

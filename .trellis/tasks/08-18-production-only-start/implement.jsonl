@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "This removal changes launcher, FastAPI routes, frontend contracts, and E2E topology together."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "The production launcher and extracted recording session capability need an existing-pattern search before new helpers are introduced."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Platform API, service lifecycle, FastAPI application root, and Python test conventions."}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "Protect Platform run, validation, and recording behavior while removing the Worker route boundary."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "React/Vite structure, API boundaries, state, unit tests, and Playwright conventions."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Remove local persisted/fallback state without breaking server workspace hydration or secrets."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Required build, lint, unit, and browser validation guidance for the frontend removal."}
+{"file": "scripts/start-production.mjs", "reason": "Supported production wrapper that owns build/secret validation and NODE_ENV propagation."}
+{"file": "src/workspace-store.ts", "reason": "Platform-only workspace persistence removes the prior local product mode and demo seed."}
+{"file": "server-py/autoflow/recording_state.py", "reason": "Process-local Platform-owned recording login-state boundary replacing Worker-owned storage state."}

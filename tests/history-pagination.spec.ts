@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
 
 const session = {
@@ -29,8 +29,6 @@ async function seedRunsWorkspace(page: Page, getRuns: () => Array<Record<string,
           variablesByProject: { "run-project": [] },
           environmentsByProject: { "run-project": [] },
           activeEnvironmentByProject: { "run-project": "" },
-          projectModesById: { "run-project": "platform-enabled" },
-          platformProjectIdsById: { "run-project": "platform-run" },
           platformSyncStatusById: { "run-project": "synced" },
           platformSyncErrorById: {},
         },
@@ -106,17 +104,33 @@ test("restores delivery filters and page from URL", async ({ page }) => {
   await page.goto("/project/sauce-demo/data");
   await page.evaluate((value) => {
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value.session));
-    localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "platform-sauce" }));
+    localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "sauce-demo" }));
   }, { session });
-  await page.route("**/api/workspaces/pagination-workspace/projects", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects: [] }) }));
-  await page.route("**/api/platform/projects/platform-sauce", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { id: "platform-sauce", workspaceId: "pagination-workspace", sourceProjectId: "sauce-demo", name: "Sauce Demo" } }) }));
-  await page.route("**/api/platform/projects/platform-sauce/datasets", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ datasets: [] }) }));
-  await page.route("**/api/platform/projects/platform-sauce/revisions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ revisions: [{ id: "revision-1", revisionNumber: 5, status: "published", checksum: "checksum", createdBy: "user-1", createdAt: "2030-01-01T00:00:00.000Z", publishedAt: "2030-01-01T00:00:00.000Z", environmentId: "sauce-demo-web" }] }) }));
-  await page.route("**/api/platform/projects/platform-sauce/schedules", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ schedules: [] }) }));
-  await page.route("**/api/platform/projects/platform-sauce/webhook-triggers", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ triggers: [] }) }));
+  await page.route("**/api/workspaces/pagination-workspace/projects", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      projects: [{
+        id: "sauce-demo",
+        workspaceId: "pagination-workspace",
+        slug: "sauce-demo",
+        name: "Sauce Demo",
+        description: "",
+        archivedAt: null,
+        createdAt: "2030-01-01T00:00:00.000Z",
+        updatedAt: "2030-01-01T00:00:00.000Z",
+      }],
+    }),
+  }));
+  await page.route("**/api/platform/projects/sauce-demo/resources/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ resources: [] }) }));
+  await page.route("**/api/platform/projects/sauce-demo/settings", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ settings: { data: { activeEnvironmentId: "" }, version: 1 } }) }));
+  await page.route("**/api/platform/projects/sauce-demo", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { id: "sauce-demo", workspaceId: "pagination-workspace", sourceProjectId: "sauce-demo", name: "Sauce Demo" } }) }));
+  await page.route("**/api/platform/projects/sauce-demo/datasets", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ datasets: [] }) }));
+  await page.route("**/api/platform/projects/sauce-demo/revisions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ revisions: [{ id: "revision-1", revisionNumber: 5, status: "published", checksum: "checksum", createdBy: "user-1", createdAt: "2030-01-01T00:00:00.000Z", publishedAt: "2030-01-01T00:00:00.000Z", environmentId: "sauce-demo-web" }] }) }));
+  await page.route("**/api/platform/projects/sauce-demo/schedules", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ schedules: [] }) }));
+  await page.route("**/api/platform/projects/sauce-demo/webhook-triggers", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ triggers: [] }) }));
   await page.route("**/api/platform/workspaces/pagination-workspace/notification-channels", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ channels: [] }) }));
-  await page.route("**/api/platform/projects/platform-sauce/notification-subscriptions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ subscriptions: [] }) }));
-  await page.route("**/api/platform/projects/platform-sauce/deliveries?*", (route) => {
+  await page.route("**/api/platform/projects/sauce-demo/notification-subscriptions", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ subscriptions: [] }) }));
+  await page.route("**/api/platform/projects/sauce-demo/deliveries?*", (route) => {
     deliveryQuery = new URL(route.request().url()).searchParams;
     return route.fulfill({
       contentType: "application/json",

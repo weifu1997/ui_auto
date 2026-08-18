@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 
 const session = {
   token: "governance-ui-token",
@@ -20,11 +20,11 @@ const analyticsBody = {
 };
 
 test("renders quality analysis, audit log and release audit", async ({ page }) => {
-  await page.route("**/api/platform/projects/platform-sauce/analytics*", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/analytics*", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify(analyticsBody),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/audit-events*", (route) => {
+  await page.route("**/api/platform/projects/sauce-demo/audit-events*", (route) => {
     const url = new URL(route.request().url());
     // 发布审计面板走 action=flow_revision. 过滤；审计日志面板走全量分页查询。
     const body = url.searchParams.get("action") === "flow_revision."
@@ -36,7 +36,7 @@ test("renders quality analysis, audit log and release audit", async ({ page }) =
   await page.goto("/project/sauce-demo/governance");
   await page.evaluate((value) => {
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value.session));
-    localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "platform-sauce" }));
+    localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "sauce-demo" }));
   }, { session });
   await page.reload();
 

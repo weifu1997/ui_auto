@@ -1,11 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
 import { configurePlatformRunUiMocks } from "./platform-ui-fixtures";
+import { installPlatformWorkspaceMock } from "./platform-workspace-fixtures";
 
 async function createProject(page: Page, name: string) {
+  await installPlatformWorkspaceMock(page);
   await page.goto("/projects");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
   await page.getByRole("button", { name: "新建项目" }).click();
   await page.getByLabel("项目名称").fill(name);
   await page.getByRole("button", { name: "创建项目" }).click();

@@ -12,7 +12,6 @@ src/
 |   `-- shared.tsx               # Shared page layout and workflow helpers
 |-- *-store.ts                   # Zustand stores
 |-- platform-api.ts              # Platform HTTP contracts and functions
-|-- worker-api.ts                # Local Worker HTTP/SSE boundary
 |-- platform-context.ts          # Platform browser-persistence helpers
 |-- App.css                      # Shared application component styles
 |-- responsive.css               # Responsive overrides
@@ -54,7 +53,6 @@ new route screen rather than adding another root-level page.
   name, `Project`, `Flow`, `Environment`, and related types are used throughout
   the live UI.
 - Put Platform HTTP calls and response types in `src/platform-api.ts`.
-- Put local Worker HTTP and SSE calls in `src/worker-api.ts`.
 - Put cross-page mutable state in a focused `*-store.ts` Zustand module, as in
   `workspace-store.ts`, `run-store.ts`, and `secret-store.ts`.
 - Keep localStorage compatibility and project/session mapping in
@@ -79,7 +77,7 @@ existing structural classes such as `surface`, `panel-heading`, and
 - React components and component files: PascalCase (`ProjectsPage`,
   `ServerWorkspaceSynchronizer`).
 - Services, stores, and plain utilities: kebab-case files
-  (`platform-api.ts`, `local-worker-run.ts`).
+  (`platform-api.ts`, `recording-editor-state.ts`).
 - Hooks: `use` prefix; existing shared hook API lives in `src/router.tsx`.
 - Vitest: `*.test.ts` or `*.test.tsx` beside source.
 - Playwright: behavior-focused `*.spec.ts` under `tests/`.

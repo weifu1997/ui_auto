@@ -1,18 +1,17 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import { configurePlatformRunUiMocks } from "./platform-ui-fixtures";
+import { installPlatformWorkspaceMock } from "./platform-workspace-fixtures";
 
 test("completes a user journey from a new project to a Platform run report", async ({ page }) => {
+  await installPlatformWorkspaceMock(page);
   await page.goto("/projects");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-
   await page.getByRole("button", { name: "新建项目" }).click();
   await page.getByLabel("项目名称").fill("完整用户流程");
   await page.getByRole("button", { name: "创建项目" }).click();
 
   await page.locator(".project-nav-item").filter({ hasText: "环境" }).click();
   await page.getByRole("button", { name: "新建环境" }).click();
-  await page.getByLabel("环境名称").fill("本地 Worker 环境");
+  await page.getByLabel("环境名称").fill("平台执行环境");
   await page.getByLabel("基础地址").fill("http://127.0.0.1:8787");
   await page.getByRole("button", { name: "保存配置" }).click();
 
@@ -38,6 +37,7 @@ test("completes a user journey from a new project to a Platform run report", asy
   await page.getByRole("button", { name: "保存" }).click();
   await page.locator(".editor-topbar").getByRole("button").first().click();
   const calls = await configurePlatformRunUiMocks(page, "project");
+  await page.reload();
 
   await page.getByRole("button", { name: "运行流程 访问登录页" }).click();
   await expect(page).toHaveURL(/\/project\/project\/runs$/);

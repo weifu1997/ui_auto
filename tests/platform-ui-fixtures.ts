@@ -4,6 +4,8 @@ export type PlatformUiCalls = {
   revisions: Record<string, unknown>[];
   secrets: Record<string, unknown>[];
   runs: Record<string, unknown>[];
+  retryRunIds?: string[];
+  createdRuns?: Record<string, unknown>[];
   batches: Record<string, unknown>[];
 };
 
@@ -35,6 +37,7 @@ type MockRun = {
   artifacts: Array<Record<string, unknown>>;
   events: Array<Record<string, unknown>>;
   flowOutputs: Array<Record<string, unknown>>;
+  retryOfRunId?: string | null;
 };
 
 type MockBatch = {
@@ -75,7 +78,7 @@ export async function configurePlatformRunUiMocks(
   localProjectId: string,
   { batchRunStatus = "success" }: PlatformRunUiMockOptions = {},
 ) {
-  const platformProjectId = `platform-${localProjectId}`;
+  const platformProjectId = localProjectId;
   const calls: PlatformUiCalls = { revisions: [], secrets: [], runs: [], batches: [] };
   const runs: MockRun[] = [];
 
@@ -130,6 +133,60 @@ export async function configurePlatformRunUiMocks(
     });
   }, localProjectId) as FixtureRevision[];
   const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
+  const workspaceSeed = await page.evaluate((localId) => {
+    const persisted = JSON.parse(localStorage.getItem("autoflow-workspace-projects") ?? "{}") as { state?: Record<string, unknown> };
+    const state = persisted.state ?? {};
+    const collections = <T>(key: string) => {
+      const value = (state[key] as Record<string, T[] | undefined> | undefined)?.[localId];
+      return Array.isArray(value) ? value : [];
+    };
+    return {
+      project: ((state.projects as Array<Record<string, unknown>> | undefined) ?? []).find((item) => item.id === localId),
+      flows: collections<Record<string, unknown>>("flowsByProject"),
+      elements: collections<Record<string, unknown>>("elementsByProject"),
+      variables: collections<Record<string, unknown>>("variablesByProject"),
+      environments: collections<Record<string, unknown>>("environmentsByProject"),
+      activeEnvironmentId: (state.activeEnvironmentByProject as Record<string, string | undefined> | undefined)?.[localId] ?? "",
+    };
+  }, localProjectId);
+  const platformResourceResponse = (items: Array<Record<string, unknown>>) => ({
+    resources: items.map((data) => ({
+      id: String(data.id),
+      data,
+      version: 1,
+      archivedAt: null,
+      updatedAt: "2030-01-01T00:00:00.000Z",
+      updatedBy: "platform-ui-user",
+    })),
+  });
+
+  await page.route(`**/api/workspaces/${session.workspaces[0].id}/projects`, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      projects: [{
+        id: platformProjectId,
+        workspaceId: session.workspaces[0].id,
+        slug: platformProjectId,
+        name: typeof workspaceSeed.project?.name === "string" ? workspaceSeed.project.name : platformProjectId,
+        description: typeof workspaceSeed.project?.description === "string" ? workspaceSeed.project.description : "",
+        archivedAt: null,
+        createdAt: "2030-01-01T00:00:00.000Z",
+        updatedAt: "2030-01-01T00:00:00.000Z",
+      }],
+    }),
+  }));
+  await page.route(`**/api/platform/projects/${platformProjectId}/resources/**`, (route) => {
+    const type = new URL(route.request().url()).pathname.split("/").at(-1);
+    const items = type === "flows" ? workspaceSeed.flows
+      : type === "elements" ? workspaceSeed.elements
+        : type === "variables" ? workspaceSeed.variables
+          : type === "environments" ? workspaceSeed.environments : [];
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(platformResourceResponse(items)) });
+  });
+  await page.route(`**/api/platform/projects/${platformProjectId}/settings`, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ settings: { data: { activeEnvironmentId: workspaceSeed.activeEnvironmentId }, version: 1 } }),
+  }));
 
   await page.route(`**/api/platform/projects/${platformProjectId}/secrets`, async (route) => {
     if (route.request().method() === "POST") {
@@ -393,10 +450,183 @@ export async function configurePlatformRunUiMocks(
   return calls;
 }
 
+// This fixture models the retry boundary with two published revisions of the same flow.
+// It intentionally keeps the old A snapshots after B becomes current so UI tests can
+// prove fresh-runs resolve B while retries clone A exactly once.
+export async function configureRetryReproductionUiMocks(page: Page, localProjectId: string) {
+  const platformProjectId = localProjectId;
+  const calls: PlatformUiCalls = {
+    revisions: [],
+    secrets: [],
+    runs: [],
+    retryRunIds: [],
+    createdRuns: [],
+    batches: [],
+  };
+  await configurePlatformSession(page, localProjectId, platformProjectId);
+
+  const source = await page.evaluate((localId) => {
+    const persisted = JSON.parse(localStorage.getItem("autoflow-workspace-projects") ?? "{}") as { state?: Record<string, unknown> };
+    const state = persisted.state ?? {};
+    const flows = Array.isArray((state.flowsByProject as Record<string, unknown[] | undefined> | undefined)?.[localId])
+      ? (state.flowsByProject as Record<string, Array<Record<string, unknown>>>)[localId]
+      : [];
+    const environments = Array.isArray((state.environmentsByProject as Record<string, unknown[] | undefined> | undefined)?.[localId])
+      ? (state.environmentsByProject as Record<string, Array<Record<string, unknown>>>)[localId]
+      : [];
+    const activeEnvironmentId = (state.activeEnvironmentByProject as Record<string, string | undefined> | undefined)?.[localId];
+    return {
+      flow: flows[0],
+      environment: environments.find((item) => item.id === activeEnvironmentId) ?? environments[0],
+      elements: Array.isArray((state.elementsByProject as Record<string, unknown[] | undefined> | undefined)?.[localId])
+        ? (state.elementsByProject as Record<string, unknown[]>)[localId]
+        : [],
+    };
+  }, localProjectId) as { flow?: Record<string, unknown>; environment?: Record<string, unknown>; elements: unknown[] };
+  if (!source.flow || !source.environment || typeof source.flow.id !== "string" || typeof source.environment.id !== "string") {
+    throw new Error("retry reproduction fixture requires one flow and one environment");
+  }
+
+  const baseFlow = {
+    ...source.flow,
+    name: "重现流程",
+    steps: Array.isArray(source.flow.definition) ? source.flow.definition : [],
+  };
+  const revisionA = {
+    id: "revision-retry-a",
+    checksum: "checksum-retry-a",
+    response: {
+      id: "revision-retry-a",
+      flowId: source.flow.id,
+      flowName: "重现流程",
+      revisionNumber: 1,
+      status: "superseded",
+      checksum: "checksum-retry-a",
+      createdBy: "platform-ui-user",
+      createdAt: "2030-01-01T00:00:00.000Z",
+      publishedAt: "2030-01-01T00:00:00.000Z",
+      environmentId: source.environment.id,
+      stepCount: baseFlow.steps.length,
+    },
+    flow: baseFlow,
+  };
+  const revisionB = {
+    id: "revision-retry-b",
+    checksum: "checksum-retry-b",
+    response: {
+      id: "revision-retry-b",
+      flowId: source.flow.id,
+      flowName: "重现流程",
+      revisionNumber: 2,
+      status: "published",
+      checksum: "checksum-retry-b",
+      createdBy: "platform-ui-user",
+      createdAt: "2030-01-02T00:00:00.000Z",
+      publishedAt: "2030-01-02T00:00:00.000Z",
+      environmentId: source.environment.id,
+      stepCount: baseFlow.steps.length,
+    },
+    flow: baseFlow,
+    rows: [
+      { number: 1, data: { account: "current-1" } },
+      { number: 2, data: { account: "current-2" } },
+    ],
+  };
+  const makeRun = (
+    id: string,
+    revision: typeof revisionA | typeof revisionB,
+    status: string,
+    options: { retryOfRunId?: string | null; flow?: Record<string, unknown>; row?: Record<string, unknown> } = {},
+  ): MockRun => ({
+    id,
+    projectId: platformProjectId,
+    revisionId: revision.id,
+    environmentId: source.environment!.id,
+    agentId: "platform-ui-agent",
+    status,
+    snapshot: {
+      flow: options.flow ?? revision.flow,
+      environment: source.environment,
+      elements: source.elements,
+      flowRevisionChecksum: revision.checksum,
+      datasetVersion: revision.id === revisionB.id ? { id: "dataset-version-b", checksum: "dataset-checksum-b" } : { id: "dataset-version-a", checksum: "dataset-checksum-a" },
+      datasetRow: options.row ?? null,
+    },
+    cancellationRequested: false,
+    retryOfRunId: options.retryOfRunId ?? null,
+    createdAt: "2030-01-03T00:00:00.000Z",
+    updatedAt: "2030-01-03T00:00:01.000Z",
+    artifacts: [],
+    events: status === "success" ? [{ id: 1, kind: "step.completed", data: { index: 0, title: "打开页面", durationMs: 100 }, at: "2030-01-03T00:00:01.000Z" }] : [],
+    flowOutputs: [],
+  });
+  const sourceSuccess = makeRun("source-success-a", revisionA, "success", { row: { number: 1, data: { account: "historical-a" } } });
+  const sourceFailed = makeRun("source-failed-a", revisionA, "failed", { row: { number: 2, data: { account: "historical-failed-a" } } });
+  const active = makeRun("source-running-a", revisionA, "running");
+  const missingFlow = makeRun("source-missing-flow", revisionA, "success", { flow: { name: "缺少流程标识" } });
+  const noPublished = makeRun("source-no-published", revisionA, "success", { flow: { ...baseFlow, id: "flow-without-published" } });
+  const runs: MockRun[] = [sourceSuccess, sourceFailed, active, missingFlow, noPublished];
+
+  await page.route(`**/api/platform/projects/${platformProjectId}/revisions**`, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ revisions: [revisionB.response, revisionA.response] }) });
+  });
+  await page.route(`**/api/platform/projects/${platformProjectId}/run-batches**`, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ batches: [], total: 0, page: 1, pageSize: 20 }) });
+  });
+  await page.route(`**/api/platform/projects/${platformProjectId}/runs**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const retryMatch = /\/runs\/([^/]+)\/retry$/.exec(url.pathname);
+    if (request.method() === "POST" && retryMatch) {
+      const prior = runs.find((run) => run.id === retryMatch[1]);
+      calls.retryRunIds!.push(retryMatch[1]);
+      if (!prior || (prior.status !== "failed" && prior.status !== "canceled")) {
+        await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "RUN_NOT_RETRYABLE" }) });
+        return;
+      }
+      const clone = makeRun("retry-failed-a", revisionA, "queued", {
+        retryOfRunId: prior.id,
+        row: (prior.snapshot.datasetRow as Record<string, unknown> | null) ?? undefined,
+      });
+      runs.unshift(clone);
+      calls.createdRuns!.push(clone);
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ runIds: [clone.id], runs: [clone] }) });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/runs")) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      calls.runs.push(body);
+      if (body.flowId !== source.flow!.id || Object.hasOwn(body, "revisionId")) {
+        await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "PUBLISHED_REVISION_REQUIRED" }) });
+        return;
+      }
+      const freshRuns = revisionB.rows.map((row) => makeRun(
+        `fresh-b-${row.number}`,
+        revisionB,
+        "queued",
+        { row },
+      ));
+      runs.unshift(...freshRuns);
+      calls.createdRuns!.push(...freshRuns);
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ runIds: freshRuns.map((run) => run.id), runs: freshRuns }) });
+      return;
+    }
+    if (request.method() === "GET" && /\/runs\/[^/]+$/.test(url.pathname)) {
+      const runId = url.pathname.split("/").at(-1);
+      const run = runs.find((item) => item.id === runId);
+      await route.fulfill({ status: run ? 200 : 404, contentType: "application/json", body: JSON.stringify({ run }) });
+      return;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ runs, total: runs.length, page: 1, pageSize: 8 }) });
+  });
+
+  return calls;
+}
+
 export async function configurePlatformRecordingUiMocks(
   page: Page,
   localProjectId: string,
-  platformProjectId = `platform-${localProjectId}`,
+  platformProjectId = localProjectId,
 ) {
   const calls: RecordingUiCalls = { sessions: [], validations: [], eventCursors: [] };
   await configurePlatformSession(page, localProjectId, platformProjectId);

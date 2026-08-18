@@ -1,11 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
 import { configurePlatformRunUiMocks } from "./platform-ui-fixtures";
+import { installPlatformWorkspaceMock } from "./platform-workspace-fixtures";
 
 async function createProject(page: Page, name: string) {
+  await installPlatformWorkspaceMock(page);
   await page.goto("/projects");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
   await page.getByRole("button", { name: "新建项目" }).click();
   await page.getByLabel("项目名称").fill(name);
   await page.getByRole("button", { name: "创建项目" }).click();
@@ -67,7 +67,7 @@ test("persists managed assets, settings, and project archival", async ({ page })
   await page.getByRole("button", { name: "归档项目" }).click();
   await page.getByRole("button", { name: "归档项目", exact: true }).click();
   await expect(page).toHaveURL(/\/projects$/);
-  await expect(page.getByText("Sauce Demo 真实验证", { exact: true })).toBeVisible();
+  await expect(page.getByText("尚未创建测试项目", { exact: true })).toBeVisible();
 });
 
 test("assembles a flow-list Platform run with its active environment and variables", async ({ page }) => {
@@ -96,6 +96,7 @@ test("assembles a flow-list Platform run with its active environment and variabl
   await expect(page).toHaveURL(/\/project\/project\/flows$/);
 
   const calls = await configurePlatformRunUiMocks(page, "project");
+  await page.reload();
 
   await page.getByRole("button", { name: "运行流程 从列表运行的流程" }).click();
   await expect(page).toHaveURL(/\/project\/project\/runs$/);

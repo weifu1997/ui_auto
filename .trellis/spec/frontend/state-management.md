@@ -48,7 +48,7 @@ Persistence is intentional, not the default:
 
 - `workspace-store.ts` persists project documents under
   `autoflow-workspace-projects` and contains migrations for retired demo data
-  and project modes.
+  plus obsolete local-product metadata.
 - `sync-outbox.ts` persists recoverable server-workspace drafts under
   `autoflow-sync-outbox-v1`; secret variable values are always blanked before
   storage.
@@ -62,7 +62,7 @@ Persistence is intentional, not the default:
 
 When adding persisted state, update the existing migration/normalization path
 and cover restore behavior. `tests/workbench.spec.ts` exercises workspace
-migration and `tests/secret-injection.spec.ts` enforces the secret boundary.
+migration; secret values must remain absent from every persisted shape.
 
 ## Server and Synchronization State
 
@@ -74,6 +74,13 @@ failures, and surface conflicts. `ServerWorkspaceSynchronizer` restores the
 persistent outbox draft before hydration so a refresh cannot overwrite
 unsaved local edits. See `src/ServerWorkspaceSynchronizer.tsx` and the
 compatibility synchronizer in `src/App.tsx`.
+
+When a conflict action calls `query.refetch()`, the hydration effect must depend
+on both `query.data` and `query.dataUpdatedAt`. TanStack Query may retain the
+same `data` reference through structural sharing when the remote document is
+unchanged; `dataUpdatedAt` is the completion signal that still re-runs refresh
+and resubmit actions. A stored `autoflow-sync-outbox-v1` draft wins over the
+initial server document, except for an explicit "refresh remote" action.
 
 The run center loads Platform history on first `/runs` entry and merges it into
 `run-store` by run id. Non-terminal Platform runs use a short poll; terminal

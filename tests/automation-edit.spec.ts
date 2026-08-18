@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
 
 const session = {
@@ -8,11 +8,11 @@ const session = {
 };
 
 async function installAutomationMocks(page: Page) {
-  await page.route("**/api/platform/projects/platform-sauce/datasets", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/datasets", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ datasets: [] }),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/revisions", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/revisions", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       revisions: [{
@@ -27,7 +27,7 @@ async function installAutomationMocks(page: Page) {
       }],
     }),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/schedules", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/schedules", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       schedules: [{
@@ -46,7 +46,7 @@ async function installAutomationMocks(page: Page) {
       }],
     }),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/webhook-triggers", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/webhook-triggers", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       triggers: [{
@@ -74,11 +74,11 @@ async function installAutomationMocks(page: Page) {
       }],
     }),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/notification-subscriptions", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/notification-subscriptions", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ subscriptions: [] }),
   }));
-  await page.route("**/api/platform/projects/platform-sauce/deliveries**", (route) => route.fulfill({
+  await page.route("**/api/platform/projects/sauce-demo/deliveries**", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ deliveries: [] }),
   }));
@@ -88,7 +88,7 @@ async function openAutomations(page: Page) {
   await page.goto("/project/sauce-demo/data");
   await page.evaluate((value) => {
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value.session));
-    localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "platform-sauce" }));
+    localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ "sauce-demo": "sauce-demo" }));
   }, { session });
   await page.reload();
   await page.goto("/project/sauce-demo/automations");
@@ -98,7 +98,7 @@ async function openAutomations(page: Page) {
 test("edits an existing schedule", async ({ page }) => {
   let scheduleUpdate: Record<string, unknown> | undefined;
   await installAutomationMocks(page);
-  await page.route("**/api/platform/projects/platform-sauce/schedules/schedule-1", async (route) => {
+  await page.route("**/api/platform/projects/sauce-demo/schedules/schedule-1", async (route) => {
     if (route.request().method() !== "PUT") {
       await route.continue();
       return;
@@ -122,7 +122,7 @@ test("edits an existing schedule", async ({ page }) => {
 test("rotates a webhook signing secret and shows it once", async ({ page }) => {
   let rotateCalls = 0;
   await installAutomationMocks(page);
-  await page.route("**/api/platform/projects/platform-sauce/webhook-triggers/trigger-1/rotate-secret", (route) => {
+  await page.route("**/api/platform/projects/sauce-demo/webhook-triggers/trigger-1/rotate-secret", (route) => {
     rotateCalls += 1;
     return route.fulfill({
       contentType: "application/json",

@@ -25,13 +25,15 @@ Run checks in proportion to the change:
 npm run lint
 npm run build
 npm run test:unit
+npm run test:startup
+npm run test:py
 npm run check:bundle
 ```
 
 - `npm run lint` runs Oxlint. `.oxlintrc.json` makes the Rules of Hooks an error
   and mixed component exports a warning.
 - `npm run build` runs the composite TypeScript build and the Vite production
-  build, including sourcemaps.
+  build.
 - `npm run check:bundle` enforces the 500 kB JS chunk budget against
   `dist/assets/*.js`.
 - `npm run test:unit` runs Vitest in jsdom with `src/test-setup.ts`.
@@ -41,14 +43,13 @@ cross-page changes, run the relevant Playwright spec and then the full suite
 when practical:
 
 ```bash
-npx playwright test tests/workbench.spec.ts
-npx playwright test tests/platform-sync.spec.ts
+npx playwright test --project=chromium tests/platform-run.spec.ts
+npx playwright test --project=chromium tests/platform-sync.spec.ts
 npm run test:e2e
 ```
 
-The complete project gate is `npm run test:all`; it also exercises Platform,
-managed runner, Worker, and browser integrations and is more expensive than the
-frontend-only checks.
+The complete project gate is `npm run test:all`; it exercises the production
+launcher, Platform backend, browser flows, and Windows deployment smoke.
 
 ## Test Placement and Style
 
@@ -74,10 +75,10 @@ Choose regression coverage by risk. Examples:
 - Workspace migration/persistence: `tests/workbench.spec.ts`.
 - Server synchronization/version conflicts: `tests/platform-sync.spec.ts` and
   `tests/templates-and-conflicts.spec.ts`.
-- Local Worker failure truthfulness: `tests/worker-ui.spec.ts`.
-- Secret lifetime/redaction: `tests/secret-injection.spec.ts`.
-- Run request composition: `tests/worker-run.spec.ts` and
-  `tests/saucedemo-e2e.spec.ts`.
+- Production launcher prerequisites: `scripts/start-production.test.mjs`.
+- Platform run request composition: `tests/platform-run.spec.ts`.
+- Recording and server session state: `tests/recording.spec.ts` and
+  `server-py/tests/unit/test_recording_state.py`.
 
 ## Accessibility and Interaction Review
 
@@ -97,7 +98,7 @@ Choose regression coverage by risk. Examples:
 
 - State is owned at the correct layer and project-scoped collections cannot
   overwrite another project.
-- Platform and Worker calls remain in their API modules, with IDs passed through
+- Platform calls remain in `platform-api.ts`, with IDs passed through
   `encodeURIComponent`.
 - Async effects/subscriptions clean up and do not update stale components.
 - Secrets and raw run requests do not enter persistence, logs, screenshots, or

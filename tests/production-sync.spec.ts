@@ -29,6 +29,7 @@ async function installProductionWorkspace(page: Page, options: {
   ) => Promise<{ status?: number; error?: string } | void> | { status?: number; error?: string } | void;
 }) {
   let version = 1;
+  let writeAttempts = 0;
   await page.route("**/api/auth/session", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify(session),
@@ -55,7 +56,7 @@ async function installProductionWorkspace(page: Page, options: {
       settings: { data: { activeEnvironmentId: environment.id }, version: 1 },
     }),
   }));
-  await page.route("**/api/platform/projects/production-p/resources/*", async (route) => {
+  await page.route("**/api/platform/projects/production-p/resources/**", async (route) => {
     const request = route.request();
     const segments = new URL(request.url()).pathname.split("/").filter(Boolean);
     const type = segments.at(-2) === "resources" ? segments.at(-1)! : segments.at(-2)!;
@@ -80,7 +81,7 @@ async function installProductionWorkspace(page: Page, options: {
     }
     if ((request.method() === "POST" && type === "elements") || (request.method() === "PUT" && type === "elements")) {
       const body = request.postDataJSON() as Record<string, unknown>;
-      const result = await options.onElementWrite?.(++version, request.method() as "POST" | "PUT", body);
+      const result = await options.onElementWrite?.(++writeAttempts, request.method() as "POST" | "PUT", body);
       if (result?.status && result.status !== 200) {
         await route.fulfill({
           status: result.status,
@@ -89,6 +90,7 @@ async function installProductionWorkspace(page: Page, options: {
         });
         return;
       }
+      version += 1;
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import { configurePlatformRunUiMocks } from "./platform-ui-fixtures";
 
 test("assembles a Platform fixture run and renders the mocked completed report", async ({ page }) => {
@@ -12,8 +12,8 @@ test("assembles a Platform fixture run and renders the mocked completed report",
           projects: [
             {
               id: "runtime",
-              name: "Worker UI 回归",
-              description: "真实 Worker 执行链路",
+              name: "Platform UI 回归",
+              description: "Platform 执行链路",
               environmentCount: 1,
               flowCount: 1,
               lastRun: "尚未运行",
@@ -95,8 +95,8 @@ test("assembles a Platform fixture run and renders the mocked completed report",
             runtime: [
               {
                 id: "fixture",
-                name: "Worker Fixture",
-                description: "本地 Worker 测试站点",
+                name: "Platform Fixture",
+                description: "Platform 测试站点",
                 baseUrl: "http://127.0.0.1:8787",
                 browser: "Chromium",
                 auth: "无认证",
@@ -115,6 +115,7 @@ test("assembles a Platform fixture run and renders the mocked completed report",
   await page.reload();
   await page.goto("/project/runtime/flows");
   await configurePlatformRunUiMocks(page, "runtime");
+  await page.reload();
 
   await page.getByRole("button", { name: "运行流程 Fixture 登录流程" }).click();
   await expect(page).toHaveURL(/\/project\/runtime\/runs$/);
@@ -123,7 +124,7 @@ test("assembles a Platform fixture run and renders the mocked completed report",
 
   const refreshResponse = page.waitForResponse(
     (response) =>
-      /\/api\/platform\/projects\/platform-runtime\/runs$/.test(response.url()) &&
+      /\/api\/platform\/projects\/runtime\/runs(?:\?.*)?$/.test(response.url()) &&
       response.request().method() === "GET",
   );
   await page.getByRole("button", { name: "刷新状态" }).click();

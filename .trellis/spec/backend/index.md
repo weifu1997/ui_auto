@@ -11,7 +11,10 @@ Server-side conventions and executable contracts for the Platform API layer unde
 - Automation routes support schedule/webhook/channel updates, webhook secret rotation, and channel test delivery without exposing stored secrets.
 - Run and delivery list endpoints support server-side `page`/`pageSize` filtering and return `total` alongside the existing `runs`/`deliveries` arrays.
 - Tests: `server-py/tests/unit` with `npm run test:py`, Python smoke scripts under `server-py/tests/smoke/`.
-- Environment setup and startup: `npm run setup:py`, `npm run server:py`, `npm run test:py`.
+- Environment setup and validation: `npm run setup:py`, `npm run test:py`, and
+  `npm run start` for the supported production service. `server:py` is an
+  internal launcher used by the production wrapper and is not a deployment
+  entry point.
 
 ## Guidelines Index
 
@@ -19,3 +22,4 @@ Server-side conventions and executable contracts for the Platform API layer unde
 | --- | --- |
 | [Audit & Governance Contracts](./audit-governance.md) | Audit event naming, audit query API, analytics API, notification env wiring, secret snapshot mechanics |
 | [Run Batch & Recording Contracts](./run-batch-recording-contracts.md) | Batch execution and browser-recording routes, validation, idempotency, lifecycle, and regression requirements |
+| [Production Startup](./production-startup.md) | `npm run build` / `npm run start` prerequisites, environment contract, and Worker route removal |

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
 
 const session = {
@@ -51,8 +51,6 @@ async function seedRunsPage(page: Page, getRuns: () => Array<Record<string, unkn
           variablesByProject: { "run-project": [] },
           environmentsByProject: { "run-project": [] },
           activeEnvironmentByProject: { "run-project": "" },
-          projectModesById: { "run-project": "platform-enabled" },
-          platformProjectIdsById: { "run-project": "platform-run" },
           platformSyncStatusById: { "run-project": "synced" },
           platformSyncErrorById: {},
         },

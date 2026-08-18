@@ -31,7 +31,7 @@ Playwright suites rather than on framework defaults.
   `src/pages/ElementsPage.tsx`, `src/pages/shared.tsx`
 - State and persistence: `src/workspace-store.ts`, `src/run-store.ts`,
   `src/secret-store.ts`
-- HTTP boundaries: `src/platform-api.ts`, `src/worker-api.ts`
+- HTTP boundary: `src/platform-api.ts` (same-origin `/api`)
 - Tests: `src/flow-store.test.ts`, `tests/workbench.spec.ts`,
   `tests/platform-sync.spec.ts`
 

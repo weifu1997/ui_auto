@@ -43,8 +43,8 @@ synchronizers in `src/App.tsx` and `src/ServerWorkspaceSynchronizer.tsx`.
 - Guard state updates after long-lived async work. `ApplicationSessionGate` in
   `src/App.tsx` uses an `active` flag during session restoration.
 - Always return cleanup for event listeners and subscriptions. The router
-  removes `popstate`; Worker task subscriptions return `source.close()` from
-  `src/worker-api.ts`; synchronization effects clear their resources.
+  removes `popstate`; polling and synchronization effects clear their timers
+  and subscriptions.
 - Use functional state updates when the next value depends on the previous
   value, as in `setContextRevision((value) => value + 1)`.
 
@@ -53,8 +53,8 @@ to make an effect run conditionally; put the condition inside the hook.
 
 ## Server Data
 
-HTTP calls live in `src/platform-api.ts` and `src/worker-api.ts`. Most pages use
-local loading/data state and an explicit loader. TanStack Query is currently
+HTTP calls live in `src/platform-api.ts` and use same-origin `/api`. Most pages
+use local loading/data state and an explicit loader. TanStack Query is currently
 reserved for the server workspace synchronizer (`useQuery` in
 `src/ServerWorkspaceSynchronizer.tsx`) and related invalidation
 (`useQueryClient` in `src/pages/ProjectsPage.tsx`). Follow the surrounding data

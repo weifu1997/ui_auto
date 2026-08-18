@@ -64,8 +64,8 @@ try {
 }
 ```
 
-Keep API construction and typed errors in `platform-api.ts` or `worker-api.ts`;
-components orchestrate calls and render states.
+Keep API construction and typed errors in `platform-api.ts`; components
+orchestrate calls and render states.
 
 ## Styling
 
@@ -78,7 +78,7 @@ page. Inline style objects are not the normal component styling mechanism.
 
 - Prefer Ant Design's labeled `Form.Item` and semantic controls. Playwright
   flows intentionally locate inputs by label and commands by role in
-  `tests/workbench.spec.ts` and `tests/saucedemo-e2e.spec.ts`.
+  `tests/workbench.spec.ts` and `tests/platform-run.spec.ts`.
 - Give icon-only buttons an `aria-label` that includes the affected item when
   applicable. See the project menu in `src/pages/ProjectsPage.tsx` and element
   actions in `src/pages/ElementsPage.tsx`.
@@ -90,11 +90,10 @@ page. Inline style objects are not the normal component styling mechanism.
 
 ## Avoid
 
-- Do not fabricate a successful result when Worker or Platform calls fail.
-  `tests/worker-ui.spec.ts` protects this behavior.
+- Do not fabricate a successful result when Platform calls fail; display or
+  propagate the Platform error instead.
 - Do not read or render secret values from persisted run data. Secret entry is
-  session-only; `tests/secret-injection.spec.ts` verifies that it is requested
-  again after reload.
+  session-only and must be requested again when a run needs it.
 - Do not extract a one-off page fragment into a generic component directory.
 - Do not mix a broad visual redesign or export conversion into a focused page
   change.

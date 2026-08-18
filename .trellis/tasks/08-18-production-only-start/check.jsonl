@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review production launcher to frontend to backend boundary coherence."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Check FastAPI lifecycle, Platform contracts, and Python test expectations."}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "Confirm Worker removal preserves supported run and recording contracts."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Check API client, routing, state, and Playwright impact."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Check removal of Worker API types and narrowing boundaries."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Apply the project validation and review standards."}
+{"file": ".trellis/spec/backend/production-startup.md", "reason": "Verify the build, secret, listener, static-serving, and removed Worker-route contract."}
+{"file": "scripts/start-production.test.mjs", "reason": "Regression coverage for startup prerequisites and production environment propagation."}
+{"file": "server-py/tests/unit/test_recording_state.py", "reason": "Regression coverage for the extracted recording-state provider and removed Worker route."}
