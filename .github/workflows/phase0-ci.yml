@@ -1,0 +1,108 @@
+name: Phase 0 CI
+
+on:
+  pull_request:
+    branches:
+      - python_3.1
+  push:
+    branches:
+      - python_3.1
+
+permissions:
+  contents: read
+
+env:
+  # The Windows deployment smoke imports node:sqlite, which requires the
+  # current Node 22 runtime. The product's deployment minimum remains >=20.12.
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  quality-linux:
+    name: quality-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Set up Python test environment
+        run: npm run setup:py
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run frontend unit tests
+        run: npm run test:unit
+
+      - name: Run production startup tests
+        run: npm run test:startup
+
+      - name: Run Python tests
+        run: npm run test:py
+
+      - name: Check bundle budget
+        run: npm run check:bundle
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: ${{ always() && hashFiles('playwright-report/**') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-linux
+          path: playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deployment-windows:
+    name: deployment-windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Set up Python test environment
+        run: npm run setup:py
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run Windows deployment smoke
+        run: npm run test:windows

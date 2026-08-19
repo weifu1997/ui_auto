@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/production-startup.md","reason":"Check that CI and operator documentation preserve the supported production entry."}
+{"file":".trellis/spec/backend/index.md","reason":"Check Linux and Windows test commands against the supported Python runtime."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review release controls across repository, deployment and operational boundaries."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/prd.md","reason":"Check the child remains within the approved Phase 0 scope."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/implement.md","reason":"Check the required exit and rollback evidence remains intact."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/current-state-audit.md","reason":"Verify remediation claims against the recorded CI and governance gaps."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"Verify GOV-01 and CI-01 have observable closure evidence."}

@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check backend runtime, API, SQLite and test conventions across all remediation phases."}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Check audit completeness, redaction and lifecycle events without exposing sensitive values."}
+{"file":".trellis/spec/backend/production-startup.md","reason":"Check production startup, listener, environment and deployment behavior remain supported and testable."}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"Check authorization, concurrency and cleanup changes preserve run, batch, recording, isolation and idempotency contracts."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend architecture and API boundary consistency for role-aware administration and collaboration changes."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check project-scoped state, outbox recovery, conflict handling and secret persistence boundaries."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Drive proportional lint, build, unit, E2E, accessibility and failure-state verification."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check end-to-end data flow and error contracts across database, backend, frontend and operational scripts."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/current-state-audit.md","reason":"Verify remediation claims against the original evidence and declared evidence limits."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"Verify every gap retains its priority, single owner, phase boundary and exit evidence."}

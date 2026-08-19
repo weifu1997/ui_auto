@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/production-startup.md","reason":"Keep CI and operator guidance aligned with the supported build and production startup contract."}
+{"file":".trellis/spec/backend/index.md","reason":"Use the repository's Python test and runtime conventions when defining Linux and Windows checks."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify that release-gate changes do not omit backend, frontend, deployment or operational consumers."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/prd.md","reason":"Preserve the approved Phase 0 boundary and parent acceptance criteria."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/implement.md","reason":"Use the approved Phase 0 ordering, exit gates and rollback constraints."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/current-state-audit.md","reason":"Keep governance and CI remediation tied to reproduced E5/E6 evidence."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"Close GOV-01 and CI-01 only with their stated exit evidence."}

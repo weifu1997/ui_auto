@@ -1,0 +1,29 @@
+{
+  "id": "team-production-readiness-assessment",
+  "name": "team-production-readiness-assessment",
+  "title": "团队生产可用性评估与改造路线图",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "huangwf",
+  "assignee": "huangwf",
+  "createdAt": "2026-08-19",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "python_3.1",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-19-production-baseline-governance-ci",
+    "08-19-artifact-backup-health-observability-fixes"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
