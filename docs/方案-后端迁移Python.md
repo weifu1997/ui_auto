@@ -55,7 +55,7 @@ server-py/
 scripts/sqlite-backup.py   # sqlite-backup.mjs 等价
 ```
 
-迁移期 `server-py/` 与 `server/`（TS）并存做双跑对照；退役后 TS 移入 `archive/server-ts/` 并清理 package.json（tsx 依赖、test:* 脚本）。
+迁移期 `server-py/` 与旧 TS 服务曾并存做双跑对照；TS 后端已退役并从仓库清理，当前仅维护 `server-py/`。
 
 ## 4. 关键兼容实现（不允许走样的点）
 
@@ -98,7 +98,7 @@ scripts/sqlite-backup.py   # sqlite-backup.mjs 等价
 - **P4 执行引擎**（runner.py + managed_runner.py）→ managed-runner-smoke / auto-open-smoke 双跑通过。
 - **P5 本地 Worker + SSE + 采集通道 + 静态托管** → worker-* / local-picker-smoke 双跑通过。
 - **P6 部署链**（AutoFlow.xml / ps1 / sqlite-backup.py）+ windows-scripts-smoke + production-ui-smoke + Playwright e2e 全绿。
-- **P7 灰度与退役**：内网一台机器切 Python 服务观察运行（定时回归 + 通知链路），通过后归档 server/ TS 源码、清理 package.json（tsx 依赖、test:* 脚本）与文档；当前 TS 已移入 `archive/server-ts/`。
+- **P7 灰度与退役**：内网一台机器切 Python 服务观察运行（定时回归 + 通知链路），通过后清理已退役 TS 源码、package.json（tsx 依赖、test:* 脚本）与相关文档；当前生产服务使用 Python 后端。
 
 **执行顺序注意**：先收尾当前未提交任务（audit-governance-enhance、webhook-migration-notifications），不与迁移混在一起。
 

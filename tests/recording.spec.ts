@@ -52,6 +52,18 @@ async function expectRecordingFormLayout(page: Page) {
   expect(environmentBox.width).toBeGreaterThanOrEqual(formBox.width - 1);
   expect(startUrlBox.width).toBeGreaterThanOrEqual(formBox.width - 1);
   expect(freshLoginBox.width).toBeGreaterThanOrEqual(formBox.width - 1);
+
+  const [freshLoginCheckboxBox, freshLoginTextBox] = await Promise.all([
+    form.locator(".ant-checkbox-wrapper .ant-checkbox").boundingBox(),
+    form.locator(".ant-checkbox-wrapper .ant-checkbox-label").boundingBox(),
+  ]);
+  if (!freshLoginCheckboxBox || !freshLoginTextBox) {
+    throw new Error("录制复选框未正确渲染");
+  }
+  const checkboxCenter =
+    freshLoginCheckboxBox.y + freshLoginCheckboxBox.height / 2;
+  const textCenter = freshLoginTextBox.y + freshLoginTextBox.height / 2;
+  expect(Math.abs(checkboxCenter - textCenter)).toBeLessThanOrEqual(2);
 }
 
 test("records, recovers controls, reviews, validates, and imports a flow draft", async ({ page }) => {

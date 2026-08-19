@@ -322,6 +322,39 @@ def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
     coordinator.close_all()
 
 
+def test_cancel_active_ends_matching_session_for_owner_and_environment():
+    coordinator = RecordingCoordinator(
+        submit=_ImmediateSubmit(),
+        launch=lambda headless, storage_state=None: _stub_launch(
+            {"headless": headless, "storage": storage_state}
+        ),
+    )
+    first = coordinator.create_session("project-1", "flow-1", ENVIRONMENT, "/login")
+    second = coordinator.create_session(
+        "project-1", "flow-2", {**ENVIRONMENT, "id": "env-2"}, "/login"
+    )
+    try:
+        # Other owners must not be touched.
+        assert coordinator.cancel_active("project-1", "env-1", "other-owner") is None
+        assert coordinator.cancel_active("project-1", "env-2", "other-owner") is None
+
+        canceled = coordinator.cancel_active("project-1", "env-1", "")
+        assert canceled is not None
+        assert canceled["id"] == first["id"]
+        assert canceled["status"] == "canceled"
+
+        # A second call has nothing left to cancel.
+        assert coordinator.cancel_active("project-1", "env-1", "") is None
+
+        # The non-matching session is still active.
+        assert (
+            coordinator.session_response(coordinator._require_session(second["id"]))["status"]
+            == "recording"
+        )
+    finally:
+        coordinator.cancel(second["id"])
+
+
 def test_create_session_failure_closes_launched_browser():
     launched = []
 
@@ -360,6 +393,45 @@ def test_create_session_failure_closes_launched_browser():
     failed = coordinator._require_session(failures[0]["id"])
     assert failed["status"] == "failed"
     assert failed["errorCode"] == "RECORDING_NAVIGATION_FAILED"
+
+
+def test_initial_navigation_failure_falls_back_to_blank_page_and_stays_recording():
+    launched = []
+
+    class _FallbackPage(_StubPage):
+        def goto(self, target, **_kwargs):
+            self.goto_targets.append(target)
+            if target != "about:blank":
+                raise RuntimeError("target unreachable")
+            self.url = target
+            handler = self.handlers.get("framenavigated")
+            if handler:
+                handler(self)
+
+    def launch(headless, storage_state=None):
+        context = _StubContext()
+        session = {
+            "playwright": _StubPlaywright(),
+            "browser": _StubBrowser(),
+            "context": context,
+            "page": _FallbackPage(context),
+        }
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(submit=_ImmediateSubmit(), launch=launch)
+    created = coordinator.create_session(
+        "project-1", "flow-1", ENVIRONMENT, "/login", headless=True
+    )
+    assert created["status"] == "recording"
+    assert launched[0]["page"].goto_targets == [
+        "https://app.test/login",
+        "about:blank",
+    ]
+    stopped = coordinator.stop(created["id"])
+    assert stopped["status"] == "stopped"
+    result = coordinator.session_result(created["id"])["result"]
+    assert any("初始页面导航失败" in warning for warning in result["warnings"])
 
 
 def test_recording_snapshot_is_detached_from_provider_and_fresh_login_skips_it():

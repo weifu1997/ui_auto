@@ -17,6 +17,7 @@ import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformS
 import type { PlatformWorkspaceProject } from "./workspace-store";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformProjectMap } from "./platform-context";
 import { revisionElements, revisionEnvironment, revisionFlow } from "./revision-snapshot";
+import { normalizeFlow } from "./flow-normalize";
 import { useWorkspaceStore } from "./workspace-store";
 import {
   allSyncDraftPending,
@@ -103,7 +104,7 @@ function serverDocumentSerialized(item: LoadedProject): string {
   return JSON.stringify({
     name: item.project.name,
     description: item.project.description,
-    flows: item.resources.flows.map((resource) => resource.data),
+    flows: item.resources.flows.map((resource) => normalizeFlow(resource.data)),
     elements: item.resources.elements.map((resource) => resource.data),
     variables: item.resources.variables.map((resource) => resource.data),
     environments: item.resources.environments.map((resource) => resource.data),
@@ -472,7 +473,7 @@ export function ServerWorkspaceSynchronizer() {
       ));
       if (serverWins) {
         replaceItems.push(replaceProject(projectId, item.project.name, item.project.description, {
-          flows: item.resources.flows.map((resource) => resource.data),
+          flows: item.resources.flows.map((resource) => normalizeFlow(resource.data)),
           elements: item.resources.elements.map((resource) => resource.data),
           variables: item.resources.variables.map((resource) => resource.data),
           environments: item.resources.environments.map((resource) => resource.data),

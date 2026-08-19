@@ -6,7 +6,7 @@ import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, canUseCapability, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, variableReference } from "./shared";
+import { PageHeading, canUseCapability, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, uniqueNameValidator, variableReference } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -396,6 +396,7 @@ export function FlowsPage({ project }: { project: Project }) {
       <NewFlowDrawer
         open={draftOpen}
         project={project}
+        flows={items}
         onClose={() => setDraftOpen(false)}
         onCreated={(flow) => {
           updateItems((list) => [flow, ...list]);
@@ -410,14 +411,17 @@ export function FlowsPage({ project }: { project: Project }) {
 function NewFlowDrawer({
   open,
   project,
+  flows,
   onClose,
   onCreated,
 }: {
   open: boolean;
   project: Project;
+  flows?: Flow[];
   onClose: () => void;
   onCreated: (flow: Flow) => void;
 }) {
+  const existing = flows ?? [];
   const [form] = Form.useForm();
   void project;
   useEffect(() => {
@@ -458,7 +462,19 @@ function NewFlowDrawer({
         <Form.Item
           label="流程名称"
           name="name"
-          rules={[{ required: true, message: "请输入流程名称" }]}
+          validateTrigger={["onChange", "onBlur"]}
+          rules={[
+            { required: true, message: "请输入流程名称" },
+            {
+              validator: uniqueNameValidator({
+                items: existing,
+                getName: (item) => item.name,
+                getId: (item) => item.id,
+                entityLabel: "流程",
+                extraScopeLabel: "项目",
+              }),
+            },
+          ]}
         >
           <Input placeholder="例如：用户登录并提交订单" />
         </Form.Item>

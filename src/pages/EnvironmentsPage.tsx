@@ -1,6 +1,6 @@
 import { message } from "../antd-feedback";
 import type { Environment, Project } from "../mock-data";
-import { PageHeading, emptyEnvironments } from "./shared";
+import { PageHeading, emptyEnvironments, uniqueNameValidator } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { GlobalOutlined, MoreOutlined, PlusOutlined } from "@ant-design/icons";
 import { AutoComplete, Button, Drawer, Dropdown, Empty, Form, Input, Select } from "antd";
@@ -112,6 +112,7 @@ export function EnvironmentsPage({ project }: { project: Project }) {
       </section>
       <EnvironmentDrawer
         open={drawer}
+        environments={items}
         environment={editing}
         onClose={() => setDrawer(false)}
         onSave={(environment) => {
@@ -132,15 +133,18 @@ export function EnvironmentsPage({ project }: { project: Project }) {
 
 export function EnvironmentDrawer({
   open,
+  environments,
   environment,
   onClose,
   onSave,
 }: {
   open: boolean;
+  environments?: Environment[];
   environment?: Environment;
   onClose: () => void;
   onSave: (environment: Environment) => void;
 }) {
+  const existing = environments ?? [];
   const [form] = Form.useForm();
   useEffect(() => {
     if (open)
@@ -195,7 +199,20 @@ export function EnvironmentDrawer({
         <Form.Item
           name="name"
           label="环境名称"
-          rules={[{ required: true, message: "请输入环境名称" }]}
+          validateTrigger={["onChange", "onBlur"]}
+          rules={[
+            { required: true, message: "请输入环境名称" },
+            {
+              validator: uniqueNameValidator({
+                items: existing,
+                getName: (item) => item.name,
+                getId: (item) => item.id,
+                editingId: environment?.id,
+                entityLabel: "环境",
+                extraScopeLabel: "项目",
+              }),
+            },
+          ]}
         >
           <AutoComplete
             options={environmentNameOptions}

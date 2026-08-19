@@ -890,9 +890,21 @@ class RecordingCoordinator:
                     "RECORDING_BROWSER_START_FAILED", error
                 ) from error
             try:
-                page.goto(target, wait_until="domcontentloaded", timeout=30000)
+                # 使用 commit 而不是 domcontentloaded：页面只要完成导航提交即可开始录制，
+                # 避免部分站点因 DOMContentLoaded 延迟或长期不触发而被误判为导航失败。
+                page.goto(target, wait_until="commit", timeout=60000)
             except Exception as error:
-                raise _RecordingOperationError("RECORDING_NAVIGATION_FAILED", error) from error
+                # 初始目标不可达时，不直接终止录制：回退到空白页并给出警告，
+                # 用户仍可在有头录制浏览器里手动导航到目标站点。
+                try:
+                    page.goto("about:blank", wait_until="commit", timeout=5000)
+                except Exception:
+                    raise _RecordingOperationError(
+                        "RECORDING_NAVIGATION_FAILED", error
+                    ) from error
+                normalizer = session.get("normalizer")
+                if isinstance(normalizer, RecorderNormalizer):
+                    normalizer.warn("初始页面导航失败，已打开空白页，请手动导航到目标页面")
 
             # Playwright's sync bindings are dispatched only while its owner
             # thread is inside a sync API call. A browser-side promise keeps
@@ -1103,6 +1115,32 @@ class RecordingCoordinator:
         with self._lock:
             self._prune_terminal_sessions()
         return self.session_response(session)
+
+    def cancel_active(
+        self, project_id: str, environment_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        """Cancel the first active recording session owned by this user.
+
+        Used when the client has lost the session id and needs to reclaim a
+        project/environment slot before starting a fresh recording.
+        """
+        with self._lock:
+            active = next(
+                (
+                    session
+                    for session in self._sessions.values()
+                    if session["projectId"] == project_id
+                    and session["environmentId"] == environment_id
+                    and session.get("ownerId") == owner_id
+                    and session["status"] not in _TERMINAL_STATUSES
+                ),
+                None,
+            )
+            if active is None:
+                return None
+            session_id = active["id"]
+        self.cancel(session_id)
+        return self.session_response(self._require_session(session_id))
 
     def _stop_browser(self, session: dict[str, Any]) -> None:
         browser_session = session.get("browserSession")

@@ -1,7 +1,7 @@
 import { message } from "../antd-feedback";
 import type { Project } from "../mock-data";
 import { useNavigate } from "../router";
-import { PageHeading } from "./shared";
+import { PageHeading, uniqueNameValidator } from "./shared";
 import { updatePlatformProject } from "../platform-api";
 import { readStoredPlatformSession } from "../platform-context";
 import { useQueryClient } from "@tanstack/react-query";
@@ -17,6 +17,7 @@ export function SettingsPage({ project }: { project: Project }) {
   const queryClient = useQueryClient();
   const themeMode = useThemeStore((state) => state.mode);
   const setThemeMode = useThemeStore((state) => state.setMode);
+  const projects = useWorkspaceStore((state) => state.projects);
   const updateProject = useWorkspaceStore((state) => state.updateProject);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const [form] = Form.useForm();
@@ -49,7 +50,19 @@ export function SettingsPage({ project }: { project: Project }) {
             <Form.Item
               name="name"
               label="项目名称"
-              rules={[{ required: true, whitespace: true, message: "请输入项目名称" }]}
+              validateTrigger={["onChange", "onBlur"]}
+              rules={[
+                { required: true, whitespace: true, message: "请输入项目名称" },
+                {
+                  validator: uniqueNameValidator({
+                    items: projects,
+                    getName: (item) => item.name,
+                    getId: (item) => item.id,
+                    editingId: project.id,
+                    entityLabel: "项目",
+                  }),
+                },
+              ]}
             >
               <Input />
             </Form.Item>

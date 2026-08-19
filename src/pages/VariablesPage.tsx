@@ -1,6 +1,6 @@
 import { message } from "../antd-feedback";
 import type { Project, Variable } from "../mock-data";
-import { PageHeading, emptyVariables } from "./shared";
+import { PageHeading, emptyVariables, uniqueVariableNameValidator } from "./shared";
 import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
@@ -146,6 +146,7 @@ export function VariablesPage({ project }: { project: Project }) {
       <VariableDrawer
         open={drawer}
         project={project}
+        variables={items}
         onClose={() => setDrawer(false)}
         onSave={(variable) => {
           updateItems((list) => [variable, ...list]);
@@ -160,20 +161,23 @@ export function VariablesPage({ project }: { project: Project }) {
 function VariableDrawer({
   open,
   project,
+  variables,
   onClose,
   onSave,
 }: {
   open: boolean;
   project: Project;
+  variables: Variable[];
   onClose: () => void;
   onSave: (variable: Variable) => void;
 }) {
   const [form] = Form.useForm();
-  void project;
   const secret = Form.useWatch("secret", form);
+  const scope = Form.useWatch("scope", form) ?? "项目";
   useEffect(() => {
     if (open) form.setFieldsValue({ scope: "项目", secret: false });
   }, [form, open]);
+  const scopeLabel = scope === "环境" ? "env" : "project";
   return (
     <Drawer
       title="新建变量"
@@ -189,7 +193,6 @@ function VariableDrawer({
               .then((values) => {
                 const id = `var-${Date.now()}`;
                 if (values.secret && typeof values.value === "string" && values.value.trim()) {
-                  // 密钥值不落库：注入当前会话（与运行时注入同一内存存储），刷新后失效。
                   useSecretStore.getState().setValues(project.id, { [id]: values.value });
                   message.info("密钥已注入当前会话（刷新后失效），不会保存到存储");
                 }
@@ -213,8 +216,13 @@ function VariableDrawer({
         <Form.Item
           name="name"
           label="变量名"
-          rules={[{ required: true, message: "请输入变量名" }]}
-          extra="引用格式：{{project.变量名}}"
+          dependencies={["scope"]}
+          validateTrigger={["onChange", "onBlur"]}
+          rules={[
+            { required: true, message: "请输入变量名" },
+            { validator: uniqueVariableNameValidator(variables, scope) },
+          ]}
+          extra={`引用格式：{{${scopeLabel}.变量名}}`}
         >
           <Input placeholder="例如：username" />
         </Form.Item>

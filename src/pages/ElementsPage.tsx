@@ -1,6 +1,6 @@
 import { message } from "../antd-feedback";
 import type { ElementAsset, Environment, Project } from "../mock-data";
-import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements, emptyEnvironments } from "./shared";
+import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements, emptyEnvironments, uniqueNameValidator } from "./shared";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
 import { useWorkspaceStore } from "../workspace-store";
@@ -259,6 +259,7 @@ export function ElementsPage({ project }: { project: Project }) {
       </section>
       <ElementDrawer
         open={editor !== null}
+        elements={items}
         element={editor === "new" ? undefined : editor}
         environments={environments}
         onClose={() => setEditor(null)}
@@ -319,17 +320,20 @@ export function ElementsPage({ project }: { project: Project }) {
 
 export function ElementDrawer({
   open,
+  elements,
   element,
   environments,
   onClose,
   onSave,
 }: {
   open: boolean;
+  elements?: ElementAsset[];
   element?: ElementAsset | null;
   environments: Environment[];
   onClose: () => void;
   onSave: (element: ElementAsset) => void;
 }) {
+  const existing = elements ?? [];
   const [form] = Form.useForm();
   const method = Form.useWatch("method", form);
   useEffect(() => {
@@ -381,7 +385,20 @@ export function ElementDrawer({
         <Form.Item
           name="name"
           label="元素名称"
-          rules={[{ required: true, message: "请输入元素名称" }]}
+          validateTrigger={["onChange", "onBlur"]}
+          rules={[
+            { required: true, message: "请输入元素名称" },
+            {
+              validator: uniqueNameValidator({
+                items: existing,
+                getName: (item) => item.name,
+                getId: (item) => item.id,
+                editingId: element?.id,
+                entityLabel: "元素",
+                extraScopeLabel: "项目",
+              }),
+            },
+          ]}
         >
           <Input placeholder="例如：登录按钮" />
         </Form.Item>

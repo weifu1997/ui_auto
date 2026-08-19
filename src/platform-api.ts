@@ -229,13 +229,15 @@ export class PlatformApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly items: Array<{ flowId: string; code: string }> | undefined;
+  readonly detail: Record<string, unknown> | undefined;
 
-  constructor(status: number, code: string, items?: Array<{ flowId: string; code: string }>) {
+  constructor(status: number, code: string, items?: Array<{ flowId: string; code: string }>, detail?: Record<string, unknown>) {
     super(code);
     this.name = "PlatformApiError";
     this.status = status;
     this.code = code;
     this.items = items;
+    this.detail = detail;
   }
 }
 
@@ -264,15 +266,18 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string) 
     const body = (await response.json().catch(() => ({}))) as T & {
       error?: string;
       items?: Array<{ flowId: string; code: string }>;
+      [key: string]: unknown;
     };
     if (!response.ok) {
       if (response.status === 401 && generation === sessionGeneration && typeof window !== "undefined") {
         window.dispatchEvent(new Event("autoflow-auth-expired"));
       }
+      const { error, items, ...detail } = body;
       throw new PlatformApiError(
         response.status,
-        body.error ?? "PLATFORM_REQUEST_FAILED",
-        Array.isArray(body.items) ? body.items : undefined,
+        error ?? "PLATFORM_REQUEST_FAILED",
+        Array.isArray(items) ? items : undefined,
+        Object.keys(detail).length > 0 ? detail : undefined,
       );
     }
     return body;
@@ -850,6 +855,14 @@ export function createRecordingSession(
     { method: "POST", body: JSON.stringify(input) },
     token,
   ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
+}
+
+export function cancelActiveRecordingSession(token: string, projectId: string, environmentId: string) {
+  return request<{ canceled: boolean }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/cancel-active`,
+    { method: "POST", body: JSON.stringify({ environmentId }) },
+    token,
+  ).then((response) => ({ canceled: response.canceled === true }));
 }
 
 export function getRecordingSession(token: string, projectId: string, sessionId: string) {

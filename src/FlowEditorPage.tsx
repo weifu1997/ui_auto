@@ -1,20 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "./router";
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
+  CloseCircleFilled,
   CodeOutlined,
   DragOutlined,
+  ExclamationCircleFilled,
   FileSearchOutlined,
+  LoadingOutlined,
   MoreOutlined,
   AudioOutlined,
   PlayCircleFilled,
   PlusOutlined,
+  ReloadOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Switch, Tooltip } from "antd";
+import { Alert, Button, Checkbox, Dropdown, Drawer, Empty, Form, Input, Modal, Popover, Select, Switch, Tag, Tooltip } from "antd";
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -24,10 +28,10 @@ import { useRunStore } from "./run-store";
 import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { message, modal } from "./antd-feedback";
-import { PlatformApiError, cancelRecordingSession, createPlatformElementValidation, createPlatformRun, createRecordingSession, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRun, createRecordingSession, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
 import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
-import { platformRunAsRun } from "./pages/shared";
+import { platformRunAsRun, uniqueVariableNameValidator } from "./pages/shared";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,
@@ -38,6 +42,7 @@ import {
   recordingEventCursor,
   recordingSessionStorageKey,
   storeRecordingSessionId,
+  type RecordingImportPlan,
 } from "./recording-editor-state";
 import { actionOptions } from "./mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "./mock-data";
@@ -54,6 +59,168 @@ function projectById(projects: Project[], id?: string) {
 
 function variableReference(variable: Variable) {
   return `${variable.scope === "环境" ? "env" : "project"}.${variable.name}`;
+}
+
+function suggestSecretNameFromHint(fieldHint: string, variables: Variable[], scope: Variable["scope"] = "项目"): string {
+  const lower = fieldHint.toLowerCase();
+  let base = "secret";
+  if (/密码|password|passwd|pwd/.test(lower)) base = "password";
+  else if (/token/.test(lower)) base = "api_token";
+  else if (/密钥|secret|key/.test(lower)) base = "secret_key";
+  else if (/用户名|登录|登录名|user|account|login/.test(lower)) base = "username";
+  else {
+    const cleaned = fieldHint.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, "_").replace(/^_+|_+$/g, "");
+    if (cleaned.length > 0 && cleaned.length <= 32) base = cleaned;
+  }
+  const existSet = new Set(
+    variables.filter((variable) => variable.scope === scope).map((variable) => variable.name),
+  );
+  if (!existSet.has(base)) return base;
+  let suffix = 2;
+  while (existSet.has(`${base}_${suffix}`)) suffix += 1;
+  return `${base}_${suffix}`;
+}
+
+type RecordingBinding = {
+  stepId: string;
+  fieldHint: string;
+};
+
+function SecretCreatorDrawer({
+  open,
+  project,
+  variables,
+  stepBinding,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  project: Project;
+  variables: Variable[];
+  stepBinding: RecordingBinding | null;
+  onClose: () => void;
+  onCreated: (variable: Variable) => void;
+}) {
+  const [form] = Form.useForm();
+  const scope = Form.useWatch("scope", form) ?? "项目";
+  useEffect(() => {
+    if (!open) return;
+    form.setFieldsValue({ scope: "项目", description: stepBinding?.fieldHint ?? "" });
+    // 根据 scope 和 hint 智能推断默认名称（去重）
+    const defaultScope: Variable["scope"] = "项目";
+    const defaultName = stepBinding
+      ? suggestSecretNameFromHint(stepBinding.fieldHint, variables, defaultScope)
+      : suggestSecretNameFromHint("", variables, defaultScope);
+    form.setFieldsValue({ scope: defaultScope, name: defaultName, description: stepBinding?.fieldHint ?? "" });
+  }, [form, open, stepBinding, variables]);
+  return (
+    <Drawer
+      title={stepBinding ? `为「${stepBinding.fieldHint}」新建 secret` : "新建 secret 变量"}
+      open={open}
+      size={480}
+      onClose={onClose}
+      extra={
+        <Button
+          type="primary"
+          onClick={() =>
+            form
+              .validateFields()
+              .then((values) => {
+                const id = `var-${Date.now()}`;
+                if (typeof values.value === "string" && values.value.trim()) {
+                  useSecretStore.getState().setValues(project.id, { [id]: values.value });
+                  message.info("密钥已注入当前会话（刷新后失效），不会保存到存储");
+                }
+                onCreated({
+                  id,
+                  name: values.name.trim(),
+                  description: values.description?.trim() || stepBinding?.fieldHint || "项目变量",
+                  value: "",
+                  scope: values.scope,
+                  secret: true,
+                  updatedAt: "刚刚",
+                });
+              })
+          }
+        >
+          创建并绑定
+        </Button>
+      }
+    >
+      <Form form={form} layout="vertical">
+        <Form.Item
+          name="name"
+          label="变量名"
+          dependencies={["scope"]}
+          validateTrigger={["onChange", "onBlur"]}
+          rules={[
+            { required: true, message: "请输入变量名" },
+            { validator: uniqueVariableNameValidator(variables, scope) },
+          ]}
+          extra={`引用格式：{{${scope === "环境" ? "env" : "project"}.变量名}}`}
+        >
+          <Input placeholder="例如：password" />
+        </Form.Item>
+        <Form.Item name="scope" label="作用域">
+          <Select
+            options={[
+              { value: "项目", label: "项目变量" },
+              { value: "环境", label: "环境变量" },
+            ]}
+          />
+        </Form.Item>
+        <Form.Item name="value" label="值" rules={[{ required: true, message: "请输入密钥值" }]}>
+          <Input.Password placeholder="密钥不会保存：仅注入当前会话，刷新后失效" />
+        </Form.Item>
+        <Form.Item name="description" label="描述">
+          <Input.TextArea rows={3} placeholder="说明变量的业务用途" />
+        </Form.Item>
+      </Form>
+    </Drawer>
+  );
+}
+
+type ElementValidationStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "ambiguous"
+  | "missed"
+  | "error";
+
+type ElementValidationResult = {
+  status: ElementValidationStatus;
+  count?: number;
+  errorMessage?: string;
+};
+
+const emptyValidationResults: Record<string, ElementValidationResult> = {};
+const emptyElementEdits: Record<string, Partial<ElementAsset>> = {};
+
+function mergeElementEdits(
+  element: ElementAsset,
+  edits: Record<string, Partial<ElementAsset>>,
+): ElementAsset {
+  const patch = edits[element.id];
+  if (!patch) return element;
+  return { ...element, ...patch };
+}
+
+function elementValidationLabel(result: ElementValidationResult) {
+  switch (result.status) {
+    case "pending":
+      return "等待校验";
+    case "running":
+      return "校验中";
+    case "success":
+      return "唯一命中";
+    case "ambiguous":
+      return `匹配 ${result.count ?? "多个"} 个`;
+    case "missed":
+      return "未匹配到元素";
+    case "error":
+      return result.errorMessage ?? "校验失败";
+  }
 }
 
 function requiredSecretVariables(variables: Variable[], steps: FlowStep[]) {
@@ -133,6 +300,7 @@ export default function FlowEditorPage() {
   );
   const setFlows = useWorkspaceStore((state) => state.setFlows);
   const setElements = useWorkspaceStore((state) => state.setElements);
+  const setVariables = useWorkspaceStore((state) => state.setVariables);
   const flow = project
     ? (storedFlows ?? emptyFlows).find((item) => item.id === flowId)
     : undefined;
@@ -156,7 +324,13 @@ export default function FlowEditorPage() {
   const [recordingResult, setRecordingResult] = useState<RecordingResult | null>(null);
   const [recordingStartUrl, setRecordingStartUrl] = useState("");
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [endingRecordingBusy, setEndingRecordingBusy] = useState(false);
   const [recordingSecretMap, setRecordingSecretMap] = useState<Record<string, string>>({});
+  const [secretCreatorStepId, setSecretCreatorStepId] = useState<string | null>(null);
+  const [elementEdits, setElementEdits] = useState<Record<string, Partial<ElementAsset>>>(emptyElementEdits);
+  const [expandedElementId, setExpandedElementId] = useState<string | null>(null);
+  const [validationResults, setValidationResults] = useState<Record<string, ElementValidationResult>>(emptyValidationResults);
+  const validationRunningRef = useRef(false);
   const [recordingEnvironmentId, setRecordingEnvironmentId] = useState(activeEnvironmentId ?? "");
   const [recordingFreshLogin, setRecordingFreshLogin] = useState(false);
   const [recordingEvents, setRecordingEvents] = useState<RecordingEvent[]>([]);
@@ -176,7 +350,157 @@ export default function FlowEditorPage() {
   const recordingEnvironment =
     environments.find((environment) => environment.id === recordingEnvironmentId) ??
     activeEnvironment;
+
+  const draftPlan = useMemo<RecordingImportPlan | null>(() => {
+    if (!recordingResult || !recordingEnvironment) return null;
+    try {
+      return planRecordingImport(
+        recordingResult,
+        recordingEnvironment.id,
+        elements,
+        recordingSecretMap,
+      );
+    } catch {
+      return null;
+    }
+  }, [recordingResult, recordingEnvironment, elements, recordingSecretMap]);
+
+  const effectiveNewElements = useMemo<ElementAsset[]>(() => {
+    if (!draftPlan) return [];
+    return draftPlan.newElements.map((element) => mergeElementEdits(element, elementEdits));
+  }, [draftPlan, elementEdits]);
+
+  const effectiveElementsToValidate = useMemo<ElementAsset[]>(() => {
+    if (!draftPlan) return [];
+    const keyOf = (element: ElementAsset) =>
+      `${element.environment}\u0000${element.path}\u0000${element.method}\u0000${element.value}`;
+    const byKey = new Map<string, ElementAsset>();
+    for (const base of draftPlan.elementsToValidate) {
+      const merged = mergeElementEdits(base, elementEdits);
+      byKey.set(keyOf(merged), merged);
+    }
+    return [...byKey.values()];
+  }, [draftPlan, elementEdits]);
+
+  const allBindingsFilled = useMemo(() => {
+    if (!recordingResult) return false;
+    return recordingResult.requiredBindings.every(
+      (binding) => Boolean(recordingSecretMap[binding.stepId]?.trim()),
+    );
+  }, [recordingResult, recordingSecretMap]);
+
+  const validationSummary = useMemo(() => {
+    const totals = { pending: 0, running: 0, success: 0, ambiguous: 0, missed: 0, error: 0 };
+    for (const asset of effectiveNewElements) {
+      const status = validationResults[asset.id]?.status ?? "pending";
+      totals[status] += 1;
+    }
+    const canImport =
+      effectiveNewElements.length === 0 ||
+      effectiveNewElements.every((asset) => validationResults[asset.id]?.status === "success");
+    return { totals, canImport };
+  }, [effectiveNewElements, validationResults]);
+
   const platformContext = project ? platformProjectContext(project.id) : undefined;
+
+  const pollValidation = useCallback(
+    async (token: string, projectId: string, validationId: string): Promise<{ status: string; count?: number }> => {
+      let validation = (await getPlatformElementValidation(token, projectId, validationId)).validation;
+      for (let attempt = 0; attempt < 60 && (validation.status === "queued" || validation.status === "running"); attempt += 1) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+        validation = (await getPlatformElementValidation(token, projectId, validation.id)).validation;
+      }
+      return { status: validation.status, count: Number(validation.result?.count ?? 0) };
+    },
+    [],
+  );
+
+  const runSingleValidation = useCallback(
+    async (_assetId: string, asset: ElementAsset, onUpdate: (result: ElementValidationResult) => void) => {
+      if (!platformContext || !recordingEnvironment) {
+        onUpdate({ status: "error", errorMessage: "未登录平台或环境不存在" });
+        return;
+      }
+      try {
+        onUpdate({ status: "running" });
+        const created = await createPlatformElementValidation(
+          platformContext.session.token,
+          platformContext.projectId,
+          { environmentId: recordingEnvironment.id, element: asset },
+        );
+        const { status, count } = await pollValidation(
+          platformContext.session.token,
+          platformContext.projectId,
+          created.validation.id,
+        );
+        const finalCount = count ?? 0;
+        if (status === "success" && finalCount === 1) {
+          onUpdate({ status: "success", count: 1 });
+        } else if (status === "success" && finalCount > 1) {
+          onUpdate({ status: "ambiguous", count: finalCount });
+        } else if (status === "success") {
+          onUpdate({ status: "missed", count: finalCount });
+        } else {
+          onUpdate({ status: "missed", count: 0 });
+        }
+      } catch (error) {
+        onUpdate({
+          status: "error",
+          errorMessage: error instanceof Error ? error.message : "校验异常",
+        });
+      }
+    },
+    [platformContext, recordingEnvironment, pollValidation],
+  );
+
+  const runBatchValidation = useCallback(async () => {
+    if (!effectiveElementsToValidate.length) return;
+    if (validationRunningRef.current) return;
+    validationRunningRef.current = true;
+    try {
+      const keyOf = (asset: ElementAsset) =>
+        `${asset.environment}\u0000${asset.path}\u0000${asset.method}\u0000${asset.value}`;
+      const keyToAssetIds = new Map<string, string[]>();
+      for (const asset of effectiveNewElements) {
+        const key = keyOf(asset);
+        const bucket = keyToAssetIds.get(key);
+        if (bucket) bucket.push(asset.id);
+        else keyToAssetIds.set(key, [asset.id]);
+      }
+      const updateAll = (ids: string[], result: ElementValidationResult) =>
+        setValidationResults((prev) => {
+          const next = { ...prev };
+          for (const id of ids) next[id] = result;
+          return next;
+        });
+      const queue = [...effectiveElementsToValidate];
+      const workers = 3;
+      const worker = async () => {
+        while (true) {
+          const target = queue.shift();
+          if (!target) return;
+          const ids = keyToAssetIds.get(keyOf(target)) ?? [];
+          updateAll(ids, { status: "running" });
+          await runSingleValidation(ids[0] ?? target.id, target, (result) => updateAll(ids, result));
+        }
+      };
+      await Promise.all(Array.from({ length: workers }, () => worker()));
+    } finally {
+      validationRunningRef.current = false;
+    }
+  }, [effectiveNewElements, effectiveElementsToValidate, runSingleValidation]);
+
+  const retrySingleValidation = useCallback(
+    (assetId: string) => {
+      const asset = effectiveNewElements.find((item) => item.id === assetId);
+      if (!asset) return;
+      runSingleValidation(assetId, asset, (result) => {
+        setValidationResults((prev) => ({ ...prev, [assetId]: result }));
+      });
+    },
+    [effectiveNewElements, runSingleValidation],
+  );
+
   const upsertRun = useRunStore((state) => state.upsertRun);
   const sessionSecretValues = useSecretStore((state) =>
     project ? state.valuesByProject[project.id] ?? emptySecretValues : emptySecretValues,
@@ -188,6 +512,19 @@ export default function FlowEditorPage() {
   useEffect(() => {
     if (flowId) loadSteps(flowDefinition ?? []);
   }, [flowDefinition, flowId, loadSteps]);
+
+  // 录制结果切换（或关闭）时，清空用户编辑和校验结果，保持无状态
+  useEffect(() => {
+    setElementEdits(emptyElementEdits);
+    setValidationResults(emptyValidationResults);
+    setExpandedElementId(null);
+  }, [recordingResult]);
+
+  // 录制结果 / 环境 / 元素 / secret 映射 / 用户编辑 任一变化后，重新触发并发校验
+  useEffect(() => {
+    if (!draftPlan || !platformContext || !recordingEnvironment) return;
+    void runBatchValidation();
+  }, [draftPlan, platformContext, recordingEnvironment, runBatchValidation, elementEdits]);
 
   useEffect(() => () => {
     if (recordingPollRef.current !== undefined) {
@@ -278,6 +615,33 @@ export default function FlowEditorPage() {
   if (!project || !flow) {
     return <Navigate to={project ? `/project/${project.id}/flows` : "/projects"} replace />;
   }
+
+  const endActiveRecording = async () => {
+    if (!platformContext || !recordingEnvironment) {
+      message.error("当前项目没有可用的平台环境");
+      return;
+    }
+    setEndingRecordingBusy(true);
+    try {
+      const { canceled } = await cancelActiveRecordingSession(
+        platformContext.session.token,
+        platformContext.projectId,
+        recordingEnvironment.id,
+      );
+      if (canceled) {
+        clearRecordingStorage();
+        setRecordingSession(null);
+        message.success("已结束现有录制会话，可以重新开始");
+      } else {
+        message.info("当前没有需要结束的录制会话");
+      }
+    } catch {
+      message.error("结束录制会话失败，请稍后重试");
+    } finally {
+      setEndingRecordingBusy(false);
+    }
+  };
+
   const startRecording = async () => {
     if (!platformContext || !recordingEnvironment) {
       message.error("当前项目没有可用的平台环境");
@@ -305,9 +669,31 @@ export default function FlowEditorPage() {
       startRecordingPoll(created.session.id);
     } catch (error) {
       if (error instanceof PlatformApiError && error.code === "RECORDING_SESSION_ACTIVE") {
-        message.error("当前环境已有录制会话");
+        const sessionId = typeof error.detail?.sessionId === "string" ? error.detail.sessionId : undefined;
+        if (platformContext && sessionId) {
+          try {
+            const { session } = await getRecordingSession(
+              platformContext.session.token,
+              platformContext.projectId,
+              sessionId,
+            );
+            setRecordingSession(session);
+            setRecordingEnvironmentId(session.environmentId);
+            storeRecordingSessionId(window.sessionStorage, recordingStorageKey, session.id);
+            setRecordingOpen(false);
+            recordingLastSeqRef.current = session.lastSeq;
+            setRecordingEvents([]);
+            message.success("已恢复现有录制会话");
+            startRecordingPoll(session.id);
+          } catch {
+            message.error("当前环境已有录制会话，但恢复失败，请稍后重试");
+          }
+        } else {
+          message.error("当前环境已有录制会话");
+        }
       } else {
-        message.error("开始录制失败，请检查环境与浏览器服务");
+        const code = error instanceof PlatformApiError ? error.code : "UNKNOWN";
+        message.error(`开始录制失败（${code}），请检查环境与浏览器服务`);
       }
     } finally {
       setRecordingBusy(false);
@@ -357,34 +743,6 @@ export default function FlowEditorPage() {
     }
   };
 
-  const verifyRecordingElements = async (assets: ElementAsset[]) => {
-    if (!platformContext || !recordingEnvironment) return false;
-    const seen = new Set<string>();
-    for (const asset of assets) {
-      const key = `${asset.environment}\u0000${asset.path}\u0000${asset.method}\u0000${asset.value}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const created = await createPlatformElementValidation(
-        platformContext.session.token,
-        platformContext.projectId,
-        { environmentId: recordingEnvironment.id, element: asset },
-      );
-      let validation = created.validation;
-      for (let attempt = 0; attempt < 60 && (validation.status === "queued" || validation.status === "running"); attempt += 1) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
-        validation = (await getPlatformElementValidation(
-          platformContext.session.token,
-          platformContext.projectId,
-          validation.id,
-        )).validation;
-      }
-      if (validation.status !== "success" || Number(validation.result?.count ?? 0) !== 1) {
-        return false;
-      }
-    }
-    return true;
-  };
-
   const importRecordedFlow = async () => {
     if (!recordingResult || !project || !recordingEnvironment) return;
     let plan;
@@ -405,14 +763,10 @@ export default function FlowEditorPage() {
     }
     setRecordingImportBusy(true);
     try {
-      const unique = await verifyRecordingElements(plan.elementsToValidate);
-      if (!unique) {
-        message.error("存在未唯一匹配的定位器，未导入任何步骤或元素");
-        return;
-      }
+      const finalNewElements = plan.newElements.map((element) => mergeElementEdits(element, elementEdits));
       // All fallible work completes first. The two synchronous store writes then
       // expose one confirmed recording draft, never incremental event imports.
-      setElements(project.id, [...elements, ...plan.newElements]);
+      setElements(project.id, [...elements, ...finalNewElements]);
       importRecordingSteps(plan.importedSteps);
     } finally {
       setRecordingImportBusy(false);
@@ -775,9 +1129,17 @@ export default function FlowEditorPage() {
         title="开始录制"
         open={recordingOpen}
         onCancel={() => setRecordingOpen(false)}
-        onOk={() => void startRecording()}
-        confirmLoading={recordingBusy}
-        okText="开始录制"
+        footer={[
+          <Button key="end" loading={endingRecordingBusy} onClick={() => void endActiveRecording()}>
+            结束
+          </Button>,
+          <Button key="cancel" onClick={() => setRecordingOpen(false)}>
+            取消
+          </Button>,
+          <Button key="ok" type="primary" loading={recordingBusy} onClick={() => void startRecording()}>
+            开始录制
+          </Button>,
+        ]}
       >
         <div className="recording-form">
           <label>
@@ -818,6 +1180,7 @@ export default function FlowEditorPage() {
           setRecordingSession(null);
           setRecordingEvents([]);
         }}
+        width={720}
         footer={[
           <Button
             key="cancel"
@@ -828,14 +1191,36 @@ export default function FlowEditorPage() {
             }}
           >取消</Button>,
           <Button
-            key="import"
-            type="primary"
-            disabled={Boolean(recordingResult?.requiredBindings.some((binding) => !recordingSecretMap[binding.stepId]))}
-            loading={recordingImportBusy}
-            onClick={() => void importRecordedFlow()}
+            key="revalidate"
+            icon={<ReloadOutlined />}
+            disabled={!effectiveNewElements.length || Boolean(validationSummary.totals.running)}
+            onClick={() => void runBatchValidation()}
           >
-            确认导入
+            重新校验全部
           </Button>,
+          <Tooltip
+            key="import-tooltip"
+            title={(() => {
+              if (recordingResult?.requiredBindings.length && !allBindingsFilled) return "请先为所有敏感输入绑定 secret 变量";
+              if (!validationSummary.canImport) {
+                if (validationSummary.totals.running + validationSummary.totals.pending > 0) return "等待元素定位器校验完成…";
+                if (validationSummary.totals.missed) return `有 ${validationSummary.totals.missed} 个元素未匹配到，请编辑定位器或重新校验`;
+                if (validationSummary.totals.ambiguous) return `有 ${validationSummary.totals.ambiguous} 个元素匹配多个，请收窄定位器`;
+                if (validationSummary.totals.error) return `有 ${validationSummary.totals.error} 个元素校验异常，请重试`;
+              }
+              return undefined;
+            })()}
+          >
+            <Button
+              key="import"
+              type="primary"
+              disabled={!allBindingsFilled || !validationSummary.canImport}
+              loading={recordingImportBusy}
+              onClick={() => void importRecordedFlow()}
+            >
+              确认导入
+            </Button>
+          </Tooltip>,
         ]}
       >
         {recordingResult && (
@@ -865,25 +1250,274 @@ export default function FlowEditorPage() {
               <div className="recording-bindings">
                 <p>以下敏感输入必须绑定现有 secret 变量后才能导入：</p>
                 {recordingResult.requiredBindings.map((binding) => (
-                  <label key={binding.stepId}>
+                  <label key={binding.stepId} className="recording-binding-row">
                     <span>{binding.fieldHint}</span>
-                    <Select
-                      aria-label={`绑定 ${binding.fieldHint}`}
-                      placeholder="选择 secret 变量"
-                      value={recordingSecretMap[binding.stepId]}
-                      onChange={(value) => setRecordingSecretMap((current) => ({ ...current, [binding.stepId]: value }))}
-                      options={variables
-                        .filter((variable) => variable.secret && (variable.scope === "环境" || variable.scope === "项目"))
-                        .map((variable) => ({ value: variableReference(variable), label: variable.name }))}
-                    />
+                    <div className="recording-binding-actions">
+                      <Select
+                        aria-label={`绑定 ${binding.fieldHint}`}
+                        placeholder="搜索或选择 secret 变量"
+                        showSearch
+                        optionFilterProp="label"
+                        filterOption
+                        value={recordingSecretMap[binding.stepId]}
+                        onChange={(value) => setRecordingSecretMap((current) => ({ ...current, [binding.stepId]: value }))}
+                        options={variables
+                          .filter((variable) => variable.secret && (variable.scope === "环境" || variable.scope === "项目"))
+                          .map((variable) => ({ value: variableReference(variable), label: variable.name }))}
+                      />
+                      <Button
+                        type="dashed"
+                        icon={<PlusOutlined />}
+                        onClick={() => setSecretCreatorStepId(binding.stepId)}
+                      >
+                        新建并绑定
+                      </Button>
+                    </div>
                   </label>
                 ))}
+              </div>
+            )}
+            {effectiveNewElements.length > 0 && (
+              <div className="recording-bindings">
+                <p style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                  新增元素定位器校验（{effectiveNewElements.length} 个）
+                  <span className="validation-summary-tags">
+                    {validationSummary.totals.success > 0 && (
+                      <Tag color="success" icon={<CheckCircleFilled />}>成功 {validationSummary.totals.success}</Tag>
+                    )}
+                    {validationSummary.totals.ambiguous > 0 && (
+                      <Tag color="warning" icon={<ExclamationCircleFilled />}>匹配多个 {validationSummary.totals.ambiguous}</Tag>
+                    )}
+                    {validationSummary.totals.missed > 0 && (
+                      <Tag color="error" icon={<CloseCircleFilled />}>未匹配 {validationSummary.totals.missed}</Tag>
+                    )}
+                    {validationSummary.totals.error > 0 && (
+                      <Tag color="error">异常 {validationSummary.totals.error}</Tag>
+                    )}
+                    {(validationSummary.totals.pending + validationSummary.totals.running) > 0 && (
+                      <Tag icon={<LoadingOutlined />}>校验中 {validationSummary.totals.pending + validationSummary.totals.running}</Tag>
+                    )}
+                  </span>
+                </p>
+                {effectiveNewElements.map((element) => {
+                  const result = validationResults[element.id] ?? { status: "pending" as ElementValidationStatus };
+                  const expanded = expandedElementId === element.id;
+                  const statusIcon =
+                    result.status === "success" ? (
+                      <CheckCircleFilled style={{ color: "var(--success)" }} />
+                    ) : result.status === "ambiguous" ? (
+                      <ExclamationCircleFilled style={{ color: "var(--warning)" }} />
+                    ) : result.status === "missed" || result.status === "error" ? (
+                      <CloseCircleFilled style={{ color: "var(--danger)" }} />
+                    ) : (
+                      <LoadingOutlined />
+                    );
+                  return (
+                    <div key={element.id} className="element-validation-row">
+                      <div className="element-validation-main">
+                        <Tooltip title={elementValidationLabel(result)}>
+                          <span className="element-validation-icon">{statusIcon}</span>
+                        </Tooltip>
+                        <span className="element-validation-name">{element.name}</span>
+                        <Tag className="element-validation-method">
+                          {element.method}
+                        </Tag>
+                        <Popover
+                          content={<code style={{ whiteSpace: "pre-wrap" }}>{element.value}</code>}
+                          title="定位值"
+                          trigger="click"
+                        >
+                          <span className="element-validation-value" title={element.value}>
+                            {element.value.length > 40 ? `${element.value.slice(0, 40)}…` : element.value}
+                          </span>
+                        </Popover>
+                        <span className="element-validation-spacer" />
+                        <Tooltip title="重新校验该元素">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<ReloadOutlined />}
+                            onClick={() => retrySingleValidation(element.id)}
+                            disabled={result.status === "running"}
+                          />
+                        </Tooltip>
+                        <Button
+                          type="text"
+                          size="small"
+                          onClick={() =>
+                            setExpandedElementId(expanded ? null : element.id)
+                          }
+                        >
+                          {expanded ? "收起" : "编辑"}
+                        </Button>
+                      </div>
+                      {expanded && (
+                        <div className="element-validation-edit">
+                          <ElementEditForm
+                            element={element}
+                            environments={environments}
+                            initialPatch={elementEdits[element.id]}
+                            onCancel={() => setExpandedElementId(null)}
+                            onSubmit={(patch) => {
+                              setElementEdits((prev) => ({
+                                ...prev,
+                                [element.id]: { ...(prev[element.id] ?? {}), ...patch },
+                              }));
+                              setExpandedElementId(null);
+                              // 保存后自动重新校验
+                              const merged = mergeElementEdits(element, {
+                                ...elementEdits,
+                                [element.id]: { ...(elementEdits[element.id] ?? {}), ...patch },
+                              });
+                              runSingleValidation(element.id, merged, (result) => {
+                                setValidationResults((prev) => ({ ...prev, [element.id]: result }));
+                              });
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!draftPlan && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="无法生成导入计划"
+                    description="当前录制结果与元素库或 secret 绑定不兼容，请先完成 requiredBindings 的 secret 绑定后再校验。"
+                  />
+                )}
               </div>
             )}
           </div>
         )}
       </Modal>
+      {project && secretCreatorStepId !== null && (
+        <SecretCreatorDrawer
+          open
+          project={project}
+          variables={variables}
+          stepBinding={recordingResult?.requiredBindings.find((b) => b.stepId === secretCreatorStepId) ?? null}
+          onClose={() => setSecretCreatorStepId(null)}
+          onCreated={(newVariable) => {
+            if (!project) return;
+            const storedVariables = useWorkspaceStore.getState().variablesByProject[project.id];
+            const currentList = Array.isArray(storedVariables) ? storedVariables : [];
+            setVariables(project.id, [newVariable, ...currentList]);
+            setRecordingSecretMap((current) => ({
+              ...current,
+              [secretCreatorStepId]: variableReference(newVariable),
+            }));
+            setSecretCreatorStepId(null);
+            message.success("secret 已创建并绑定");
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ElementEditForm({
+  element,
+  environments,
+  initialPatch,
+  onCancel,
+  onSubmit,
+}: {
+  element: ElementAsset;
+  environments: Environment[];
+  initialPatch?: Partial<ElementAsset>;
+  onCancel: () => void;
+  onSubmit: (patch: { path?: string; method?: ElementAsset["method"]; value?: string; environment?: string }) => void;
+}) {
+  const [form] = Form.useForm();
+  const method = Form.useWatch("method", form);
+  const merged: ElementAsset = initialPatch ? { ...element, ...initialPatch } : element;
+  useEffect(() => {
+    form.setFieldsValue({
+      path: merged.path,
+      method: merged.method,
+      value: merged.value,
+      environment: merged.environment,
+    });
+  }, [form, merged.path, merged.method, merged.value, merged.environment]);
+  return (
+    <Form
+      form={form}
+      layout="vertical"
+      className="element-edit-form"
+      onFinish={(values) => {
+        onSubmit({
+          path: typeof values.path === "string" ? values.path.trim() : undefined,
+          method: values.method,
+          value: typeof values.value === "string" ? values.value : undefined,
+          environment: typeof values.environment === "string" ? values.environment : undefined,
+        });
+      }}
+    >
+      <div className="form-row">
+        <Form.Item
+          name="path"
+          label="页面路径"
+          rules={[{ required: true, message: "请输入路径" }]}
+          style={{ flex: 2 }}
+        >
+          <Input placeholder="/login" />
+        </Form.Item>
+        <Form.Item
+          name="environment"
+          label="默认验证环境"
+          style={{ flex: 1 }}
+        >
+          <Select
+            options={environments.map((env) => ({ value: env.id, label: env.name }))}
+          />
+        </Form.Item>
+      </div>
+      <div className="form-row">
+        <Form.Item
+          name="method"
+          label="定位方式"
+          rules={[{ required: true }]}
+          style={{ flex: 1 }}
+        >
+          <Select
+            options={["testid", "role", "label", "text", "CSS", "XPath"].map((value) => ({
+              value,
+              label: value,
+            }))}
+          />
+        </Form.Item>
+        <Form.Item
+          name="value"
+          label="定位值"
+          rules={[{ required: true, message: "请输入定位值" }]}
+          style={{ flex: 2 }}
+        >
+          <Input
+            placeholder={
+              method === "testid"
+                ? "login-submit"
+                : method === "role"
+                  ? 'button[name="登录"]'
+                  : "请输入定位值"
+            }
+          />
+        </Form.Item>
+      </div>
+      {(method === "CSS" || method === "XPath") && (
+        <Alert
+          showIcon
+          type="warning"
+          title="该定位方式稳定性较低"
+          description="优先选择 testid、role 或 label。CSS/XPath 在页面结构变化后更容易失效。"
+        />
+      )}
+      <div className="element-edit-actions">
+        <Button onClick={onCancel}>取消</Button>
+        <Button type="primary" htmlType="submit">保存并重校</Button>
+      </div>
+    </Form>
   );
 }
 

@@ -3431,6 +3431,48 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         return _send(Response(), 201, {"session": session})
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/cancel-active",
+        methods=["POST"],
+    )
+    async def recording_session_cancel_active(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        capability = services.require_project_capability(
+            project_id, user.id, "flow.edit"
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            raise PlatformError(400, "RECORDING_INPUT_INVALID") from None
+        if not isinstance(body, dict):
+            body = {}
+        environment_id = _text(body.get("environmentId")).strip()
+        if not environment_id:
+            raise PlatformError(400, "RECORDING_INPUT_INVALID")
+        session = services.recording_coordinator.cancel_active(
+            project_id, environment_id, user.id
+        )
+        if session is not None:
+            services.audit(
+                capability["project"]["workspace_id"],
+                {"type": "user", "id": user.id},
+                "recording.session_canceled",
+                {"type": "recording_session", "id": session["id"]},
+                {
+                    "flowId": session["flowId"],
+                    "environmentId": session["environmentId"],
+                    "status": session["status"],
+                },
+                project_id,
+            )
+        return _send(
+            Response(),
+            200,
+            {"canceled": session is not None, "session": session},
+        )
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/recording-sessions/{session_id}",
         methods=["GET"],
     )

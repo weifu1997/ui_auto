@@ -324,6 +324,66 @@ export function variableReference(variable: Variable) {
   return `${variable.scope === "环境" ? "env" : "project"}.${variable.name}`;
 }
 
+export function uniqueVariableNameValidator(
+  variables: Variable[],
+  scope: Variable["scope"],
+  editingId?: string,
+): (_: unknown, value: string) => Promise<void> {
+  return async (_, value) => {
+    const name = value?.trim();
+    if (!name) return;
+    const conflict = variables.some(
+      (variable) =>
+        variable.scope === scope &&
+        variable.name === name &&
+        variable.id !== editingId,
+    );
+    if (conflict) {
+      const scopeLabel = scope === "环境" ? "环境" : "项目";
+      throw new Error(`${scopeLabel}作用域已存在同名变量「${name}」，请修改`);
+    }
+  };
+}
+
+export function uniqueNameValidator<T>(options: {
+  items: T[];
+  getName: (item: T) => string;
+  getId?: (item: T) => string;
+  editingId?: string;
+  entityLabel: string;
+  extraScopeLabel?: string;
+  getExtraScopeKey?: (item: T) => string | undefined;
+  currentExtraScopeKey?: string;
+}): (_: unknown, value: string) => Promise<void> {
+  return async (_, value) => {
+    const name = value?.trim();
+    if (!name) return;
+    const {
+      items,
+      getName,
+      getId,
+      editingId,
+      entityLabel,
+      extraScopeLabel,
+      getExtraScopeKey,
+      currentExtraScopeKey,
+    } = options;
+    const conflict = items.some((item) => {
+      if (editingId !== undefined && getId) {
+        if (getId(item) === editingId) return false;
+      }
+      if (getExtraScopeKey && currentExtraScopeKey !== undefined) {
+        if (getExtraScopeKey(item) !== currentExtraScopeKey) return false;
+      }
+      return getName(item) === name;
+    });
+    if (conflict) {
+      const prefix = extraScopeLabel ? `${extraScopeLabel}内` : "";
+      throw new Error(`${prefix}已存在同名${entityLabel}「${name}」，请修改`);
+    }
+  };
+}
+
 export function requiredSecretVariables(variables: Variable[], steps: FlowStep[]) {
   return variables.filter((variable) => {
     if (!variable.secret || (variable.scope !== "环境" && variable.scope !== "项目")) return false;

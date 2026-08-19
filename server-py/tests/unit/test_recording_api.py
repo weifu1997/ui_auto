@@ -148,6 +148,33 @@ def test_recording_session_create_requires_flow_edit_and_returns_session(tmp_pat
         services.close()
 
 
+def test_recording_session_cancel_active_returns_canceled_session(tmp_path):
+    services, user, session = _setup(tmp_path)
+    try:
+        router = create_platform_router(services)
+        services.recording_coordinator.cancel_active = lambda *args, **kwargs: {
+            **FAKE_SESSION,
+            "status": "canceled",
+        }
+        cancel_route = _route(
+            router,
+            "/api/platform/projects/{project_id}/recording-sessions/cancel-active",
+        )
+        response = _call(
+            cancel_route,
+            session["token"],
+            "project-1",
+            method="POST",
+            body=json.dumps({"environmentId": "env-1"}).encode(),
+        )
+        assert response.status_code == 200
+        payload = json.loads(response.body)
+        assert payload["canceled"] is True
+        assert payload["session"]["status"] == "canceled"
+    finally:
+        services.close()
+
+
 def test_recording_session_create_rejects_member_without_flow_edit(tmp_path):
     services, user, session = _setup(tmp_path)
     try:
