@@ -40,7 +40,6 @@ from .crypto import decrypt, encrypt, key_material
 from .migrations import migrate_project_document_resources, run_platform_migrations
 from .managed_runner import ManagedRunner
 from .recorder import RecordingCoordinator
-from .local_picker import LocalPickerCoordinator
 from .recording_state import RecordingSessionStateStore
 from .resources import as_record
 
@@ -429,7 +428,6 @@ class PlatformServices:
             on_failed=self._audit_recording_failed,
             on_storage_state=self.recording_session_state.remember,
         )
-        self.local_picker = LocalPickerCoordinator()
         self.webhook_requests: dict[str, list[float]] = {}
         configured_secret = os.environ.get("PLATFORM_SECRET_KEY")
         if os.environ.get("NODE_ENV") == "production" and not configured_secret:
