@@ -5,6 +5,7 @@ import {
   CheckCircleFilled,
   CloseCircleFilled,
   CodeOutlined,
+  DeleteOutlined,
   DragOutlined,
   ExclamationCircleFilled,
   FileSearchOutlined,
@@ -31,7 +32,7 @@ import { message, modal } from "./antd-feedback";
 import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRun, createRecordingSession, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
 import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
-import { platformRunAsRun, uniqueVariableNameValidator } from "./pages/shared";
+import { describePlatformRunError, platformRunAsRun, uniqueVariableNameValidator } from "./pages/shared";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,
@@ -206,7 +207,8 @@ function mergeElementEdits(
   return { ...element, ...patch };
 }
 
-function elementValidationLabel(result: ElementValidationResult) {
+function elementValidationLabel(result: ElementValidationResult, validated: boolean) {
+  if (!validated && result.status !== "running") return "未校验，点击「校验全部」开始";
   switch (result.status) {
     case "pending":
       return "等待校验";
@@ -246,14 +248,36 @@ function requestRunSecrets(
     const submitted = { ...sessionValues };
     modal.confirm({
       title: "运行前注入密钥",
+      width: 520,
       content: (
         <div className="secret-run-fields">
+          <Alert
+            type="info"
+            showIcon
+            message="以下密钥仅用于本次运行会话，不会保存至服务器存储。"
+            style={{ marginBottom: 8 }}
+          />
           {missing.map((variable) => (
-            <label key={variable.id}>
-              <span>{variable.name}</span>
+            <label key={variable.id} className="secret-run-field">
+              <div className="secret-run-label">
+                <span className="secret-run-name">
+                  <span className="secret-run-required" aria-hidden="true">*</span>
+                  {variable.name}
+                </span>
+                <Tag
+                  color={variable.scope === "环境" ? "blue" : "purple"}
+                  className="secret-run-scope"
+                >
+                  {variable.scope}
+                </Tag>
+              </div>
+              {variable.description && (
+                <div className="secret-run-description">{variable.description}</div>
+              )}
               <Input.Password
                 aria-label={`运行密钥 ${variable.name}`}
-                autoComplete="off"
+                autoComplete="new-password"
+                placeholder={`请输入 ${variable.name}`}
                 onChange={(event) => {
                   submitted[variable.id] = event.target.value;
                 }}
@@ -330,6 +354,7 @@ export default function FlowEditorPage() {
   const [elementEdits, setElementEdits] = useState<Record<string, Partial<ElementAsset>>>(emptyElementEdits);
   const [expandedElementId, setExpandedElementId] = useState<string | null>(null);
   const [validationResults, setValidationResults] = useState<Record<string, ElementValidationResult>>(emptyValidationResults);
+  const [hasValidated, setHasValidated] = useState(false);
   const validationRunningRef = useRef(false);
   const [recordingEnvironmentId, setRecordingEnvironmentId] = useState(activeEnvironmentId ?? "");
   const [recordingFreshLogin, setRecordingFreshLogin] = useState(false);
@@ -397,9 +422,10 @@ export default function FlowEditorPage() {
     }
     const canImport =
       effectiveNewElements.length === 0 ||
-      effectiveNewElements.every((asset) => validationResults[asset.id]?.status === "success");
+      (hasValidated &&
+        effectiveNewElements.every((asset) => validationResults[asset.id]?.status === "success"));
     return { totals, canImport };
-  }, [effectiveNewElements, validationResults]);
+  }, [effectiveNewElements, validationResults, hasValidated]);
 
   const platformContext = project ? platformProjectContext(project.id) : undefined;
 
@@ -456,6 +482,7 @@ export default function FlowEditorPage() {
   const runBatchValidation = useCallback(async () => {
     if (!effectiveElementsToValidate.length) return;
     if (validationRunningRef.current) return;
+    setHasValidated(true);
     validationRunningRef.current = true;
     try {
       const keyOf = (asset: ElementAsset) =>
@@ -494,6 +521,7 @@ export default function FlowEditorPage() {
     (assetId: string) => {
       const asset = effectiveNewElements.find((item) => item.id === assetId);
       if (!asset) return;
+      setHasValidated(true);
       runSingleValidation(assetId, asset, (result) => {
         setValidationResults((prev) => ({ ...prev, [assetId]: result }));
       });
@@ -518,13 +546,54 @@ export default function FlowEditorPage() {
     setElementEdits(emptyElementEdits);
     setValidationResults(emptyValidationResults);
     setExpandedElementId(null);
+    setHasValidated(false);
   }, [recordingResult]);
 
-  // 录制结果 / 环境 / 元素 / secret 映射 / 用户编辑 任一变化后，重新触发并发校验
-  useEffect(() => {
-    if (!draftPlan || !platformContext || !recordingEnvironment) return;
-    void runBatchValidation();
-  }, [draftPlan, platformContext, recordingEnvironment, runBatchValidation, elementEdits]);
+  const deleteRecordingStep = useCallback(
+    (stepIndex: number) => {
+      if (!recordingResult) return;
+      const targetStep = recordingResult.steps[stepIndex];
+      if (!targetStep) return;
+      setRecordingResult((prev) => {
+        if (!prev) return prev;
+        const newSteps = prev.steps.filter((_, index) => index !== stepIndex);
+        const newBindings = prev.requiredBindings.filter((binding) => binding.stepId !== targetStep.id);
+        // 在 RecordingResult 原始结构内，step.element 与 element.name 都是录制时
+        // 的 recorded.name，两者一一对应，因此可以安全地按「剩余 steps 引用的
+        // recorded.name 集合」过滤 elements。
+        // 注意：这里用 typeof === 'string' 而不是 if (step.element)，避免空字符串
+        // 名字被误判为未引用而删掉。
+        const usedElementNames = new Set<string>();
+        for (const step of newSteps) {
+          if (typeof step.element === "string") usedElementNames.add(step.element);
+        }
+        // 同时处理 element.name 为空字符串的情况：仅当 recorded.name 完全匹配
+        // 才删除，不会因空字符串 falsy 判断误伤。
+        // planRecordingImport 在后续阶段会再做 recorded.name → resolved.name
+        // 映射（uniqueElementName 可能追加序号、或合并到已有元素），但这是在
+        // RecordingResult 之外的处理，不影响当前结构的一致性。
+        const newElements = prev.elements.filter((element) => usedElementNames.has(element.name));
+        return {
+          ...prev,
+          steps: newSteps,
+          elements: newElements,
+          requiredBindings: newBindings,
+        };
+      });
+      // 删除该 step 对应的 secret 映射
+      setRecordingSecretMap((prev) => {
+        const next = { ...prev };
+        delete next[targetStep.id];
+        return next;
+      });
+      // 清空校验状态和编辑状态
+      setElementEdits(emptyElementEdits);
+      setValidationResults(emptyValidationResults);
+      setExpandedElementId(null);
+      setHasValidated(false);
+    },
+    [recordingResult],
+  );
 
   useEffect(() => () => {
     if (recordingPollRef.current !== undefined) {
@@ -857,11 +926,7 @@ export default function FlowEditorPage() {
         message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
         if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
       } catch (error) {
-        if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
-          message.error("该流程还没有已发布版本，请先保存流程");
-        } else {
-          message.error("创建平台运行失败，请检查执行服务与运行环境");
-        }
+        message.error(describePlatformRunError(error));
       } finally {
         setRunToStep(false);
       }
@@ -1191,17 +1256,18 @@ export default function FlowEditorPage() {
             }}
           >取消</Button>,
           <Button
-            key="revalidate"
+            key="validate"
             icon={<ReloadOutlined />}
             disabled={!effectiveNewElements.length || Boolean(validationSummary.totals.running)}
             onClick={() => void runBatchValidation()}
           >
-            重新校验全部
+            {hasValidated ? "重新校验全部" : "校验全部"}
           </Button>,
           <Tooltip
             key="import-tooltip"
             title={(() => {
               if (recordingResult?.requiredBindings.length && !allBindingsFilled) return "请先为所有敏感输入绑定 secret 变量";
+              if (effectiveNewElements.length > 0 && !hasValidated) return "请先点击「校验全部」校验元素定位器";
               if (!validationSummary.canImport) {
                 if (validationSummary.totals.running + validationSummary.totals.pending > 0) return "等待元素定位器校验完成…";
                 if (validationSummary.totals.missed) return `有 ${validationSummary.totals.missed} 个元素未匹配到，请编辑定位器或重新校验`;
@@ -1226,9 +1292,23 @@ export default function FlowEditorPage() {
         {recordingResult && (
           <div className="recording-result">
             <p>共录制 {recordingResult.steps.length} 步，{recordingResult.elements.length} 个元素；已收到 {recordingEvents.length} 个事件。</p>
-            <ol>
+            <ol className="recording-steps-list">
               {recordingResult.steps.map((step, index) => (
-                <li key={String(step.id ?? index)}>{String(step.title ?? step.action ?? "录制步骤")} {step.element ? ` · ${String(step.element)}` : ""}</li>
+                <li key={String(step.id ?? index)} className="recording-step-item">
+                  <span className="recording-step-content">
+                    <span className="recording-step-index">{index + 1}.</span>
+                    <span>{String(step.title ?? step.action ?? "录制步骤")} {step.element ? ` · ${String(step.element)}` : ""}</span>
+                  </span>
+                  <Tooltip title="删除此步骤">
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() => deleteRecordingStep(index)}
+                    />
+                  </Tooltip>
+                </li>
               ))}
             </ol>
             <ul>
@@ -1309,13 +1389,15 @@ export default function FlowEditorPage() {
                       <ExclamationCircleFilled style={{ color: "var(--warning)" }} />
                     ) : result.status === "missed" || result.status === "error" ? (
                       <CloseCircleFilled style={{ color: "var(--danger)" }} />
-                    ) : (
+                    ) : result.status === "running" ? (
                       <LoadingOutlined />
+                    ) : (
+                      <FileSearchOutlined style={{ color: "var(--text-secondary)" }} />
                     );
                   return (
                     <div key={element.id} className="element-validation-row">
                       <div className="element-validation-main">
-                        <Tooltip title={elementValidationLabel(result)}>
+                        <Tooltip title={elementValidationLabel(result, hasValidated)}>
                           <span className="element-validation-icon">{statusIcon}</span>
                         </Tooltip>
                         <span className="element-validation-name">{element.name}</span>
@@ -1364,6 +1446,7 @@ export default function FlowEditorPage() {
                                 [element.id]: { ...(prev[element.id] ?? {}), ...patch },
                               }));
                               setExpandedElementId(null);
+                              setHasValidated(true);
                               // 保存后自动重新校验
                               const merged = mergeElementEdits(element, {
                                 ...elementEdits,

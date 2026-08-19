@@ -652,16 +652,53 @@
 
 .secret-run-fields {
   display: grid;
-  gap: var(--space-4);
-  min-width: min(360px, calc(100vw - 88px));
+  gap: var(--space-5);
+  min-width: min(440px, calc(100vw - 88px));
 }
 
-.secret-run-fields label {
+.secret-run-fields .ant-alert {
+  margin-bottom: 0;
+}
+
+.secret-run-field {
   display: grid;
   gap: var(--space-2);
   color: var(--text-primary);
   font-size: var(--text-body);
+}
+
+.secret-run-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-weight: 600;
+  line-height: 1.4;
+}
+
+.secret-run-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.secret-run-required {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.secret-run-scope {
+  margin: 0 !important;
+  flex-shrink: 0;
+}
+
+.secret-run-description {
+  color: var(--text-secondary);
+  font-size: var(--text-footnote);
+  line-height: 1.5;
+  margin-top: -2px;
 }
 
 .route-loading {
@@ -1303,6 +1340,42 @@
 .element-validation-edit {
   padding-top: var(--space-2);
   border-top: 1px dashed var(--line-soft);
+}
+.recording-steps-list {
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.recording-step-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.recording-step-item:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--line-emphasis);
+}
+.recording-step-content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-body);
+  line-height: 1.5;
+}
+.recording-step-index {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-footnote);
+  min-width: 24px;
 }
 .element-edit-form {
   padding: 0;

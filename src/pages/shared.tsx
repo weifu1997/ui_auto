@@ -316,6 +316,53 @@ export function reportRetryError(error: unknown) {
   return false;
 }
 
+function knownPlatformRunErrorCode(code: string, status: number): string | undefined {
+  switch (code) {
+    case "PUBLISHED_REVISION_REQUIRED":
+      return "该流程还没有已发布版本，请先保存流程";
+    case "REVISION_ENVIRONMENT_MISMATCH":
+      return "已发布版本与所选运行环境不匹配，请在目标环境下重新保存并发布流程";
+    case "FLOW_HAS_NO_STEPS":
+      return "流程没有可执行步骤，请在编排器中添加步骤后再保存";
+    case "RUN_SECRET_NOT_CONFIGURED":
+      return "缺少必填的运行密钥配置，请确认密钥变量已在项目或环境中声明";
+    case "AGENT_BROWSER_UNSUPPORTED":
+      // 后端有两条抛出路径，通过 HTTP 状态码区分：
+      // - 400：环境配置的 browser 字段不是 Chromium（require_chromium_environment）
+      // - 409：执行服务 Playwright 未安装或 Chromium 可执行文件缺失（ensure_chromium_available）
+      if (status === 400) {
+        return "所选环境的浏览器类型不受支持：当前执行服务仅支持 Chromium。请在环境设置中将浏览器切换为 Chromium。";
+      }
+      return "执行服务检测不到可用的 Chromium 浏览器，请在部署机上执行 `playwright install chromium` 安装浏览器，并确认 Playwright 依赖完整。";
+    case "EXECUTION_SERVICE_UNAVAILABLE":
+      return "执行服务未启动或不可达，请检查部署机 Agent 状态与网络连通性";
+    case "ENVIRONMENT_NOT_READY":
+      return "所选运行环境未就绪，请检查环境基础 URL 与 Agent 健康状态";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * 统一解释「创建平台运行」相关的错误，避免 catch-all 吞掉后端给出的
+ * 具体失败原因。返回最终要展示给用户的文案；非 PlatformApiError 的异常
+ * 也会尽量提取出可读信息。
+ */
+export function describePlatformRunError(error: unknown, fallback = "创建平台运行失败，请检查执行服务与运行环境") {
+  if (error instanceof PlatformApiError) {
+    const known = knownPlatformRunErrorCode(error.code, error.status);
+    if (known) return known;
+    if (error.message) {
+      return `${fallback}（${error.code}：${error.message}）`;
+    }
+    return `${fallback}（错误码：${error.code}）`;
+  }
+  if (error instanceof Error && error.message) {
+    return `${fallback}（${error.message}）`;
+  }
+  return fallback;
+}
+
 export function isTerminalStatus(status: Run["status"]) {
   return status === "success" || status === "failed" || status === "canceled";
 }
@@ -407,14 +454,36 @@ export function requestRunSecrets(
     const submitted = { ...sessionValues };
     modal.confirm({
       title: "运行前注入密钥",
+      width: 520,
       content: (
         <div className="secret-run-fields">
+          <Alert
+            type="info"
+            showIcon
+            message="以下密钥仅用于本次运行会话，不会保存至服务器存储。"
+            style={{ marginBottom: 8 }}
+          />
           {missing.map((variable) => (
-            <label key={variable.id}>
-              <span>{variable.name}</span>
+            <label key={variable.id} className="secret-run-field">
+              <div className="secret-run-label">
+                <span className="secret-run-name">
+                  <span className="secret-run-required" aria-hidden="true">*</span>
+                  {variable.name}
+                </span>
+                <Tag
+                  color={variable.scope === "环境" ? "blue" : "purple"}
+                  className="secret-run-scope"
+                >
+                  {variable.scope}
+                </Tag>
+              </div>
+              {variable.description && (
+                <div className="secret-run-description">{variable.description}</div>
+              )}
               <Input.Password
                 aria-label={`运行密钥 ${variable.name}`}
-                autoComplete="off"
+                autoComplete="new-password"
+                placeholder={`请输入 ${variable.name}`}
                 onChange={(event) => {
                   submitted[variable.id] = event.target.value;
                 }}
@@ -460,15 +529,19 @@ export function platformRunAsRun(run: PlatformRun): Run {
   const flow = snapshot.flow && typeof snapshot.flow === "object" ? snapshot.flow as Record<string, unknown> : {};
   const environment = snapshot.environment && typeof snapshot.environment === "object" ? snapshot.environment as Record<string, unknown> : {};
   const steps = Array.isArray(flow.steps) ? flow.steps : [];
-  const completedSteps = run.events.filter((event) => event.kind === "step.completed").length;
+  // 同时兼容 runner.py 现在写入的规范事件名「step.completed」和历史写入的「step.succeeded」。
+  const completedEvents = run.events.filter(
+    (event) => event.kind === "step.completed" || event.kind === "step.succeeded"
+  ).length;
   const status: Run["status"] = run.status === "dispatched" ? "running" : run.status;
+  const completedSteps = status === "success" ? steps.length : completedEvents;
   return {
     id: run.id,
     flowName: typeof flow.name === "string" ? flow.name : "平台运行",
     status,
     environment: typeof environment.name === "string" ? environment.name : run.environmentId,
     progress: steps.length > 0 ? Math.round((completedSteps / steps.length) * 100) : status === "success" ? 100 : 0,
-    completedSteps: status === "success" ? steps.length : completedSteps,
+    completedSteps,
     totalSteps: steps.length,
     startedAt: new Date(run.createdAt).toLocaleString(),
     duration: isTerminalStatus(status) ? "已完成" : "进行中",

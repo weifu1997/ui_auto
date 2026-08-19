@@ -4,6 +4,7 @@ import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements,
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
 import { useWorkspaceStore } from "../workspace-store";
+import { LocalElementPickerPanel } from "./LocalElementPickerPanel";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Checkbox, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
@@ -259,6 +260,7 @@ export function ElementsPage({ project }: { project: Project }) {
       </section>
       <ElementDrawer
         open={editor !== null}
+        project={project}
         elements={items}
         element={editor === "new" ? undefined : editor}
         environments={environments}
@@ -320,6 +322,7 @@ export function ElementsPage({ project }: { project: Project }) {
 
 export function ElementDrawer({
   open,
+  project,
   elements,
   element,
   environments,
@@ -327,6 +330,7 @@ export function ElementDrawer({
   onSave,
 }: {
   open: boolean;
+  project: Project;
   elements?: ElementAsset[];
   element?: ElementAsset | null;
   environments: Environment[];
@@ -336,9 +340,10 @@ export function ElementDrawer({
   const existing = elements ?? [];
   const [form] = Form.useForm();
   const method = Form.useWatch("method", form);
+  const selectedEnvironment = Form.useWatch("environment", form);
+  const [pickerOpen, setPickerOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
-    // 先清空上次表单内容，避免新建时残留上一次输入的名称/定位值。
     form.resetFields();
     form.setFieldsValue(
       element ?? {
@@ -348,6 +353,26 @@ export function ElementDrawer({
       },
     );
   }, [element, environments, form, open]);
+
+  const applyPickerSelection = (selection: { candidate: { method: string; value: string }; path: string; environmentId: string; suggestedName: string }) => {
+    const method = selection.candidate.method === "css" ? "CSS" : selection.candidate.method;
+    form.setFieldsValue({
+      method,
+      value: selection.candidate.value,
+      path: selection.path,
+      environment: selection.environmentId,
+      name: form.getFieldValue("name") || selection.suggestedName,
+    });
+    const duplicate = existing.some((item) =>
+      item.method.toLowerCase() === method.toLowerCase() && item.value === selection.candidate.value,
+    );
+    if (duplicate) {
+      message.warning("元素库中已存在相同定位器，保存后可能产生重复元素");
+    }
+    setPickerOpen(false);
+    message.success("已回填定位信息");
+  };
+
   return (
     <Drawer
       title={element ? "编辑元素" : "新建元素"}
@@ -381,6 +406,24 @@ export function ElementDrawer({
         </Button>
       }
     >
+      <div className="element-picker-toolbar">
+        <Button
+          icon={<FileSearchOutlined />}
+          onClick={() => {
+            const environmentValue = typeof form.getFieldValue("environment") === "string"
+              ? form.getFieldValue("environment")
+              : selectedEnvironment;
+            if (!environmentValue) {
+              message.warning("请先在表单中选择默认验证环境");
+              return;
+            }
+            setPickerOpen(true);
+          }}
+        >
+          从页面获取
+        </Button>
+        <span className="table-secondary">在调试浏览器中点击元素，自动生成并回填定位器</span>
+      </div>
       <Form form={form} layout="vertical">
         <Form.Item
           name="name"
@@ -459,6 +502,21 @@ export function ElementDrawer({
           <Input.TextArea rows={3} placeholder="说明元素用途及使用注意事项" />
         </Form.Item>
       </Form>
+      <Modal
+        title="从页面获取元素（本地通道）"
+        open={pickerOpen}
+        width={720}
+        footer={null}
+        onCancel={() => setPickerOpen(false)}
+      >
+        <div className="element-picker-modal-body">
+          <LocalElementPickerPanel
+            project={project}
+            preferredEnvironmentId={selectedEnvironment}
+            onSelectCandidate={(selection) => applyPickerSelection(selection)}
+          />
+        </div>
+      </Modal>
     </Drawer>
   );
 }
