@@ -2528,3 +2528,23 @@
 :root[data-theme="dark"] .ant-tag.ant-tag-processing {
   border-color: rgba(10, 132, 255, 0.28) !important;
 }
+
+.template-overview-box {
+  background: var(--surface-2, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.template-drawer-content .ant-collapse-header {
+  align-items: center !important;
+}
+
+.template-drawer-content .ant-list-item {
+  border-block-end: 1px solid var(--line) !important;
+}
+
+.template-drawer-content .ant-card-head {
+  min-height: 38px;
+  font-size: var(--text-subhead);
+}

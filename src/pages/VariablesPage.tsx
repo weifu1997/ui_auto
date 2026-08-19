@@ -17,6 +17,7 @@ export function VariablesPage({ project }: { project: Project }) {
   const [drawer, setDrawer] = useState(false);
   const [search, setSearch] = useState("");
   const [scopeFilter, setScopeFilter] = useState("all");
+  const [selectedVariableIds, setSelectedVariableIds] = useState<string[]>([]);
   const columns: TableColumnsType<Variable> = [
     {
       title: "变量",
@@ -135,12 +136,41 @@ export function VariablesPage({ project }: { project: Project }) {
             { value: "项目", label: "项目变量" },
           ]}
         />
+        <Popconfirm
+          title="批量删除变量"
+          description={`确定删除选中的 ${selectedVariableIds.length} 个变量？删除后引用这些变量的流程步骤将无法解析其值。`}
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          disabled={selectedVariableIds.length === 0}
+          onConfirm={() => {
+            const count = selectedVariableIds.length;
+            updateItems((list) =>
+              list.filter((variable) => variable.scope === "内置" || !selectedVariableIds.includes(variable.id)),
+            );
+            setSelectedVariableIds([]);
+            message.success(`已批量删除 ${count} 个变量`);
+          }}
+        >
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={selectedVariableIds.length === 0}
+          >
+            批量删除{selectedVariableIds.length > 0 ? `（${selectedVariableIds.length}）` : ""}
+          </Button>
+        </Popconfirm>
       </div>
       <section className="surface">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={filtered}
+          rowSelection={{
+            selectedRowKeys: selectedVariableIds,
+            onChange: (keys) => setSelectedVariableIds(keys.map(String)),
+            getCheckboxProps: (item) => ({ disabled: item.scope === "内置" }),
+          }}
           pagination={false}
           scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建变量" /> }}

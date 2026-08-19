@@ -1,6 +1,6 @@
 import { message } from "../antd-feedback";
 import type { Project, Run } from "../mock-data";
-import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../platform-api";
+import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, deletePlatformRun, deletePlatformRuns, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../platform-api";
 import type { PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../platform-api";
 
 import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
@@ -8,8 +8,8 @@ import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useWorkspaceStore } from "../workspace-store";
 import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling } from "./shared";
-import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
-import { Button, Empty, Input, Progress, Select, Table, Tag, Tooltip } from "antd";
+import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
+import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 const batchStatusMeta = {
@@ -51,6 +51,8 @@ export function RunsPage({ project }: { project: Project }) {
     return target ? [target] : [];
   });
   const [batchUpdatingId, setBatchUpdatingId] = useState<string | null>(null);
+  const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
+  const [batchDeleting, setBatchDeleting] = useState(false);
   useEffect(() => {
     if (platformSession && legacyPlatformProjectId && !platformProjectId) {
       setPlatformProjectId(project.id, legacyPlatformProjectId);
@@ -382,30 +384,65 @@ export function RunsPage({ project }: { project: Project }) {
       render: (_, run) =>
         canExecuteRun
           ? (
-            !isTerminalStatus(run.status) ? (
-              <Tooltip title="取消运行">
-                <Button
-                  type="text"
-                  size="small"
-                  danger
-                  icon={<StopOutlined />}
-                  aria-label={`取消运行 ${run.flowName}`}
-                  loading={updatingRunId === run.id}
-                  onClick={() => void cancel(run)}
-                />
-              </Tooltip>
-            ) : (
-              <Tooltip title={run.status === "success" ? "再次运行（新运行）" : "重试"}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ReloadOutlined />}
-                  aria-label={`${run.status === "success" ? "再次运行（新运行）" : "重试"} ${run.flowName}`}
-                  loading={updatingRunId === run.id}
-                  onClick={() => void retry(run)}
-                />
-              </Tooltip>
-            )
+            <Space size={0}>
+              {!isTerminalStatus(run.status) ? (
+                <Tooltip title="取消运行">
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    icon={<StopOutlined />}
+                    aria-label={`取消运行 ${run.flowName}`}
+                    loading={updatingRunId === run.id}
+                    onClick={() => void cancel(run)}
+                  />
+                </Tooltip>
+              ) : (
+                <Tooltip title={run.status === "success" ? "再次运行（新运行）" : "重试"}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    aria-label={`${run.status === "success" ? "再次运行（新运行）" : "重试"} ${run.flowName}`}
+                    loading={updatingRunId === run.id}
+                    onClick={() => void retry(run)}
+                  />
+                </Tooltip>
+              )}
+              {isTerminalStatus(run.status) && (
+                <Popconfirm
+                  title="删除运行记录"
+                  description="确定删除此条运行记录吗？"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={async () => {
+                    try {
+                      if (platformSession && remotePlatformProjectId) {
+                        await deletePlatformRun(platformSession.token, remotePlatformProjectId, run.id);
+                      }
+                      useRunStore.getState().removeRun(project.id, run.id);
+                      setPlatformPageRuns((prev) => prev.filter((r) => r.id !== run.id));
+                      setPlatformTotal((prev) => Math.max(0, prev - 1));
+                      setSelectedRunIds((prev) => prev.filter((id) => id !== run.id));
+                      message.success("运行记录已删除");
+                    } catch {
+                      message.error("运行记录删除失败");
+                    }
+                  }}
+                >
+                  <Tooltip title="删除记录">
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      aria-label={`删除运行 ${run.flowName}`}
+                    />
+                  </Tooltip>
+                </Popconfirm>
+              )}
+            </Space>
           )
           : null,
     },
@@ -416,13 +453,54 @@ export function RunsPage({ project }: { project: Project }) {
         title="运行中心"
         description="查看当前与历史执行任务。状态由 Platform 执行服务持续刷新。"
         actions={
-          <Button
-            icon={<ReloadOutlined />}
-            loading={refreshing}
-            onClick={() => void refresh()}
-          >
-            刷新状态
-          </Button>
+          <Space>
+            {canExecuteRun && (
+              <Popconfirm
+                title="批量删除运行记录"
+                description={`确定删除选中的 ${selectedRunIds.length} 条运行记录吗？`}
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                disabled={selectedRunIds.length === 0}
+                onConfirm={async () => {
+                  const ids = [...selectedRunIds];
+                  setBatchDeleting(true);
+                  try {
+                    let deletedIds = ids;
+                    if (platformSession && remotePlatformProjectId) {
+                      const result = await deletePlatformRuns(platformSession.token, remotePlatformProjectId, ids);
+                      deletedIds = result.runIds;
+                    }
+                    useRunStore.getState().removeRuns(project.id, deletedIds);
+                    setPlatformPageRuns((prev) => prev.filter((r) => !deletedIds.includes(r.id)));
+                    setPlatformTotal((prev) => Math.max(0, prev - deletedIds.length));
+                    setSelectedRunIds((prev) => prev.filter((id) => !deletedIds.includes(id)));
+                    message.success(`已批量删除 ${deletedIds.length} 条运行记录`);
+                  } catch {
+                    message.error("批量删除运行记录失败");
+                  } finally {
+                    setBatchDeleting(false);
+                  }
+                }}
+              >
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={selectedRunIds.length === 0}
+                  loading={batchDeleting}
+                >
+                  批量删除{selectedRunIds.length > 0 ? `（${selectedRunIds.length}）` : ""}
+                </Button>
+              </Popconfirm>
+            )}
+            <Button
+              icon={<ReloadOutlined />}
+              loading={refreshing}
+              onClick={() => void refresh()}
+            >
+              刷新状态
+            </Button>
+          </Space>
         }
       />
       <FilterBar
@@ -523,6 +601,11 @@ export function RunsPage({ project }: { project: Project }) {
           rowKey="id"
           columns={columns}
           dataSource={dataSource}
+          rowSelection={canExecuteRun ? {
+            selectedRowKeys: selectedRunIds,
+            onChange: (keys) => setSelectedRunIds(keys.map(String)),
+            getCheckboxProps: (run) => ({ disabled: !isTerminalStatus(run.status) }),
+          } : undefined}
           pagination={{
             current: page,
             pageSize: 8,

@@ -338,16 +338,40 @@ export function FlowsPage({ project }: { project: Project }) {
             批量运行（{selectedFlowIds.length}）
           </Button>
         )}
+        {canEditFlow && (
+          <Popconfirm
+            title="批量删除流程"
+            description={`确定删除选中的 ${selectedFlowIds.length} 个流程？此操作不可恢复。`}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={selectedFlowIds.length === 0}
+            onConfirm={() => {
+              const count = selectedFlowIds.length;
+              updateItems((list) => list.filter((item) => !selectedFlowIds.includes(item.id)));
+              setSelectedFlowIds([]);
+              message.success(`已批量删除 ${count} 个流程`);
+            }}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedFlowIds.length === 0}
+            >
+              批量删除{selectedFlowIds.length > 0 ? `（${selectedFlowIds.length}）` : ""}
+            </Button>
+          </Popconfirm>
+        )}
       </div>
       <section className="surface">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={filtered}
-          rowSelection={platformMode && canRunFlow ? {
+          rowSelection={canEditFlow || (platformMode && canRunFlow) ? {
             selectedRowKeys: selectedFlowIds,
             onChange: (keys) => setSelectedFlowIds(keys.map(String)),
-            getCheckboxProps: (flow) => ({ disabled: !isFlowRunnable(flow.id) }),
+            getCheckboxProps: (flow) => ({ disabled: !canEditFlow && !isFlowRunnable(flow.id) }),
           } : undefined}
           pagination={{ pageSize: 8, showSizeChanger: false }}
           scroll={{ x: "max-content" }}
