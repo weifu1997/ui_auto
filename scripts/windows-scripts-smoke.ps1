@@ -4,6 +4,8 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = (Resolve-Path -LiteralPath $PSScriptRoot).ProviderPath
 $errors = @()
 foreach ($script in Get-ChildItem -LiteralPath $scriptRoot -Filter "*.ps1" -File) {
+  $nonAsciiByte = [System.IO.File]::ReadAllBytes($script.FullName) | Where-Object { $_ -gt 0x7F } | Select-Object -First 1
+  if ($null -ne $nonAsciiByte) { $errors += "$($script.Name): PowerShell deployment scripts must contain only ASCII source bytes" }
   $tokens = $null
   $parseErrors = $null
   [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null

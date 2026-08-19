@@ -9,7 +9,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 if (-not $PlatformSecretKey) {
-  $secureSecret = Read-Host -AsSecureString "请输入至少 32 字符的 PLATFORM_SECRET_KEY"
+  $secureSecret = Read-Host -AsSecureString "Enter a PLATFORM_SECRET_KEY with at least 32 characters"
   $PlatformSecretKey = [System.Net.NetworkCredential]::new("", $secureSecret).Password
 }
 if ($PlatformSecretKey.Length -lt 32) { throw "PlatformSecretKey must contain at least 32 characters" }

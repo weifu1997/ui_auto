@@ -15,4 +15,4 @@ Push-Location (Join-Path $current "server-py")
 & (Join-Path $current "venv\Scripts\python.exe") -m playwright install chromium
 Pop-Location
 try { & $service start; Start-Sleep -Seconds 3; Invoke-RestMethod -Uri "http://127.0.0.1:8787/ready" | Out-Null }
-catch { & $service stop; Remove-Item -LiteralPath $current -Recurse -Force; Move-Item -LiteralPath $previous -Destination $current; & $service start; Write-Host "Upgrade failed and the previous version was restored."; Write-Host "If the database is inconsistent, restore the pre-upgrade backup manually: scripts\restore.ps1 -Backup <升级前 backups 目录>"; throw "Upgrade failed and previous version was restored" }
+catch { & $service stop; Remove-Item -LiteralPath $current -Recurse -Force; Move-Item -LiteralPath $previous -Destination $current; & $service start; Write-Host "Upgrade failed and the previous version was restored."; Write-Host "If the database is inconsistent, restore the pre-upgrade backup manually: scripts\restore.ps1 -Backup <backup-directory>."; throw "Upgrade failed and previous version was restored" }

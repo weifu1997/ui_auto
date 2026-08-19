@@ -106,6 +106,73 @@ npm run build
 npm run start
 ```
 
+## Scenario: Windows PowerShell Source Compatibility
+
+### 1. Scope / Trigger
+
+- Trigger: adding or editing a deployment PowerShell script under `scripts/`,
+  or changing the Windows deployment smoke gate.
+- Scope: the supported deployment shell is Windows PowerShell 5.1 as well as
+  newer PowerShell hosts. GitHub Windows runners are the portability proof.
+
+### 2. Signatures
+
+- `npm run test:windows` -> `powershell.exe -NoProfile -ExecutionPolicy Bypass
+  -File scripts/windows-scripts-smoke.ps1`.
+- Every tracked `scripts/*.ps1` deployment source file contains only ASCII
+  bytes (`0x00` through `0x7F`).
+
+### 3. Contracts
+
+- Deployment script source, including prompts, comments, and diagnostics, is
+  ASCII-only. Generated data may still use an explicit output encoding where
+  its file contract requires it.
+- This avoids Windows PowerShell 5.1 interpreting a no-BOM UTF-8 source file
+  through a legacy code page, which can turn non-ASCII bytes into parser-significant
+  punctuation on a hosted runner.
+- `windows-scripts-smoke.ps1` scans every `scripts/*.ps1` byte stream before
+  `Parser::ParseFile`; a non-ASCII byte is a smoke-test failure even if the
+  current local PowerShell configuration parses the file.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| A deployment PowerShell source contains a byte above `0x7F` | Windows smoke fails with the script name and the ASCII-source contract |
+| All deployment PowerShell sources are ASCII and parse cleanly | Windows smoke proceeds to service-template and backup/restore checks |
+| A script has a syntax error | `Parser::ParseFile` reports it with the source script name |
+
+### 5. Good / Base / Bad Cases
+
+- Good: use `"Enter a PLATFORM_SECRET_KEY with at least 32 characters"` in a
+  deployment prompt and run `npm run test:windows` on `windows-latest`.
+- Base: use `Set-Content -Encoding UTF8` when producing an operational data
+  file; that output encoding does not relax the source-file ASCII contract.
+- Bad: add localized text directly to a no-BOM `.ps1` source file because it
+  happened to parse on one developer workstation.
+
+### 6. Tests Required
+
+- `scripts/windows-scripts-smoke.ps1`: assert byte-level ASCII compatibility
+  and parse every deployment PowerShell source before executing the backup /
+  restore smoke.
+- `deployment-windows` in `.github/workflows/phase0-ci.yml`: run
+  `npm run test:windows` on `windows-latest` for the supported-host proof.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```powershell
+Read-Host -AsSecureString "localized deployment prompt"
+```
+
+#### Correct
+
+```powershell
+Read-Host -AsSecureString "Enter a PLATFORM_SECRET_KEY with at least 32 characters"
+```
+
 ## Scenario: Operational Readiness And Managed Maintenance
 
 ### 1. Scope / Trigger
