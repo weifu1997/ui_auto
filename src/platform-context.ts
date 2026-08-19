@@ -1,4 +1,5 @@
-import type { PlatformSession } from "./platform-api";
+import { platformCapabilities } from "./platform-api";
+import type { PlatformCapability, PlatformSession, PlatformWorkspaceRole } from "./platform-api";
 
 export const platformSessionStorageKey = "autoflow-platform-session";
 export const platformProjectMapStorageKey = "autoflow-platform-project-map";
@@ -8,11 +9,45 @@ export const platformContextChangedEvent = "autoflow-platform-context-changed";
 
 type ProjectMaps = Record<string, Record<string, string>>;
 type DocumentVersionMaps = Record<string, Record<string, number>>;
+const workspaceRoles = new Set<PlatformWorkspaceRole>(["super_admin", "admin", "member"]);
+const knownCapabilities = new Set<PlatformCapability>(platformCapabilities);
+
+function isPlatformSession(value: unknown): value is PlatformSession {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const user = candidate.user;
+  if (!user || typeof user !== "object" || Array.isArray(user)) return false;
+  const userRecord = user as Record<string, unknown>;
+  if (
+    typeof candidate.token !== "string" ||
+    typeof userRecord.id !== "string" ||
+    typeof userRecord.email !== "string" ||
+    typeof userRecord.name !== "string" ||
+    (userRecord.globalRole !== null && userRecord.globalRole !== "super_admin") ||
+    !Array.isArray(candidate.workspaces)
+  ) {
+    return false;
+  }
+  return candidate.workspaces.every((workspace) => {
+    if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return false;
+    const item = workspace as Record<string, unknown>;
+    return (
+      typeof item.id === "string" &&
+      typeof item.name === "string" &&
+      typeof item.role === "string" &&
+      workspaceRoles.has(item.role as PlatformWorkspaceRole) &&
+      Array.isArray(item.capabilities) &&
+      item.capabilities.every(
+        (capability) => typeof capability === "string" && knownCapabilities.has(capability as PlatformCapability),
+      )
+    );
+  });
+}
 
 export function readStoredPlatformSession() {
   try {
-    const session = JSON.parse(localStorage.getItem(platformSessionStorageKey) ?? "") as PlatformSession;
-    return session.token && Array.isArray(session.workspaces) ? session : undefined;
+    const session: unknown = JSON.parse(localStorage.getItem(platformSessionStorageKey) ?? "");
+    return isPlatformSession(session) ? session : undefined;
   } catch {
     return undefined;
   }

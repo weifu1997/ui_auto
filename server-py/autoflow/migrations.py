@@ -571,6 +571,107 @@ def add_run_batches(database: sqlite3.Connection) -> None:
     )
 
 
+def add_identity_membership_rbac(database: sqlite3.Connection) -> None:
+    """Normalize legacy roles and add controlled local-account primitives."""
+    ensure_column(database, "platform_users", "enabled", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(database, "platform_users", "global_role", "TEXT")
+    exec_sql(
+        database,
+        """
+        CREATE TABLE IF NOT EXISTS workspace_members (
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+          user_id TEXT NOT NULL REFERENCES platform_users(id),
+          role TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS platform_sessions (
+          token_hash TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES platform_users(id),
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        """,
+    )
+    database.execute(
+        """
+        UPDATE workspace_members
+        SET role = CASE lower(role)
+          WHEN 'owner' THEN 'admin'
+          WHEN 'admin' THEN 'admin'
+          ELSE 'member'
+        END
+        """
+    )
+    database.execute(
+        """
+        UPDATE platform_users
+        SET global_role = NULL
+        WHERE global_role IS NOT NULL AND global_role != 'super_admin'
+        """
+    )
+    # Session tokens do not carry role data, but revocation makes the migration
+    # boundary explicit and prevents a browser from continuing an old session.
+    database.execute("DELETE FROM platform_sessions")
+    exec_sql(
+        database,
+        """
+        CREATE TABLE IF NOT EXISTS workspace_invitations (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+          email TEXT NOT NULL,
+          role TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          expires_at TEXT NOT NULL,
+          created_by TEXT NOT NULL REFERENCES platform_users(id),
+          created_at TEXT NOT NULL,
+          revoked_at TEXT,
+          consumed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES platform_users(id),
+          token_hash TEXT NOT NULL UNIQUE,
+          expires_at TEXT NOT NULL,
+          created_by TEXT NOT NULL REFERENCES platform_users(id),
+          created_at TEXT NOT NULL,
+          revoked_at TEXT,
+          consumed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS workspace_invitations_workspace
+          ON workspace_invitations (workspace_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS workspace_invitations_email
+          ON workspace_invitations (email, expires_at);
+        CREATE INDEX IF NOT EXISTS password_reset_tokens_user
+          ON password_reset_tokens (user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS workspace_members_role
+          ON workspace_members (workspace_id, role);
+        CREATE INDEX IF NOT EXISTS platform_users_global_role
+          ON platform_users (global_role, enabled);
+        """,
+    )
+
+
+def add_deployment_audit_events(database: sqlite3.Connection) -> None:
+    """Add a deployment ledger for security actions without a workspace."""
+    exec_sql(
+        database,
+        """
+        CREATE TABLE IF NOT EXISTS deployment_audit_events (
+          id TEXT PRIMARY KEY,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          detail TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS deployment_audit_events_created
+          ON deployment_audit_events (created_at DESC);
+        """,
+    )
+
+
 def run_platform_migrations(
     database: sqlite3.Connection,
     bootstrap_schema: str,
@@ -627,6 +728,16 @@ def run_platform_migrations(
                 "version": 11,
                 "name": "run-batches",
                 "up": add_run_batches,
+            },
+            {
+                "version": 12,
+                "name": "local-accounts-membership-rbac",
+                "up": add_identity_membership_rbac,
+            },
+            {
+                "version": 13,
+                "name": "deployment-security-audit",
+                "up": add_deployment_audit_events,
             },
         ],
     )

@@ -3,8 +3,8 @@
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
 import { getPlatformHealth, PlatformApiError } from "../platform-api";
-import type { PlatformRun, PlatformSession } from "../platform-api";
-import { readStoredPlatformSession, storePlatformSession } from "../platform-context";
+import type { PlatformCapability, PlatformRun, PlatformSession } from "../platform-api";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../platform-context";
 import { logoutPlatform } from "../platform-api";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
@@ -76,7 +76,14 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   const location = useLocation();
   const isProjects = location.pathname === "/projects";
   const isTemplates = location.pathname === "/templates";
+  const isAdministration = location.pathname === "/workspace/administration";
   const session = readStoredPlatformSession();
+  const workspaceId = readStoredPlatformWorkspaceId(session);
+  const selectedWorkspace = session?.workspaces.find((workspace) => workspace.id === workspaceId);
+  const canManageWorkspace = Boolean(
+    session?.user.globalRole === "super_admin" ||
+      selectedWorkspace?.capabilities?.includes("member.manage"),
+  );
   return (
     <aside className={`workspace-side ${compact ? "compact" : ""}`}>
       <Link className="brand" to="/projects" aria-label="AutoFlow 工作空间">
@@ -102,6 +109,16 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
             <DatabaseOutlined /> {!compact && <span>公共模板</span>}
           </Link>
         </Tooltip>
+        {canManageWorkspace && (
+          <Tooltip title={compact ? "成员与账户管理" : undefined} placement="right">
+            <Link
+              className={isAdministration ? "workspace-link active" : "workspace-link"}
+              to="/workspace/administration"
+            >
+              <SafetyCertificateOutlined /> {!compact && <span>成员与账户</span>}
+            </Link>
+          </Tooltip>
+        )}
       </nav>
       <div className="side-spacer" />
       <div className="side-profile">
@@ -112,6 +129,21 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
           <div>
             <strong>{session?.user.name ?? "AutoFlow 用户"}</strong>
             <span>{session?.user.email ?? "未登录"}</span>
+            {session && session.workspaces.length > 1 && (
+              <Select
+                aria-label="切换工作区"
+                size="small"
+                value={workspaceId || undefined}
+                options={session.workspaces.map((workspace) => ({
+                  value: workspace.id,
+                  label: workspace.name,
+                }))}
+                onChange={(nextWorkspaceId) => {
+                  storePlatformWorkspaceId(nextWorkspaceId);
+                  window.location.assign("/projects");
+                }}
+              />
+            )}
           </div>
         )}
         {!compact && session && <Tooltip title="退出登录"><Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logoutPlatform().finally(() => { storePlatformSession(); window.location.assign("/"); })} /></Tooltip>}
@@ -120,16 +152,18 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export type Role = "owner" | "admin" | "publisher" | "product" | "tester" | "operations" | "editor" | "viewer";
-export type Capability =
-  | "project.view" | "project.edit" | "flow.edit" | "element.manage"
-  | "variable.manage" | "environment.manage" | "secret.manage"
-  | "release.submit" | "release.publish" | "run.execute"
-  | "dataset.manage" | "automation.manage" | "member.manage";
+export type Capability = PlatformCapability;
 
-// 成员/角色已收敛为「登录即全权限」：能力门禁恒放行，保留签名以兼容调用点。
-export function canUseCapability(_capability: Capability) {
-  return true;
+// UI only presents commands issued in the server session projection. The API
+// remains the authorization authority; browser storage is never trusted by it.
+export function canUseCapability(capability: Capability) {
+  const session = readStoredPlatformSession();
+  const workspaceId = readStoredPlatformWorkspaceId(session);
+  return Boolean(
+    session?.workspaces
+      .find((workspace) => workspace.id === workspaceId)
+      ?.capabilities?.includes(capability),
+  );
 }
 
 export function ProjectLayout({

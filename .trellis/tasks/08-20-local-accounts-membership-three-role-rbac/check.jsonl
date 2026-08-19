@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Review audit coverage and redaction for account/invite/member actions."}
+{"file":".trellis/spec/backend/production-startup.md","reason":"Review bootstrap and production session/startup boundaries."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review TypeScript, component and browser-quality gates."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/implement.md","reason":"Verify Phase 1 exit criteria and Phase 2/3 boundaries are preserved."}
