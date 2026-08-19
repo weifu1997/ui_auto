@@ -1,7 +1,7 @@
 # 活跃任务治理盘点
 
 > 盘点日期：2026-08-20
-> 分支快照：`python_3.1`，HEAD `9a5dd18`
+> 分支快照：`python_3.1`，候选提交 `24ee9d2af43df788f6df4c27370b1d2988a95e69`
 
 ## 方法与边界
 
@@ -23,8 +23,8 @@
 | `08-19-frontend-visual-consistency-and-ui-alignment` | `in_progress`; huangwf                                    | PRD 和设计已定义 token、FilterBar、操作列及四项本地门禁；实施清单仍全未勾选。                                                   | **继续实施**：保持独立 UI 范围，完成后再运行其视觉与质量验收。                                                                                                               | 与后续 IAM/COL 前端改造协调，非 GOV-01/CI-01 的关闭证据。                                      |
 | `08-19-refactor-templates`                           | `in_progress`; huangwf                                    | PRD/design 已定义模板预览、冲突、映射、re-publish 和密钥引用；实施前检查仍有资源字段/引用路径待确认。                           | **继续规划/实施前核对**：不得以文档存在视为产品功能完成。                                                                                                                    | 与模板路由授权及后续 IAM 改造有并发风险，非 Phase 0 关闭项。                                   |
 | `08-19-team-production-readiness-assessment`         | `planning`; huangwf                                       | 已有 PRD、设计、路线图、现状审计和 23 项差距台账；父任务 AC 仍未标记完成。                                                      | **继续作为路线图父任务**：链接本子任务与 artifact/health 子任务的实际验证结果，然后进行独立规划验收，而非提前关闭。                                                          | 定义 Phase 0-3 顺序与生产适用边界。                                                            |
-| `08-19-production-baseline-governance-ci`            | `in_progress`; huangwf                                    | 本子任务的 PRD/design/implement 已审查；本次新增工作流、发布控制文档和本盘点。                                                  | **继续实施与验证**：需要本地质量记录、首个 Linux/Windows Actions 成功链接、外部保护证据和干净候选提交后才可建 tag 或关闭 CI-01。                                             | 关闭 GOV-01/CI-01 的仓库内部分；依赖 GitHub 管理员完成外部控制。                               |
-| `08-19-artifact-backup-health-observability-fixes`   | `in_progress`; huangwf                                    | 已实现规范 `data/artifacts` 路径、备份/恢复 smoke、`/ready` 维护状态和脱敏日志回归；2026-08-20 本地完整质量矩阵与独立审查通过。 | **已实现并通过独立审查，待提交**：保持任务进行中，直至形成可定位的变更记录；不得把本地脚本验证扩展为 RPO/RTO 或异地备份证明。                                                | 是 Phase 0 操作退出门槛；关闭后仍不等同于完整产物恢复和长期健康声明。                          |
+| `08-19-production-baseline-governance-ci`            | `in_progress`; huangwf                                    | 工作流、发布控制文档和盘点已提交；`32281832036` 首次运行在 Windows 解析阶段失败，修复后 `32283223072` 的两个 job 均成功。          | **继续外部控制验收**：仓库内 CI-01 证据已具备；仍需 GitHub 管理员提供分支保护与独立审核证据，且在干净候选工作区中创建正式 tag。       | 关闭 GOV-01/CI-01 的仓库内部分；依赖 GitHub 管理员完成外部控制。                               |
+| `08-19-artifact-backup-health-observability-fixes`   | `in_progress`; huangwf                                    | `a25c235` 已实现规范 `data/artifacts` 路径、备份/恢复 smoke、`/ready` 维护状态和脱敏日志；`24ee9d2` 追加 Windows PowerShell 编码回归保护，`32283223072` 两个 job 均成功。 | **已提交并通过远端回归**：保持任务进行中，直至正式 baseline 与外部发布控制有可定位证据；不得把脚本验证扩展为 RPO/RTO 或异地备份证明。 | 是 Phase 0 操作退出门槛；关闭后仍不等同于完整产物恢复和长期健康声明。                          |
 
 ## Phase 0 基线证据登记
 
@@ -32,12 +32,23 @@
 
 | 证据                 | 当前值                                                                                                                                      | 责任人              | 需要补充                                                                           |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------- |
-| 候选 commit          | `9a5dd18` 仅为盘点快照，不是发布候选                                                                                                        | huangwf             | 在完成本子任务及 sibling Phase 0 修复后选择经审核 SHA。                            |
-| 本地质量矩阵         | 2026-08-20：lint、build、unit（13 files / 51 tests）、startup、Python（122 tests）、bundle、Playwright 与 Windows deployment smoke 均通过。 | huangwf             | 保留命令输出；由 `quality-linux` 与 `deployment-windows` 首次 green 补充远端证据。 |
-| `quality-linux`      | 未有远端运行链接                                                                                                                            | GitHub 管理员待指定 | 提交 PR 后记录首次 green URL。                                                     |
-| `deployment-windows` | 未有远端运行链接                                                                                                                            | GitHub 管理员待指定 | 提交 PR 后记录首次 green URL。                                                     |
-| 分支保护与审核       | 未验证                                                                                                                                      | GitHub 管理员待指定 | 在 `docs/生产基线发布与分支保护.md` 的表格填写实际证据。                           |
-| Phase 0 tag          | 不存在                                                                                                                                      | 发布责任人待指定    | 仅在上述证据齐全且工作区干净后创建并推送带注释 tag。                               |
+| 候选 commit          | `24ee9d2af43df788f6df4c27370b1d2988a95e69`，包含 Phase 0 artifact/health、治理/CI 与 Windows 编码修复的连续提交。                          | huangwf             | 外部保护和审核完成后，在干净候选工作区中选择最终经审核 SHA。                       |
+| 本地质量矩阵         | 2026-08-20：完整矩阵已通过；编码修复后再次通过 `npm run build`、`npm run lint` 与 `npm run test:windows`。                                 | huangwf             | 保留命令输出；远端运行已补充受支持宿主的证据。                                      |
+| `quality-linux`      | [`32283223072`](https://github.com/weifu1997/ui_auto/actions/runs/32283223072/job/96166572743) 对 `24ee9d2` 成功。                         | huangwf             | 配置分支保护后，把该稳定 job 设为 required check。                                 |
+| `deployment-windows` | [`32283223072`](https://github.com/weifu1997/ui_auto/actions/runs/32283223072/job/96166573060) 对 `24ee9d2` 成功。                        | huangwf             | 配置分支保护后，把该稳定 job 设为 required check。                                 |
+| 分支保护与审核       | `GET /repos/weifu1997/ui_auto/branches/python_3.1/protection` 于 2026-08-20 返回 `404 Branch not protected`；没有独立审核记录。             | GitHub 管理员待指定 | 在 `docs/生产基线发布与分支保护.md` 的表格填写实际配置、审核者和证据。             |
+| Phase 0 tag          | 不存在；不得将仅有的 CI 成功误称为经审核的正式 baseline。                                                                                  | 发布责任人待指定    | 仅在上述证据齐全且干净候选工作区可复核后创建并推送带注释 tag。                      |
+
+## 首次 CI 失败与收敛记录
+
+- `32281832036`：`quality-linux` 成功，`deployment-windows` 在
+  `install.ps1` 的 PowerShell 解析阶段失败，日志为缺少字符串终止符和闭合块。
+- 根因：无 BOM UTF-8 的 `.ps1` 源码含非 ASCII 字符，在 GitHub Windows
+  PowerShell 5.1 的旧代码页解析路径中可能产生解析歧义。
+- 收敛：`24ee9d2` 将全部 `scripts/*.ps1` 源码收敛为 ASCII，并在 Windows
+  smoke 中增加字节级检查。详细复盘见
+  `08-19-artifact-backup-health-observability-fixes/research/windows-powershell-source-encoding-retrospective.md`。
+- 验证：重试 `32283223072` 的 `quality-linux` 与 `deployment-windows` 均成功。
 
 ## 复盘触发条件
 
