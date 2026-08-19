@@ -10,6 +10,7 @@ $script = Join-Path $scriptRoot "sqlite-backup.py"
 if ($LASTEXITCODE -ne 0) { throw "SQLite backup failed: platform.sqlite" }
 & $python $script (Join-Path $data "autoflow.sqlite") (Join-Path $Destination "autoflow.sqlite")
 if ($LASTEXITCODE -ne 0) { throw "SQLite backup failed: autoflow.sqlite" }
-if (Test-Path -LiteralPath (Join-Path $Root "artifacts")) { Copy-Item -LiteralPath (Join-Path $Root "artifacts") -Destination (Join-Path $Destination "artifacts") -Recurse -Force }
+$artifactSource = Join-Path $data "artifacts"
+if (Test-Path -LiteralPath $artifactSource) { Copy-Item -LiteralPath $artifactSource -Destination (Join-Path $Destination "artifacts") -Recurse -Force }
 Set-Content -LiteralPath (Join-Path $Destination "backup.json") -Encoding UTF8 -Value (@{ createdAt=(Get-Date).ToString("o"); source=$Root } | ConvertTo-Json)
 Write-Output $Destination

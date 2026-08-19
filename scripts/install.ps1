@@ -14,7 +14,8 @@ if (-not $PlatformSecretKey) {
 }
 if ($PlatformSecretKey.Length -lt 32) { throw "PlatformSecretKey must contain at least 32 characters" }
 $resolvedRoot = [IO.Path]::GetFullPath($Root)
-foreach ($folder in @("app","data","artifacts","logs","backups","browsers","runtime")) { New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot $folder) | Out-Null }
+foreach ($folder in @("app","data","logs","backups","browsers","runtime")) { New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot $folder) | Out-Null }
+New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot "data\artifacts") | Out-Null
 Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $resolvedRoot "runtime\node.exe") -Force
 Copy-Item -LiteralPath $WinSWExe -Destination (Join-Path $resolvedRoot "AutoFlow.exe") -Force
 $serviceConfig = Join-Path $resolvedRoot "AutoFlow.xml"

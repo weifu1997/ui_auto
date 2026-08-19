@@ -23,7 +23,6 @@ from typing import Any
 
 from .audit import create_audit_writer
 from .core import (
-    PLATFORM_ARTIFACT_DIRECTORY,
     digest,
     failure_category,
     json,
@@ -417,9 +416,7 @@ class PlatformServices:
         self.database.isolation_level = None
         run_platform_migrations(self.database, BOOTSTRAP_SCHEMA)
         self.audit = create_audit_writer(self.database)
-        self.managed_runner = ManagedRunner(
-            Path(data_directory) / "artifacts"
-        )
+        self.managed_runner = ManagedRunner(self.data_directory / "artifacts")
         self._recording_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="recording"
         )

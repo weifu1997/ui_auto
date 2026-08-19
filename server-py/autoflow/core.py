@@ -24,9 +24,6 @@ from .workspaces import role_has_capability  # noqa: F401
 
 JSON_CONTENT_TYPE = {"content-type": "application/json; charset=utf-8"}
 
-PLATFORM_ARTIFACT_DIRECTORY = Path(
-    os.environ.get("PLATFORM_ARTIFACT_DIRECTORY", "server/.platform-artifacts")
-).resolve()
 WEBHOOK_TIMESTAMP_TOLERANCE_MS = int(
     os.environ.get("WEBHOOK_TIMESTAMP_TOLERANCE_MS", "300000")
 )
