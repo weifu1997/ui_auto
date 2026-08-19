@@ -118,8 +118,8 @@
   font-weight: 700;
 }
 .member-avatar-alt {
-  background: #e8ecff;
-  color: #38529b;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 .side-profile strong {
   color: var(--text-primary);
@@ -196,13 +196,54 @@
   font-weight: 600;
 }
 .success-number {
-  color: #8ce0bc;
+  color: var(--success-strong);
 }
 .running-number {
-  color: #8fcfc8;
+  color: var(--info);
 }
 .table-toolbar,
 .list-tools,
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  margin-bottom: var(--space-4);
+}
+.filter-bar-inputs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.filter-bar-extra {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.filter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.filter-label {
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  user-select: none;
+}
+.filter-control {
+  display: inline-flex;
+  align-items: center;
+}
+
 .run-filter {
   display: flex;
   align-items: center;
@@ -926,8 +967,9 @@
 }
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4);
+  align-items: start;
 }
 .scope-alert {
   margin-bottom: var(--space-4);
@@ -1165,7 +1207,7 @@
 }
 .step-item.selected {
   background: var(--accent-soft);
-  border-color: #a5d6c9;
+  border-color: var(--accent);
 }
 .step-index {
   color: var(--text-tertiary);
@@ -1767,17 +1809,19 @@
 .panel-heading {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 .debug-session-heading h2,
 .panel-heading h2 {
-  margin: 4px 0 0;
+  margin: 0;
   font-size: var(--text-emphasis);
+  line-height: 1.3;
 }
 .panel-heading span {
   display: block;
-  margin-top: 5px;
+  margin-top: 2px;
   color: var(--muted);
   font-size: var(--text-caption);
 }
@@ -2408,4 +2452,79 @@
 :root[data-theme="dark"] .metric-icon.info {
   background: rgba(10, 132, 255, 0.14);
   color: #4d9fbf;
+}
+
+/* 全站按钮图标与文字严格中轴对齐 */
+.ant-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.ant-btn .anticon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.ant-btn > span {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+/* 全站 Tag 标签视觉优化（轻盈通透 · 高级状态胶囊） */
+.ant-tag {
+  border-radius: var(--radius-sm, 6px);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  line-height: 20px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  transition: all var(--dur-fast) var(--ease-standard);
+}
+
+.ant-tag.ant-tag-success {
+  background: var(--success-soft) !important;
+  color: var(--success-strong) !important;
+  border-color: rgba(52, 199, 89, 0.22) !important;
+}
+
+.ant-tag.ant-tag-error {
+  background: var(--error-soft) !important;
+  color: var(--error) !important;
+  border-color: rgba(255, 59, 48, 0.2) !important;
+}
+
+.ant-tag.ant-tag-warning {
+  background: var(--warning-soft) !important;
+  color: var(--warning) !important;
+  border-color: rgba(245, 158, 11, 0.2) !important;
+}
+
+.ant-tag.ant-tag-processing {
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+  border-color: rgba(0, 113, 227, 0.2) !important;
+}
+
+.ant-tag.ant-tag-default,
+.ant-tag:not([class*="ant-tag-"]) {
+  background: var(--surface-2) !important;
+  color: var(--text-secondary) !important;
+  border-color: var(--separator) !important;
+}
+
+:root[data-theme="dark"] .ant-tag.ant-tag-success {
+  border-color: rgba(48, 209, 88, 0.28) !important;
+}
+:root[data-theme="dark"] .ant-tag.ant-tag-error {
+  border-color: rgba(255, 69, 58, 0.28) !important;
+}
+:root[data-theme="dark"] .ant-tag.ant-tag-warning {
+  border-color: rgba(255, 214, 10, 0.28) !important;
+}
+:root[data-theme="dark"] .ant-tag.ant-tag-processing {
+  border-color: rgba(10, 132, 255, 0.28) !important;
 }

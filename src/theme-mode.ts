@@ -11,7 +11,7 @@ export const themePalettes = {
   light: {
     colorPrimary: "#0071e3",
     colorInfo: "#0071e3",
-    colorSuccess: "#227a52",
+    colorSuccess: "#34c759",
     colorWarning: "#c68418",
     colorError: "#c44343",
     colorTextBase: "#1d1d1f",
@@ -23,7 +23,7 @@ export const themePalettes = {
   dark: {
     colorPrimary: "#0a84ff",
     colorInfo: "#0a84ff",
-    colorSuccess: "#4cd18e",
+    colorSuccess: "#30d158",
     colorWarning: "#e0a63c",
     colorError: "#ff6464",
     colorTextBase: "#f5f5f7",

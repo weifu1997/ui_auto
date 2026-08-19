@@ -4,7 +4,7 @@ import { useRunStore } from "../run-store";
 import { WorkspaceSide, emptyRuns, isTerminalStatus } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { InboxOutlined, MoreOutlined, PlusOutlined, SearchOutlined, UndoOutlined } from "@ant-design/icons";
-import { Button, Dropdown, Empty, Form, Input, List, Modal, Progress, Space, Table } from "antd";
+import { Button, Dropdown, Empty, Form, Input, List, Modal, Progress, Space, Table, theme } from "antd";
 import type { TableColumnsType } from "antd";
 import { useState } from "react";
 import type { Project } from "../mock-data";
@@ -33,6 +33,7 @@ export function ProjectsPage() {
   const runRecords = useRunStore((state) => state.apiRuns);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const [form] = Form.useForm();
+  const { token } = theme.useToken();
   const queryClient = useQueryClient();
   const projectRows: ProjectListRow[] = projectList.map((project) => {
     const projectRuns = runRecords[project.id] ?? emptyRuns;
@@ -125,7 +126,7 @@ export function ProjectsPage() {
               percent={value}
               showInfo={false}
               size="small"
-              strokeColor={value > 90 ? "#227a52" : "#c68418"}
+              strokeColor={value >= 90 ? token.colorSuccess : token.colorWarning}
             />
             <span>{value}%</span>
           </div>
@@ -225,7 +226,7 @@ export function ProjectsPage() {
             columns={columns}
             dataSource={visibleProjects}
             pagination={false}
-            locale={{ emptyText: <Empty description="尚未创建测试项目" /> }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建测试项目" /> }}
           />
         </section>
       </main>

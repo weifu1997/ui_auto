@@ -308,6 +308,61 @@ export function PageHeading({
   );
 }
 
+export function FilterBar({
+  children,
+  extra,
+  className = "",
+}: {
+  children: React.ReactNode;
+  extra?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`filter-bar ${className}`.trim()}>
+      <div className="filter-bar-inputs">{children}</div>
+      {extra && <div className="filter-bar-extra">{extra}</div>}
+    </div>
+  );
+}
+
+export function FilterItem({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="filter-item">
+      <span className="filter-label">{label}</span>
+      <div className="filter-control">{children}</div>
+    </div>
+  );
+}
+
+export function MetricCard({
+  label,
+  value,
+  detail,
+  tone = "default",
+  icon,
+}: {
+  label: string;
+  value: string | number;
+  detail?: React.ReactNode;
+  tone?: "default" | "success" | "warning" | "info";
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className={`metric-card ${tone}`}>
+      {icon && <div className="metric-icon">{icon}</div>}
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail !== undefined && detail !== null && <small>{detail}</small>}
+    </div>
+  );
+}
+
 export function reportRetryError(error: unknown) {
   if (error instanceof PlatformApiError && error.code === "RUN_SECRETS_REQUIRED") {
     message.info("此运行包含会话密钥，请从流程重新运行并重新注入密钥。");

@@ -97,7 +97,7 @@ export function TemplatesPage() {
           <Button onClick={() => void load(query)}>搜索</Button>
         </div>
         <section className="template-grid">
-          {loading ? <Skeleton active /> : visibleTemplates.length === 0 ? <Empty description="暂无已发布模板" /> : (
+          {loading ? <Skeleton active /> : visibleTemplates.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已发布模板" /> : (
             <List grid={{ gutter: 16, xs: 1, sm: 2, lg: 3 }} dataSource={visibleTemplates} renderItem={(template) => (
               <List.Item>
                 <article

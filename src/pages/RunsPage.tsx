@@ -7,9 +7,9 @@ import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-c
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useWorkspaceStore } from "../workspace-store";
-import { PageHeading, canUseCapability, isTerminalStatus, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling } from "./shared";
+import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling } from "./shared";
 import { ReloadOutlined, StopOutlined } from "@ant-design/icons";
-import { Button, Empty, Input, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
+import { Button, Empty, Input, Progress, Select, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 const batchStatusMeta = {
@@ -425,12 +425,18 @@ export function RunsPage({ project }: { project: Project }) {
           </Button>
         }
       />
-      <div className="run-filter">
-        <Space wrap>
-          <span>状态</span>
+      <FilterBar
+        extra={
+          <span className="live-note">
+            <i /> 实时更新已开启
+          </span>
+        }
+      >
+        <FilterItem label="状态">
           <Select
             value={filter}
             onChange={(value) => { setPage(1); setFilter(value); }}
+            style={{ width: 110 }}
             options={[
               { value: "all", label: "全部" },
               ...Object.entries(statusMeta).map(([value, meta]) => ({
@@ -439,15 +445,18 @@ export function RunsPage({ project }: { project: Project }) {
               })),
             ]}
           />
-          <span>流程</span>
+        </FilterItem>
+        <FilterItem label="流程">
           <Input
             value={flowFilter}
             aria-label="流程名称"
             placeholder="流程名称"
-            style={{ width: 160 }}
+            style={{ width: 150 }}
+            allowClear
             onChange={(event) => { setPage(1); setFlowFilter(event.target.value); }}
           />
-          <span>来源</span>
+        </FilterItem>
+        <FilterItem label="来源">
           <Select
             value={sourceFilter}
             aria-label="运行来源"
@@ -460,15 +469,14 @@ export function RunsPage({ project }: { project: Project }) {
               { value: "webhook", label: "Webhook" },
             ]}
           />
-          <span>开始</span>
+        </FilterItem>
+        <FilterItem label="开始">
           <Input type="date" aria-label="开始日期" value={fromFilter} onChange={(event) => { setPage(1); setFromFilter(event.target.value); }} />
-          <span>结束</span>
+        </FilterItem>
+        <FilterItem label="结束">
           <Input type="date" aria-label="结束日期" value={toFilter} onChange={(event) => { setPage(1); setToFilter(event.target.value); }} />
-        </Space>
-        <span className="live-note">
-          <i /> 实时更新已开启
-        </span>
-      </div>
+        </FilterItem>
+      </FilterBar>
       {batches.length > 0 && (
         <section className="surface" style={{ marginBottom: 16 }}>
           <Table
@@ -506,7 +514,7 @@ export function RunsPage({ project }: { project: Project }) {
                   <span>批次详情加载中…</span>
                 ),
             }}
-            locale={{ emptyText: <Empty description="尚无批次" /> }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无批次" /> }}
           />
         </section>
       )}
@@ -523,7 +531,7 @@ export function RunsPage({ project }: { project: Project }) {
             onChange: (nextPage) => setPage(nextPage),
           }}
           scroll={{ x: "max-content" }}
-          locale={{ emptyText: <Empty description="尚无真实运行任务" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无真实运行任务" /> }}
         />
       </section>
 

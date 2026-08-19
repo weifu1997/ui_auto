@@ -351,7 +351,7 @@ export function FlowsPage({ project }: { project: Project }) {
           } : undefined}
           pagination={{ pageSize: 8, showSizeChanger: false }}
           scroll={{ x: "max-content" }}
-          locale={{ emptyText: <Empty description="尚无流程" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无流程" /> }}
         />
       </section>
       <Modal

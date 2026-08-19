@@ -4,7 +4,7 @@ import { PageHeading, emptyVariables, uniqueVariableNameValidator } from "./shar
 import { useSecretStore } from "../secret-store";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Drawer, Empty, Form, Input, Popconfirm, Select, Switch, Table, Tag } from "antd";
+import { Alert, Button, Drawer, Empty, Form, Input, Popconfirm, Select, Switch, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import { useEffect, useState } from "react";
 
@@ -79,12 +79,15 @@ export function VariablesPage({ project }: { project: Project }) {
               )
             }
           >
-            <Button
-              type="text"
-              danger
-              icon={<DeleteOutlined />}
-              aria-label={`删除变量 ${item.name}`}
-            />
+            <Tooltip title="删除变量">
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                aria-label={`删除变量 ${item.name}`}
+              />
+            </Tooltip>
           </Popconfirm>
         ),
     },
