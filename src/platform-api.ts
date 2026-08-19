@@ -43,7 +43,82 @@ export type PlatformResource<T = Record<string, unknown>> = {
   updatedAt: string;
   updatedBy: string;
 };
-export type PlatformTemplate = { id: string; name: string; description: string; category: string; sourceProjectId?: string; sourceRevisionId?: string; createdBy?: string; createdAt: string; updatedAt: string; favorite: boolean; snapshot?: Record<string, unknown> };
+export type PlatformTemplateSnapshot = {
+  flow?: {
+    id?: string;
+    name?: string;
+    steps?: Array<{
+      id?: string;
+      element?: string;
+      elementId?: string;
+      action?: string;
+      value?: string;
+      [key: string]: unknown;
+    }>;
+    secretNames?: string[];
+    [key: string]: unknown;
+  };
+  elements?: Array<{
+    id: string;
+    name: string;
+    environment?: string;
+    method?: string;
+    value?: string;
+    selector?: string;
+    [key: string]: unknown;
+  }>;
+  variables?: Array<{
+    id: string;
+    name: string;
+    scope?: string;
+    secret?: boolean;
+    value?: string;
+    [key: string]: unknown;
+  }>;
+  environments?: Array<{
+    id?: string;
+    name?: string;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
+
+export type PlatformTemplateConflict = {
+  resourceType: string;
+  originalName: string;
+  newName: string;
+};
+
+export type TemplateApplyCandidate = {
+  id: string;
+  name: string;
+  selector: string;
+  method: string;
+  environment?: string;
+};
+
+export type TemplateApplySelection = {
+  flow?: boolean;
+  elements?: string[] | boolean;
+  variables?: string[] | boolean;
+  environments?: string[] | boolean;
+};
+
+export type TemplateApplyInput = {
+  projectId: string;
+  selection?: TemplateApplySelection;
+  elementMappings?: Record<string, string | null>;
+};
+
+export type TemplateApplyResult = {
+  templateId: string;
+  projectId: string;
+  created: Record<string, string[]>;
+  conflicts?: PlatformTemplateConflict[];
+  warnings?: string[];
+};
+
+export type PlatformTemplate = { id: string; name: string; description: string; category: string; sourceProjectId?: string; sourceRevisionId?: string; createdBy?: string; createdAt: string; updatedAt: string; favorite: boolean; snapshot?: PlatformTemplateSnapshot };
 
 export type PlatformRevision = {
   id: string;
@@ -419,8 +494,33 @@ export function favoritePlatformTemplate(token: string, templateId: string, favo
   return request<{ templateId: string; favorite: boolean }>(`/platform/templates/${encodeURIComponent(templateId)}/favorite`, { method: favorite ? "POST" : "DELETE" }, token);
 }
 
-export function applyPlatformTemplate(token: string, templateId: string, projectId: string) {
-  return request<{ templateId: string; projectId: string; created: Record<string, string[]> }>(`/platform/templates/${encodeURIComponent(templateId)}/apply`, { method: "POST", body: JSON.stringify({ projectId }) }, token);
+export function rePublishPlatformTemplate(token: string, templateId: string, revisionId: string) {
+  return request<{ template: PlatformTemplate }>(
+    `/platform/templates/${encodeURIComponent(templateId)}/re-publish`,
+    { method: "POST", body: JSON.stringify({ revisionId }) },
+    token,
+  );
+}
+
+export function getTemplateApplyCandidates(token: string, templateId: string, projectId: string) {
+  return request<{ candidates: TemplateApplyCandidate[] }>(
+    `/platform/templates/${encodeURIComponent(templateId)}/apply-candidates?projectId=${encodeURIComponent(projectId)}`,
+    {},
+    token,
+  );
+}
+
+export function applyPlatformTemplate(
+  token: string,
+  templateId: string,
+  input: string | TemplateApplyInput,
+) {
+  const body = typeof input === "string" ? { projectId: input } : input;
+  return request<TemplateApplyResult>(
+    `/platform/templates/${encodeURIComponent(templateId)}/apply`,
+    { method: "POST", body: JSON.stringify(body) },
+    token,
+  );
 }
 
 export function getPlatformProjectDocument(token: string, projectId: string) {
@@ -630,6 +730,25 @@ export function retryPlatformRun(token: string, projectId: string, runId: string
   return request<{ runIds: string[]; runs: PlatformRun[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/retry`,
     { method: "POST" },
+    token,
+  );
+}
+
+export function deletePlatformRun(token: string, projectId: string, runId: string) {
+  return request<{ runId: string; deleted: boolean }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export function deletePlatformRuns(token: string, projectId: string, runIds: string[]) {
+  return request<{ runIds: string[]; deletedCount: number }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/batch-delete`,
+    {
+      method: "POST",
+      body: JSON.stringify({ runIds }),
+    },
     token,
   );
 }

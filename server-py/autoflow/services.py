@@ -48,6 +48,7 @@ _CHROMIUM_AVAILABLE: bool | None = None
 _CHROMIUM_AVAILABLE_AT: float | None = None
 _CHROMIUM_CACHE_TTL_NEGATIVE: float = 30.0  # 不可用结果 30s 后允许重试，避免安装完 Chromium 还要重启进程
 _CHROMIUM_CACHE_TTL_POSITIVE: float = 3600.0  # 可用结果缓存 1h
+_TERMINAL_RUN_STATUSES = ("success", "failed", "canceled")
 
 
 BOOTSTRAP_SCHEMA = """
@@ -2216,6 +2217,70 @@ class PlatformServices:
             "updatedAt": row[11],
             "retryOfRunId": row[12],
         }
+
+
+    def delete_run(self, project_id: str, run_id: str) -> dict[str, Any]:
+        from .http import PlatformError
+
+        run = self.database.execute(
+            "SELECT id, project_id, status FROM platform_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if not run:
+            raise PlatformError(404, "RUN_NOT_FOUND")
+        if run[1] != project_id:
+            raise PlatformError(404, "RUN_NOT_FOUND")
+        if run[2] not in _TERMINAL_RUN_STATUSES:
+            raise PlatformError(409, "RUN_NOT_DELETABLE")
+        with self.database:
+            self.database.execute("DELETE FROM deliveries WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM flow_outputs WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM platform_artifacts WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM platform_run_events WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM platform_runs WHERE id = ? AND project_id = ?", (run_id, project_id))
+        return {"runId": run_id, "deleted": True}
+
+    def delete_runs(self, project_id: str, run_ids: list[str]) -> dict[str, Any]:
+        if not run_ids:
+            return {"runIds": [], "deletedCount": 0}
+        placeholders = ",".join("?" for _ in run_ids)
+        terminal_placeholders = ",".join("?" for _ in _TERMINAL_RUN_STATUSES)
+        rows = self.database.execute(
+            f"""
+            SELECT id FROM platform_runs
+            WHERE project_id = ?
+              AND id IN ({placeholders})
+              AND status IN ({terminal_placeholders})
+            """,
+            [project_id, *run_ids, *_TERMINAL_RUN_STATUSES],
+        ).fetchall()
+        deletable_run_ids = [row[0] for row in rows]
+        if not deletable_run_ids:
+            return {"runIds": [], "deletedCount": 0}
+        deletable_placeholders = ",".join("?" for _ in deletable_run_ids)
+        with self.database:
+            self.database.execute(
+                f"DELETE FROM deliveries WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            self.database.execute(
+                f"DELETE FROM flow_outputs WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            self.database.execute(
+                f"DELETE FROM platform_artifacts WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            self.database.execute(
+                f"DELETE FROM platform_run_events WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            cursor = self.database.execute(
+                f"DELETE FROM platform_runs WHERE id IN ({deletable_placeholders}) AND project_id = ?",
+                [*deletable_run_ids, project_id],
+            )
+            deleted_count = cursor.rowcount
+        return {"runIds": deletable_run_ids, "deletedCount": deleted_count}
 
     def run_response(self, run: dict[str, Any]) -> dict[str, Any]:
         agent = self.database.execute(

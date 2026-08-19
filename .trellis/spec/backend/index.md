@@ -21,5 +21,5 @@ Server-side conventions and executable contracts for the Platform API layer unde
 | Guide | Coverage |
 | --- | --- |
 | [Audit & Governance Contracts](./audit-governance.md) | Audit event naming, audit query API, analytics API, notification env wiring, secret snapshot mechanics |
-| [Run Batch & Recording Contracts](./run-batch-recording-contracts.md) | Batch execution and browser-recording routes, validation, idempotency, lifecycle, and regression requirements |
+| [Run Batch & Recording Contracts](./run-batch-recording-contracts.md) | Batch execution, run-record deletion, browser-recording routes, validation, lifecycle, isolation, and regression requirements |
 | [Production Startup](./production-startup.md) | `npm run build` / `npm run start` prerequisites, environment contract, and Worker route removal |
