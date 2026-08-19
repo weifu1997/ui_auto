@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
-import type { ElementAsset, Environment, Flow, FlowStep, Variable } from "./mock-data";
+import type { ElementAsset, Environment, Flow, Variable } from "./mock-data";
 import {
   PlatformApiError,
   archivePlatformResource,
@@ -16,7 +16,7 @@ import {
 import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformSession } from "./platform-api";
 import type { PlatformWorkspaceProject } from "./workspace-store";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformProjectMap } from "./platform-context";
-import { revisionElements, revisionEnvironment, revisionFlow } from "./revision-snapshot";
+import { revisionInput } from "./revision-snapshot";
 import { normalizeFlow } from "./flow-normalize";
 import { useWorkspaceStore } from "./workspace-store";
 import {
@@ -39,28 +39,7 @@ type LoadedProject = {
   settings: { data: Record<string, unknown>; version: number };
 };
 
-// 快照构建辅助：与 src/pages/shared.tsx 中的实现保持一致。
-// 内联在此处，避免同步器反向引用懒加载页面模块造成循环依赖。
-function variableReference(variable: Variable) {
-  return `${variable.scope === "环境" ? "env" : "project"}.${variable.name}`;
-}
-
-function requiredSecretVariables(variables: Variable[], steps: FlowStep[]) {
-  return variables.filter((variable) => {
-    if (!variable.secret || (variable.scope !== "环境" && variable.scope !== "项目")) return false;
-    const reference = variableReference(variable).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const token = new RegExp(`{{\\s*${reference}\\s*}}`);
-    return steps.some((step) => token.test(step.value));
-  });
-}
-
-function snapshotVariables(variables: Variable[]) {
-  return Object.fromEntries(
-    variables
-      .filter((variable) => !variable.secret && (variable.scope === "项目" || variable.scope === "环境"))
-      .map((variable) => [variableReference(variable), variable.value]),
-  );
-}
+// 快照构建辅助已统一由 ./revision-snapshot.ts 导出
 
 const resourceTypes: PlatformResourceType[] = ["flows", "elements", "variables", "environments"];
 export const platformConflictActionEvent = "autoflow-platform-conflict-action";
@@ -388,14 +367,11 @@ export function ServerWorkspaceSynchronizer() {
     for (const flow of flows) {
       if (!flow.definition?.length) continue;
       try {
-        await createPlatformRevision(apiToken, projectId, {
-          flow: revisionFlow(flow, snapshotVariables(variables)),
-          environment: revisionEnvironment(environment),
-          elements: revisionElements(
-            elements.filter((item) => !item.environment || item.environment === environment.id),
-          ),
-          secretNames: requiredSecretVariables(variables, flow.definition).map(variableReference),
-        });
+        await createPlatformRevision(
+          apiToken,
+          projectId,
+          revisionInput(flow, environment, elements, variables),
+        );
       } catch {
         // 快照失败不阻断保存，下次同步成功后自动重试。
       }

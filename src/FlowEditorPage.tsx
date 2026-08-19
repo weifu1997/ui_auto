@@ -29,7 +29,7 @@ import { useRunStore } from "./run-store";
 import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { message, modal } from "./antd-feedback";
-import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRun, createRecordingSession, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
 import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
 import { describePlatformRunError, platformRunAsRun, uniqueVariableNameValidator } from "./pages/shared";
@@ -47,6 +47,7 @@ import {
 } from "./recording-editor-state";
 import { actionOptions } from "./mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "./mock-data";
+import { requiredSecretVariables, revisionInput, variableReference } from "./revision-snapshot";
 
 const emptyFlows: Flow[] = [];
 const emptyElements: ElementAsset[] = [];
@@ -56,10 +57,6 @@ const emptySecretValues: Record<string, string> = {};
 
 function projectById(projects: Project[], id?: string) {
   return projects.find((project) => project.id === id);
-}
-
-function variableReference(variable: Variable) {
-  return `${variable.scope === "环境" ? "env" : "project"}.${variable.name}`;
 }
 
 function suggestSecretNameFromHint(fieldHint: string, variables: Variable[], scope: Variable["scope"] = "项目"): string {
@@ -223,15 +220,6 @@ function elementValidationLabel(result: ElementValidationResult, validated: bool
     case "error":
       return result.errorMessage ?? "校验失败";
   }
-}
-
-function requiredSecretVariables(variables: Variable[], steps: FlowStep[]) {
-  return variables.filter((variable) => {
-    if (!variable.secret || (variable.scope !== "环境" && variable.scope !== "项目")) return false;
-    const reference = variableReference(variable).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const token = new RegExp(`{{\\s*${reference}\\s*}}`);
-    return steps.some((step) => token.test(step.value));
-  });
 }
 
 function requestRunSecrets(
@@ -427,7 +415,38 @@ export default function FlowEditorPage() {
     return { totals, canImport };
   }, [effectiveNewElements, validationResults, hasValidated]);
 
-  const platformContext = project ? platformProjectContext(project.id) : undefined;
+  const platformContext = useMemo(
+    () => (project ? platformProjectContext(project.id) : undefined),
+    [project],
+  );
+  const [hasPublishedRevision, setHasPublishedRevision] = useState<boolean | null>(null);
+
+  const platformToken = platformContext?.session.token;
+  const platformProjectId = platformContext?.projectId;
+
+  useEffect(() => {
+    if (!platformToken || !platformProjectId || !flowId) {
+      setHasPublishedRevision(null);
+      return;
+    }
+    let cancelled = false;
+    getPlatformRevisions(platformToken, platformProjectId)
+      .then((result) => {
+        if (cancelled) return;
+        const has = result.revisions.some(
+          (r) => r.flowId === flowId && r.status === "published",
+        );
+        setHasPublishedRevision(has);
+      })
+      .catch(() => {
+        if (!cancelled) setHasPublishedRevision(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [platformToken, platformProjectId, flowId]);
+
+  const canSave = isDirty || hasPublishedRevision === false;
 
   const pollValidation = useCallback(
     async (token: string, projectId: string, validationId: string): Promise<{ status: string; count?: number }> => {
@@ -867,21 +886,32 @@ export default function FlowEditorPage() {
       });
     else navigate(`/project/${project.id}/flows`);
   };
-  const saveFlow = () => {
+  const saveFlow = async () => {
+    const updatedFlow: Flow = {
+      ...flow,
+      steps: steps.length,
+      definition: steps.map((step) => ({ ...step })),
+      updatedAt: "刚刚",
+    };
     setFlows(
       project.id,
       (storedFlows ?? emptyFlows).map((item) =>
-        item.id === flow.id
-          ? {
-              ...item,
-              steps: steps.length,
-              definition: steps.map((step) => ({ ...step })),
-              updatedAt: "刚刚",
-            }
-          : item,
+        item.id === flow.id ? updatedFlow : item,
       ),
     );
     markSaved();
+    if (platformContext && activeEnvironment) {
+      try {
+        await createPlatformRevision(
+          platformContext.session.token,
+          platformContext.projectId,
+          revisionInput(updatedFlow, activeEnvironment, elements, variables),
+        );
+      } catch {
+        // 同步器兜底
+      }
+    }
+    setHasPublishedRevision(true);
     message.success("流程已保存");
   };
   const run = async (upToStepId?: string) => {
@@ -917,6 +947,14 @@ export default function FlowEditorPage() {
     const platformContext = platformProjectContext(project.id);
     if (platformContext) {
       try {
+        if (hasPublishedRevision === false) {
+          await createPlatformRevision(
+            platformContext.session.token,
+            platformContext.projectId,
+            revisionInput(flow, environment, elements, variables),
+          );
+          setHasPublishedRevision(true);
+        }
         for (const variable of requiredSecretVariables(variables, stepsToRun)) {
           const value = secretValues[variable.id];
           if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
@@ -1018,7 +1056,7 @@ export default function FlowEditorPage() {
           <Button
             type="primary"
             icon={<CheckCircleFilled />}
-            disabled={!isDirty}
+            disabled={!canSave}
             onClick={saveFlow}
           >
             保存

@@ -77,3 +77,53 @@ describe("revision snapshot payload", () => {
     expect(payload[0]).not.toHaveProperty("description");
   });
 });
+
+import type { Variable, ElementAsset } from "./mock-data";
+import {
+  variableReference,
+  requiredSecretVariables,
+  snapshotVariables,
+  revisionInput,
+} from "./revision-snapshot";
+
+describe("revision input builder and variable helpers", () => {
+  const vars: Variable[] = [
+    { id: "v1", name: "token", description: "", scope: "项目", secret: true, value: "secret-token", updatedAt: "刚刚" },
+    { id: "v2", name: "baseUrl", description: "", scope: "环境", secret: false, value: "https://api.test", updatedAt: "刚刚" },
+    { id: "v3", name: "globalKey", description: "", scope: "内置", secret: false, value: "none", updatedAt: "刚刚" },
+  ];
+
+  it("computes variable reference correctly", () => {
+    expect(variableReference(vars[0])).toBe("project.token");
+    expect(variableReference(vars[1])).toBe("env.baseUrl");
+  });
+
+  it("filters required secret variables used in step placeholders", () => {
+    const stepsWithSecret: FlowStep[] = [
+      { id: "s1", title: "步骤1", action: "填写", value: "Bearer {{project.token}}", timeout: 10, failurePolicy: "立即失败", status: "pending" },
+      { id: "s2", title: "步骤2", action: "打开页面", value: "{{env.baseUrl}}/home", timeout: 10, failurePolicy: "立即失败", status: "pending" },
+    ];
+    const req = requiredSecretVariables(vars, stepsWithSecret);
+    expect(req.map((v) => v.id)).toEqual(["v1"]);
+  });
+
+  it("extracts non-secret project/env variables into snapshot", () => {
+    const snapshotVars = snapshotVariables(vars);
+    expect(snapshotVars).toEqual({
+      "env.baseUrl": "https://api.test",
+    });
+  });
+
+  it("constructs full revision input payload with matching environment elements", () => {
+    const elems: ElementAsset[] = [
+      { id: "e1", name: "Btn1", description: "", path: "/1", method: "css", value: "#b1", environment: "env-1", validation: "valid", updatedAt: "刚刚" },
+      { id: "e2", name: "Btn2", description: "", path: "/2", method: "css", value: "#b2", environment: "env-other", validation: "valid", updatedAt: "刚刚" },
+      { id: "e3", name: "Btn3", description: "", path: "/3", method: "css", value: "#b3", environment: "", validation: "valid", updatedAt: "刚刚" },
+    ];
+    const payload = revisionInput(flow, environment, elems, vars);
+    expect(payload.environment.id).toBe("env-1");
+    expect(payload.elements.map((e) => e.id)).toEqual(["e1", "e3"]);
+    expect(payload.flow.id).toBe("flow-1");
+    expect(payload.flow.variables).toEqual({ "env.baseUrl": "https://api.test" });
+  });
+});
