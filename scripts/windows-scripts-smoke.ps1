@@ -33,14 +33,14 @@ try {
   $backupPath = Join-Path $smokeRoot "backups\smoke"
   & (Join-Path $scriptRoot "backup.ps1") -Root $smokeRoot -Destination $backupPath -PythonExe $python | Out-Null
   if (-not (Test-Path -LiteralPath (Join-Path $backupPath "artifacts\smoke.txt"))) { throw "Backup smoke missing data\\artifacts fixture" }
-  & (Join-Path $scriptRoot "restore.ps1") -Backup $backupPath -Root $restoreRoot
+  & (Join-Path $scriptRoot "restore.ps1") -Backup $backupPath -Root $restoreRoot -PythonExe $python
   foreach ($required in @("data\platform.sqlite", "data\autoflow.sqlite", "data\artifacts\smoke.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $restoreRoot $required))) { throw "Restore smoke missing $required" }
   }
   Remove-Item -LiteralPath $artifactFixture -Force
   $emptyBackupPath = Join-Path $smokeRoot "backups\empty-artifacts"
   & (Join-Path $scriptRoot "backup.ps1") -Root $smokeRoot -Destination $emptyBackupPath -PythonExe $python | Out-Null
-  & (Join-Path $scriptRoot "restore.ps1") -Backup $emptyBackupPath -Root $restoreRoot
+  & (Join-Path $scriptRoot "restore.ps1") -Backup $emptyBackupPath -Root $restoreRoot -PythonExe $python
   if (Test-Path -LiteralPath (Join-Path $restoreRoot "data\artifacts\smoke.txt")) { throw "Empty artifact restore retained a stale artifact" }
   & $python (Join-Path $scriptRoot "sqlite-backup.py") (Join-Path $restoreRoot "data\platform.sqlite") (Join-Path $restoreRoot "data\verified.sqlite")
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $restoreRoot "data\verified.sqlite"))) { throw "Restored SQLite verification failed" }
