@@ -70,6 +70,7 @@ function ThemeHost({ children }: { children: React.ReactNode }) {
           colorWarning: palette.colorWarning,
           colorError: palette.colorError,
           colorTextBase: palette.colorTextBase,
+          colorTextLightSolid: "#ffffff",
           colorBgBase: palette.colorBgBase,
           colorBgLayout: palette.colorBgLayout,
           colorBgContainer: palette.colorBgBase,
@@ -81,6 +82,12 @@ function ThemeHost({ children }: { children: React.ReactNode }) {
           motionDurationSlow: "0.2s",
         },
         components: {
+          Button: {
+            primaryColor: "#ffffff",
+            colorTextLightSolid: "#ffffff",
+            controlHeight: 36,
+            borderRadius: 8,
+          },
           Table: {
             headerBg: palette.surface2,
             headerSplitColor: palette.separator,

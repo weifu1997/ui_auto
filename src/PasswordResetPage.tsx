@@ -3,6 +3,7 @@ import { Alert, Button, Form, Input, Typography } from "antd";
 import { useMemo, useState } from "react";
 import { acceptPlatformPasswordReset, PlatformApiError } from "./platform-api";
 import { useLocation, useNavigate } from "./router";
+import { AuthShowcase } from "./LoginPage";
 
 type ResetValues = { password: string; confirmation: string };
 
@@ -32,7 +33,18 @@ export function PasswordResetPage() {
   };
 
   if (!token) {
-    return <main className="login-page"><section className="login-panel"><Alert type="error" showIcon message="密码重置链接无效" /></section></main>;
+    return (
+      <main className="login-page">
+        <section className="login-panel">
+          <div className="login-brand" aria-label="AutoFlow Workbench">
+            <span className="login-brand-mark"><ThunderboltOutlined /></span>
+            <span className="login-brand-text">AutoFlow</span>
+          </div>
+          <Alert type="error" showIcon message="密码重置链接无效" description="链接格式不正确或已过期，请联系管理员重新发起重置。" />
+        </section>
+        <AuthShowcase />
+      </main>
+    );
   }
 
   return (
@@ -40,16 +52,17 @@ export function PasswordResetPage() {
       <section className="login-panel" aria-labelledby="password-reset-title">
         <div className="login-brand" aria-label="AutoFlow Workbench">
           <span className="login-brand-mark"><ThunderboltOutlined /></span>
-          <span>AutoFlow</span>
+          <span className="login-brand-text">AutoFlow</span>
+          <span className="login-brand-tag">Security</span>
         </div>
         <div className="login-copy">
           <Typography.Title id="password-reset-title" level={1}>设置新密码</Typography.Title>
-          <Typography.Text type="secondary">密码修改后，所有旧会话都会失效。</Typography.Text>
+          <Typography.Text type="secondary">密码修改后，所有旧会话都将安全注销</Typography.Text>
         </div>
-        {error && <Alert type="error" showIcon message={error} />}
-        <Form<ResetValues> layout="vertical" requiredMark={false} onFinish={(values) => void submit(values)}>
+        {error && <Alert className="login-error-alert" type="error" showIcon message={error} />}
+        <Form<ResetValues> layout="vertical" requiredMark={false} onFinish={(values) => void submit(values)} className="login-form">
           <Form.Item label="新密码" name="password" rules={[{ required: true, min: 8, message: "密码至少需要 8 个字符" }]}>
-            <Input.Password size="large" prefix={<LockOutlined />} autoComplete="new-password" autoFocus />
+            <Input.Password size="large" prefix={<LockOutlined className="input-prefix-icon" />} autoComplete="new-password" autoFocus placeholder="••••••••" />
           </Form.Item>
           <Form.Item
             label="确认新密码"
@@ -57,14 +70,19 @@ export function PasswordResetPage() {
             dependencies={["password"]}
             rules={[
               { required: true, message: "请再次输入密码" },
-              ({ getFieldValue }) => ({ validator: (_rule, value) => value === getFieldValue("password") ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致")) }),
+              ({ getFieldValue }) => ({
+                validator: (_rule, value) => value === getFieldValue("password") ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致")),
+              }),
             ]}
           >
-            <Input.Password size="large" prefix={<LockOutlined />} autoComplete="new-password" />
+            <Input.Password size="large" prefix={<LockOutlined className="input-prefix-icon" />} autoComplete="new-password" placeholder="••••••••" />
           </Form.Item>
-          <Button type="primary" htmlType="submit" size="large" block loading={submitting}>重置密码</Button>
+          <Button type="primary" htmlType="submit" size="large" block loading={submitting} className="login-submit-btn">
+            重置密码
+          </Button>
         </Form>
       </section>
+      <AuthShowcase />
     </main>
   );
 }
