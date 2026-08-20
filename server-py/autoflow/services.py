@@ -460,6 +460,15 @@ class PlatformServices:
         )
         self.webhook_requests: dict[str, list[float]] = {}
         configured_secret = os.environ.get("PLATFORM_SECRET_KEY")
+        if not configured_secret:
+            key_file = os.environ.get("PLATFORM_SECRET_KEY_FILE")
+            if key_file:
+                try:
+                    configured_secret = Path(key_file).read_text(
+                        encoding="utf-8"
+                    ).strip()
+                except Exception:
+                    configured_secret = None
         if os.environ.get("NODE_ENV") == "production" and not configured_secret:
             raise RuntimeError("PLATFORM_SECRET_KEY is required in production")
         self.key_material = key_material(configured_secret)
