@@ -53,19 +53,25 @@ class MaintenanceHealth:
 
 @dataclass
 class _MaintenanceSchedule:
-    retention_event_days: int
-    retention_delivery_days: int
+    retention_audit_days: int
+    retention_run_days: int
+    retention_artifact_days: int
+    retention_dry_run: bool
     last_retention_cleanup: float = 0.0
 
 
 def _maintenance_schedule() -> _MaintenanceSchedule:
     return _MaintenanceSchedule(
-        retention_event_days=max(
-            1, int(os.environ.get("AUTOFLOW_RETENTION_EVENT_DAYS", "180"))
+        retention_audit_days=max(
+            1, int(os.environ.get("AUTOFLOW_RETENTION_AUDIT_DAYS", "180"))
         ),
-        retention_delivery_days=max(
-            1, int(os.environ.get("AUTOFLOW_RETENTION_DELIVERY_DAYS", "90"))
+        retention_run_days=max(
+            1, int(os.environ.get("AUTOFLOW_RETENTION_RUN_DAYS", "90"))
         ),
+        retention_artifact_days=max(
+            1, int(os.environ.get("AUTOFLOW_RETENTION_ARTIFACT_DAYS", "15"))
+        ),
+        retention_dry_run=os.environ.get("AUTOFLOW_RETENTION_DRY_RUN") == "1",
     )
 
 
@@ -337,28 +343,22 @@ def _maintenance_pass(services: PlatformServices, schedule: _MaintenanceSchedule
     current_time = time.monotonic()
     if current_time - schedule.last_retention_cleanup < 3600:
         return
-    event_cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=schedule.retention_event_days)
-    ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-    delivery_cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=schedule.retention_delivery_days)
-    ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-    services.database.execute(
-        "DELETE FROM platform_sessions WHERE expires_at <= ?", (now(),)
+    summary = services.retention_cleanup(
+        audit_days=schedule.retention_audit_days,
+        run_days=schedule.retention_run_days,
+        artifact_days=schedule.retention_artifact_days,
+        dry_run=schedule.retention_dry_run,
     )
-    services.database.execute(
-        "DELETE FROM platform_run_events WHERE created_at <= ?", (event_cutoff,)
-    )
-    services.database.execute(
-        "DELETE FROM flow_outputs WHERE created_at <= ?", (event_cutoff,)
-    )
-    services.database.execute(
-        """
-        DELETE FROM deliveries
-        WHERE status IN ('delivered', 'failed') AND created_at <= ?
-        """,
-        (delivery_cutoff,),
-    )
+    if any(summary.values()):
+        LOGGER.info(
+            json(
+                {
+                    "event": "retention.pass",
+                    "dryRun": schedule.retention_dry_run,
+                    "summary": summary,
+                }
+            )
+        )
     schedule.last_retention_cleanup = current_time
 
 

@@ -275,7 +275,16 @@ def test_failed_retention_cleanup_does_not_mark_schedule_complete():
         def deliver_pending_notifications(self):
             return None
 
-    schedule = _MaintenanceSchedule(180, 90, last_retention_cleanup=-3600)
+        def retention_cleanup(self, **kwargs):
+            raise RuntimeError("retention cleanup failed")
+
+    schedule = _MaintenanceSchedule(
+        retention_audit_days=180,
+        retention_run_days=90,
+        retention_artifact_days=15,
+        retention_dry_run=False,
+        last_retention_cleanup=-3600,
+    )
 
     with pytest.raises(RuntimeError, match="retention cleanup failed"):
         _maintenance_pass(_Services(), schedule)

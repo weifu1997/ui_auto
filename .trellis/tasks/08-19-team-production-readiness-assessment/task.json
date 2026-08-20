@@ -25,7 +25,8 @@
     "08-20-route-wide-workspace-project-isolation",
     "08-20-https-service-account-secret-operations",
     "08-20-multi-user-remote-change-awareness",
-    "08-20-managed-runner-workspace-concurrency"
+    "08-20-managed-runner-workspace-concurrency",
+    "08-20-retention-data-lifecycle"
   ],
   "parent": null,
   "relatedFiles": [],
