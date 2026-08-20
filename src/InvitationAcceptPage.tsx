@@ -1,9 +1,10 @@
-import { LockOutlined, MailOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { LockOutlined, MailOutlined, ThunderboltOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Typography } from "antd";
 import { useMemo, useState } from "react";
 import { acceptWorkspaceInvitation, PlatformApiError, restorePlatformSession } from "./platform-api";
 import { storePlatformSession, readStoredPlatformSession } from "./platform-context";
 import { useLocation, useNavigate } from "./router";
+import { AuthShowcase } from "./LoginPage";
 
 type InvitationValues = { email: string; name?: string; password: string };
 
@@ -55,7 +56,14 @@ export function InvitationAcceptPage() {
   if (!token) {
     return (
       <main className="login-page">
-        <section className="login-panel"><Alert type="error" showIcon message="邀请链接无效" /></section>
+        <section className="login-panel">
+          <div className="login-brand" aria-label="AutoFlow Workbench">
+            <span className="login-brand-mark"><ThunderboltOutlined /></span>
+            <span className="login-brand-text">AutoFlow</span>
+          </div>
+          <Alert type="error" showIcon message="邀请链接无效" description="链接格式不正确或已失效，请联系工作区管理员重新发起邀请。" />
+        </section>
+        <AuthShowcase />
       </main>
     );
   }
@@ -65,41 +73,51 @@ export function InvitationAcceptPage() {
       <section className="login-panel" aria-labelledby="invite-title">
         <div className="login-brand" aria-label="AutoFlow Workbench">
           <span className="login-brand-mark"><ThunderboltOutlined /></span>
-          <span>AutoFlow</span>
+          <span className="login-brand-text">AutoFlow</span>
+          <span className="login-brand-tag">Workspace</span>
         </div>
         <div className="login-copy">
           <Typography.Title id="invite-title" level={1}>接受工作区邀请</Typography.Title>
-          <Typography.Text type="secondary">验证完成前不会显示工作区信息。</Typography.Text>
+          <Typography.Text type="secondary">加入团队工作区，开启自动化协同测试</Typography.Text>
         </div>
-        {error && <Alert type="error" showIcon message={error} />}
+        {error && <Alert className="login-error-alert" type="error" showIcon message={error} />}
         {existingSession ? (
-          <>
-            <Alert type="info" showIcon message={`将以 ${existingSession.user.email} 接受邀请`} />
+          <div className="login-form">
+            <Alert
+              type="info"
+              showIcon
+              message={`将以 ${existingSession.user.email} 接受邀请`}
+              description="点击下方按钮直接加入工作区。"
+            />
             <Button
               type="primary"
               size="large"
               block
               loading={submitting}
+              className="login-submit-btn"
               onClick={() => void complete({ email: existingSession.user.email, password: "" })}
             >
               接受邀请
             </Button>
-          </>
+          </div>
         ) : (
-          <Form<InvitationValues> layout="vertical" requiredMark={false} onFinish={(values) => void complete(values)}>
+          <Form<InvitationValues> layout="vertical" requiredMark={false} onFinish={(values) => void complete(values)} className="login-form">
             <Form.Item label="邀请邮箱" name="email" rules={[{ required: true, type: "email", message: "请输入与邀请一致的邮箱" }]}>
-              <Input size="large" prefix={<MailOutlined />} autoComplete="email" autoFocus />
+              <Input size="large" prefix={<MailOutlined className="input-prefix-icon" />} autoComplete="email" autoFocus placeholder="name@company.com" />
             </Form.Item>
             <Form.Item label="姓名" name="name">
-              <Input size="large" autoComplete="name" />
+              <Input size="large" prefix={<UserOutlined className="input-prefix-icon" />} autoComplete="name" placeholder="您的姓名" />
             </Form.Item>
             <Form.Item label="设置密码" name="password" rules={[{ required: true, min: 8, message: "密码至少需要 8 个字符" }]}>
-              <Input.Password size="large" prefix={<LockOutlined />} autoComplete="new-password" />
+              <Input.Password size="large" prefix={<LockOutlined className="input-prefix-icon" />} autoComplete="new-password" placeholder="••••••••" />
             </Form.Item>
-            <Button type="primary" htmlType="submit" size="large" block loading={submitting}>创建账户并接受邀请</Button>
+            <Button type="primary" htmlType="submit" size="large" block loading={submitting} className="login-submit-btn">
+              创建账户并接受邀请
+            </Button>
           </Form>
         )}
       </section>
+      <AuthShowcase />
     </main>
   );
 }

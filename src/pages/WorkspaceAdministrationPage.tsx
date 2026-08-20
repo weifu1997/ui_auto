@@ -1,13 +1,17 @@
 import {
   CopyOutlined,
   KeyOutlined,
+  MailOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   StopOutlined,
   UserDeleteOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
+  Avatar,
   Button,
   Empty,
   Form,
@@ -93,10 +97,10 @@ export function WorkspaceAdministrationPage() {
   const workspace = session?.workspaces.find((item) => item.id === workspaceId);
   const isSuperAdmin = session?.user.globalRole === "super_admin";
   const canManageMembers = Boolean(
-    workspace?.capabilities.includes("member.manage"),
+    isSuperAdmin || workspace?.role === "admin" || workspace?.capabilities?.includes("member.manage"),
   );
   const canManageInvitations = Boolean(
-    workspace?.capabilities.includes("invite.manage"),
+    isSuperAdmin || workspace?.role === "admin" || workspace?.capabilities?.includes("invite.manage"),
   );
   const hasSession = Boolean(session);
   const token = session?.token ?? "";
@@ -152,37 +156,57 @@ export function WorkspaceAdministrationPage() {
     [accounts],
   );
 
-  if (!canManageMembers && !isSuperAdmin) {
+  const isLastActiveAdmin = (member: PlatformWorkspaceMember) =>
+    member.role === "admin" && member.enabled && activeAdminCount <= 1;
+
+  const isLastActiveSuperAdmin = (account: PlatformAccount) =>
+    account.globalRole === "super_admin" && account.enabled && activeSuperAdminCount <= 1;
+
+  if (!hasSession) {
     return <Navigate to="/projects" replace />;
   }
 
-  const isLastActiveAdmin = (member: PlatformWorkspaceMember) =>
-    member.role === "admin" && member.enabled && activeAdminCount <= 1;
-  const isLastActiveSuperAdmin = (account: PlatformAccount) =>
-    account.globalRole === "super_admin" && account.enabled && activeSuperAdminCount <= 1;
+  if (workspace && !canManageMembers && !canManageInvitations && !isSuperAdmin) {
+    return <Navigate to="/projects" replace />;
+  }
 
   const changeMemberRole = async (
     member: PlatformWorkspaceMember,
     role: PlatformWorkspaceMember["role"],
   ) => {
-    if (!workspaceId || (isLastActiveAdmin(member) && role !== "admin")) return;
+    if (!workspaceId) return;
+    if (member.role === "admin" && role === "member" && isLastActiveAdmin(member)) {
+      return;
+    }
     try {
       await updateWorkspaceMemberRole(token, workspaceId, member.id, role);
-      message.success("成员角色已更新，旧会话已撤销");
+      message.success("成员角色已更新");
       await load();
     } catch (error) {
-      message.error(operationError(error, "成员角色更新失败"));
+      message.error(operationError(error, "角色更新失败"));
     }
   };
 
   const removeMember = async (member: PlatformWorkspaceMember) => {
-    if (!workspaceId || isLastActiveAdmin(member)) return;
+    if (!workspaceId) return;
+    if (isLastActiveAdmin(member)) return;
     try {
       await removeWorkspaceMember(token, workspaceId, member.id);
-      message.success("成员已移除，旧会话已撤销");
+      message.success("成员已从工作区移除");
       await load();
     } catch (error) {
       message.error(operationError(error, "移除成员失败"));
+    }
+  };
+
+  const revokeInvitation = async (invitation: PlatformWorkspaceInvitation) => {
+    if (!workspaceId) return;
+    try {
+      await revokeWorkspaceInvitation(token, workspaceId, invitation.id);
+      message.success("邀请已撤销");
+      await load();
+    } catch (error) {
+      message.error(operationError(error, "撤销邀请失败"));
     }
   };
 
@@ -192,8 +216,6 @@ export function WorkspaceAdministrationPage() {
     setSubmitting(true);
     try {
       const response = await createWorkspaceInvitation(token, workspaceId, values);
-      // Keep the raw capability only in component state. It is intentionally
-      // never written to localStorage, sessionStorage, audit details, or logs.
       setInviteLink(
         `${window.location.origin}/invitations/accept?token=${encodeURIComponent(response.invitation.token)}`,
       );
@@ -205,17 +227,6 @@ export function WorkspaceAdministrationPage() {
       message.error(operationError(error, "创建邀请失败"));
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const revokeInvitation = async (invitation: PlatformWorkspaceInvitation) => {
-    if (!workspaceId || invitation.status !== "active") return;
-    try {
-      await revokeWorkspaceInvitation(token, workspaceId, invitation.id);
-      message.success("邀请已撤销");
-      await load();
-    } catch (error) {
-      message.error(operationError(error, "撤销邀请失败"));
     }
   };
 
@@ -261,8 +272,6 @@ export function WorkspaceAdministrationPage() {
     setWorkspaceSubmitting(true);
     try {
       const response = await createPlatformWorkspace(token, values.name);
-      // Never construct capabilities in the browser: refresh the full session
-      // so the selected workspace is the server-issued projection.
       const refreshed = await restorePlatformSession();
       storePlatformSession(refreshed);
       storePlatformWorkspaceId(response.workspace.id);
@@ -282,14 +291,19 @@ export function WorkspaceAdministrationPage() {
       title: "成员",
       key: "member",
       render: (_value, member) => (
-        <Space direction="vertical" size={0}>
-          <strong>{member.name}</strong>
-          <span>{member.email}</span>
+        <Space size={12} align="center">
+          <Avatar size={32} icon={<UserOutlined />} style={{ backgroundColor: "var(--accent)" }}>
+            {member.name.slice(0, 1).toUpperCase()}
+          </Avatar>
+          <div>
+            <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{member.name}</div>
+            <span style={{ fontSize: "var(--text-caption)", color: "var(--text-secondary)" }}>{member.email}</span>
+          </div>
         </Space>
       ),
     },
     {
-      title: "角色",
+      title: "工作区角色",
       dataIndex: "role",
       width: 160,
       render: (_value, member) => (
@@ -299,6 +313,7 @@ export function WorkspaceAdministrationPage() {
           options={workspaceRoleOptions}
           disabled={isLastActiveAdmin(member)}
           onChange={(role: PlatformWorkspaceMember["role"]) => void changeMemberRole(member, role)}
+          style={{ width: 120 }}
         />
       ),
     },
@@ -306,12 +321,15 @@ export function WorkspaceAdministrationPage() {
       title: "状态",
       dataIndex: "enabled",
       width: 104,
-      render: (enabled: boolean) => <Tag color={enabled ? "success" : "default"}>{enabled ? "启用" : "停用"}</Tag>,
+      render: (enabled: boolean) => (
+        <Tag color={enabled ? "success" : "default"}>{enabled ? "正常" : "已停用"}</Tag>
+      ),
     },
     {
       title: "操作",
       key: "actions",
       width: 88,
+      align: "right",
       render: (_value, member) => (
         <Popconfirm
           title={`移除 ${member.name}？`}
@@ -338,19 +356,43 @@ export function WorkspaceAdministrationPage() {
   ];
 
   const invitationColumns: TableColumnsType<PlatformWorkspaceInvitation> = [
-    { title: "邮箱", dataIndex: "email" },
     {
-      title: "角色",
-      dataIndex: "role",
-      width: 112,
-      render: (role: PlatformWorkspaceInvitation["role"]) => role === "admin" ? "管理员" : "成员",
+      title: "受邀邮箱",
+      dataIndex: "email",
+      render: (email: string) => (
+        <Space size={8}>
+          <MailOutlined style={{ color: "var(--text-tertiary)" }} />
+          <span style={{ fontWeight: 500 }}>{email}</span>
+        </Space>
+      ),
     },
-    { title: "状态", key: "status", width: 112, render: (_value, invitation) => invitationStatus(invitation) },
-    { title: "失效时间", dataIndex: "expiresAt", width: 210 },
+    {
+      title: "预设角色",
+      dataIndex: "role",
+      width: 120,
+      render: (role: PlatformWorkspaceInvitation["role"]) => (
+        <Tag color={role === "admin" ? "purple" : "blue"}>
+          {role === "admin" ? "管理员" : "成员"}
+        </Tag>
+      ),
+    },
+    {
+      title: "邀请状态",
+      key: "status",
+      width: 112,
+      render: (_value, invitation) => invitationStatus(invitation),
+    },
+    {
+      title: "失效时间",
+      dataIndex: "expiresAt",
+      width: 200,
+      render: (expiresAt: string) => new Date(expiresAt).toLocaleString("zh-CN"),
+    },
     {
       title: "操作",
       key: "actions",
       width: 88,
+      align: "right",
       render: (_value, invitation) => (
         <Popconfirm
           title="撤销这份邀请？"
@@ -360,14 +402,16 @@ export function WorkspaceAdministrationPage() {
           disabled={invitation.status !== "active"}
           onConfirm={() => revokeInvitation(invitation)}
         >
-          <Button
-            danger
-            type="text"
-            size="small"
-            icon={<StopOutlined />}
-            aria-label={`撤销邀请 ${invitation.email}`}
-            disabled={invitation.status !== "active"}
-          />
+          <Tooltip title={invitation.status === "active" ? "撤销邀请" : undefined}>
+            <Button
+              danger
+              type="text"
+              size="small"
+              icon={<StopOutlined />}
+              aria-label={`撤销邀请 ${invitation.email}`}
+              disabled={invitation.status !== "active"}
+            />
+          </Tooltip>
         </Popconfirm>
       ),
     },
@@ -378,9 +422,14 @@ export function WorkspaceAdministrationPage() {
       title: "账户",
       key: "account",
       render: (_value, account) => (
-        <Space direction="vertical" size={0}>
-          <strong>{account.name}</strong>
-          <span>{account.email}</span>
+        <Space size={12} align="center">
+          <Avatar size={32} icon={<UserOutlined />} style={{ backgroundColor: account.globalRole === "super_admin" ? "var(--purple)" : "var(--accent)" }}>
+            {account.name.slice(0, 1).toUpperCase()}
+          </Avatar>
+          <div>
+            <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{account.name}</div>
+            <span style={{ fontSize: "var(--text-caption)", color: "var(--text-secondary)" }}>{account.email}</span>
+          </div>
         </Space>
       ),
     },
@@ -398,6 +447,7 @@ export function WorkspaceAdministrationPage() {
           ]}
           disabled={isLastActiveSuperAdmin(account)}
           onChange={(value: string) => void changeGlobalRole(account, value)}
+          style={{ width: 140 }}
         />
       ),
     },
@@ -406,8 +456,8 @@ export function WorkspaceAdministrationPage() {
       key: "enabled",
       width: 180,
       render: (_value, account) => (
-        <Space size={4}>
-          <Tag color={account.enabled ? "success" : "default"}>{account.enabled ? "启用" : "停用"}</Tag>
+        <Space size={8}>
+          <Tag color={account.enabled ? "success" : "default"}>{account.enabled ? "正常" : "已停用"}</Tag>
           <Popconfirm
             title={account.enabled ? `停用 ${account.name}？` : `启用 ${account.name}？`}
             description={account.enabled ? "该账户的所有会话会立即失效。" : undefined}
@@ -432,7 +482,8 @@ export function WorkspaceAdministrationPage() {
     {
       title: "操作",
       key: "actions",
-      width: 64,
+      width: 88,
+      align: "right",
       render: (_value, account) => (
         <Tooltip title="生成一次性密码重置链接">
           <Button
@@ -449,24 +500,26 @@ export function WorkspaceAdministrationPage() {
 
   const workspaceManagement = workspaceId && (canManageMembers || canManageInvitations) ? (
     <Tabs
+      className="administration-tabs"
       items={[
         {
           key: "members",
-          label: "成员",
+          label: "工作区成员",
           children: (
             <section className="surface administration-table">
               <div className="panel-heading">
                 <div>
                   <h2>工作区成员</h2>
-                  <span>角色变更和移除会立即撤销受影响账户的会话。</span>
+                  <span>角色变更和移除会立即生效并撤销受影响账户的活动会话。</span>
                 </div>
-                <Space>
+                <Space size={8}>
                   <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
                     disabled={!canManageInvitations}
                     onClick={() => setInviteOpen(true)}
+                    className="admin-invite-btn"
                   >
                     邀请成员
                   </Button>
@@ -485,22 +538,26 @@ export function WorkspaceAdministrationPage() {
         },
         {
           key: "invitations",
-          label: "邀请",
+          label: "受控邀请",
           children: (
             <section className="surface administration-table">
               <div className="panel-heading">
                 <div>
                   <h2>邀请记录</h2>
-                  <span>链接仅在创建后显示一次，默认 24 小时失效。</span>
+                  <span>邀请链接创建后仅显示一次，默认 24 小时内有效。</span>
                 </div>
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  disabled={!canManageInvitations}
-                  onClick={() => setInviteOpen(true)}
-                >
-                  创建邀请
-                </Button>
+                <Space size={8}>
+                  <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    disabled={!canManageInvitations}
+                    onClick={() => setInviteOpen(true)}
+                    className="admin-invite-btn"
+                  >
+                    创建邀请
+                  </Button>
+                </Space>
               </div>
               <Table
                 rowKey="id"
@@ -526,20 +583,15 @@ export function WorkspaceAdministrationPage() {
         <PageHeading
           title="成员与账户"
           description={workspace ? `管理“${workspace.name}”的成员、受控邀请和部署级账户。` : "管理部署级账户。"}
-          actions={(
-            <Space>
-              <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
-              {isSuperAdmin && (
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setWorkspaceCreateOpen(true)}>
-                  创建工作区
-                </Button>
-              )}
-            </Space>
-          )}
+          actions={isSuperAdmin ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setWorkspaceCreateOpen(true)} className="admin-invite-btn">
+              创建工作区
+            </Button>
+          ) : undefined}
         />
         {loading && !members.length && !accounts.length ? <div className="administration-loading"><Spin /></div> : workspaceManagement}
         {isSuperAdmin && (
-          <section className="surface administration-table administration-accounts">
+          <section className="surface administration-table administration-accounts" style={{ marginTop: "var(--space-6)" }}>
             <div className="panel-heading">
               <div>
                 <h2>部署级账户</h2>
@@ -559,7 +611,7 @@ export function WorkspaceAdministrationPage() {
       </main>
 
       <Modal
-        title="邀请成员"
+        title="邀请成员加入工作区"
         open={inviteOpen}
         confirmLoading={submitting}
         okText="创建邀请"
@@ -567,13 +619,13 @@ export function WorkspaceAdministrationPage() {
         onOk={() => void createInvitation()}
         onCancel={() => setInviteOpen(false)}
       >
-        <Form form={inviteForm} layout="vertical" initialValues={{ role: "member" }}>
+        <Form form={inviteForm} layout="vertical" initialValues={{ role: "member" }} style={{ marginTop: 16 }}>
           <Form.Item
             label="邮箱"
             name="email"
             rules={[{ required: true, type: "email", message: "请输入有效邮箱" }]}
           >
-            <Input autoFocus autoComplete="email" />
+            <Input autoFocus autoComplete="email" placeholder="member@company.com" prefix={<MailOutlined style={{ color: "var(--text-tertiary)" }} />} />
           </Form.Item>
           <Form.Item label="工作区角色" name="role" rules={[{ required: true }]}>
             <Select options={workspaceRoleOptions} />
@@ -582,7 +634,7 @@ export function WorkspaceAdministrationPage() {
       </Modal>
 
       <Modal
-        title="创建工作区"
+        title="创建新工作区"
         open={workspaceCreateOpen}
         confirmLoading={workspaceSubmitting}
         okText="创建工作区"
@@ -590,69 +642,91 @@ export function WorkspaceAdministrationPage() {
         onOk={() => void createWorkspace()}
         onCancel={() => setWorkspaceCreateOpen(false)}
       >
-        <Form form={workspaceForm} layout="vertical">
+        <Form form={workspaceForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
             label="工作区名称"
             name="name"
             rules={[{ required: true, whitespace: true, message: "请输入工作区名称" }]}
           >
-            <Input autoFocus maxLength={120} />
+            <Input autoFocus maxLength={120} placeholder="例如：核心业务测试团队" />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title="复制邀请链接"
+        title="复制一次性邀请链接"
         open={Boolean(inviteLink)}
-        footer={<Button onClick={() => setInviteLink(undefined)}>已复制或安全保存</Button>}
+        footer={<Button type="primary" onClick={() => setInviteLink(undefined)}>已复制或安全保存</Button>}
         onCancel={() => setInviteLink(undefined)}
       >
-        <Alert
-          type="warning"
-          showIcon
-          message="该链接仅在此时显示一次"
-          description="请通过获批准的安全渠道发送。关闭此窗口后系统无法再次显示原始 token。"
-        />
-        <Input.TextArea aria-label="一次性邀请链接" value={inviteLink} readOnly autoSize={{ minRows: 3 }} />
-        <Button
-          icon={<CopyOutlined />}
-          onClick={() => {
-            if (!inviteLink) return;
-            void navigator.clipboard.writeText(inviteLink).then(
-              () => message.success("邀请链接已复制"),
-              () => message.error("复制失败，请手动复制链接"),
-            );
-          }}
-        >
-          复制链接
-        </Button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 16 }}>
+          <Alert
+            type="warning"
+            showIcon
+            icon={<SafetyCertificateOutlined />}
+            message="该链接仅在此时显示一次"
+            description="请通过获批准的安全渠道发送给被邀请人。关闭此窗口后系统无法再次显示原始 token。"
+          />
+          <Input.TextArea
+            aria-label="一次性邀请链接"
+            value={inviteLink}
+            readOnly
+            autoSize={{ minRows: 3, maxRows: 5 }}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
+          />
+          <Button
+            type="dashed"
+            icon={<CopyOutlined />}
+            block
+            onClick={() => {
+              if (!inviteLink) return;
+              void navigator.clipboard.writeText(inviteLink).then(
+                () => message.success("邀请链接已复制到剪贴板"),
+                () => message.error("复制失败，请手动复制链接"),
+              );
+            }}
+          >
+            点击复制链接
+          </Button>
+        </div>
       </Modal>
 
       <Modal
-        title="复制密码重置链接"
+        title="复制一次性密码重置链接"
         open={Boolean(resetLink)}
-        footer={<Button onClick={() => setResetLink(undefined)}>已复制或安全保存</Button>}
+        footer={<Button type="primary" onClick={() => setResetLink(undefined)}>已复制或安全保存</Button>}
         onCancel={() => setResetLink(undefined)}
       >
-        <Alert
-          type="warning"
-          showIcon
-          message="该链接仅在此时显示一次"
-          description="请通过获批准的安全渠道发送；首次使用后 token 会失效。"
-        />
-        <Input.TextArea aria-label="一次性密码重置链接" value={resetLink} readOnly autoSize={{ minRows: 3 }} />
-        <Button
-          icon={<CopyOutlined />}
-          onClick={() => {
-            if (!resetLink) return;
-            void navigator.clipboard.writeText(resetLink).then(
-              () => message.success("密码重置链接已复制"),
-              () => message.error("复制失败，请手动复制链接"),
-            );
-          }}
-        >
-          复制链接
-        </Button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 16 }}>
+          <Alert
+            type="warning"
+            showIcon
+            icon={<SafetyCertificateOutlined />}
+            message="该链接仅在此时显示一次"
+            description="请通过获批准的安全渠道发送给用户；首次使用后 token 会立即失效。"
+          />
+          <Input.TextArea
+            aria-label="一次性密码重置链接"
+            value={resetLink}
+            readOnly
+            autoSize={{ minRows: 3, maxRows: 5 }}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
+          />
+          <Button
+            type="dashed"
+            icon={<CopyOutlined />}
+            block
+            onClick={() => {
+              if (!resetLink) return;
+              void navigator.clipboard.writeText(resetLink).then(
+                () => message.success("密码重置链接已复制到剪贴板"),
+                () => message.error("复制失败，请手动复制链接"),
+              );
+            }}
+          >
+            点击复制链接
+          </Button>
+        </div>
       </Modal>
     </div>
   );
