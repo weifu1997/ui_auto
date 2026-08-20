@@ -5,7 +5,10 @@
   <executable>%BASE%\runtime\node.exe</executable>
   <arguments>scripts\start-production.mjs</arguments>
   <workingdirectory>%BASE%\app</workingdirectory>
-  <env name="AUTOFLOW_LISTEN_HOST" value="0.0.0.0" />
+  <env name="AUTOFLOW_LISTEN_HOST" value="127.0.0.1" />
+  <env name="AUTOFLOW_REQUIRE_HTTPS" value="1" />
+  <env name="AUTOFLOW_TRUSTED_PROXY" value="" />
+  <env name="AUTOFLOW_COOKIE_SECURE" value="1" />
   <env name="PLATFORM_DATA_DIRECTORY" value="%BASE%\data" />
   <env name="AUTOFLOW_STATIC_DIRECTORY" value="%BASE%\app\dist" />
   <env name="PLAYWRIGHT_BROWSERS_PATH" value="%BASE%\browsers" />
