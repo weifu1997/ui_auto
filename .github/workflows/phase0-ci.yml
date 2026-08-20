@@ -52,6 +52,9 @@ jobs:
       - name: Run frontend unit tests
         run: npm run test:unit
 
+      - name: Run frontend coverage gate
+        run: npm run test:coverage
+
       - name: Run production startup tests
         run: npm run test:startup
 
@@ -106,3 +109,38 @@ jobs:
 
       - name: Run Windows deployment smoke
         run: npm run test:windows
+
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Audit Node dependencies
+        run: npm audit --audit-level=high
+
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install --upgrade pip-audit
+          pip-audit -r server-py/requirements.txt
+
+      - name: Static security scan (Python)
+        run: |
+          python -m pip install bandit
+          bandit -r server-py/autoflow -q -ll
