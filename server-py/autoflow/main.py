@@ -268,6 +268,20 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
             content={"ready": database_ready, "maintenance": maintenance},
         )
 
+    @app.get("/metrics")
+    async def metrics() -> JSONResponse:
+        maintenance = maintenance_health.payload()
+        try:
+            check = services.database.execute("PRAGMA quick_check").fetchone()
+        except Exception:
+            database_ready = False
+        else:
+            database_ready = bool(check) and str(check[0]).lower() == "ok"
+        payload = services.metrics()
+        payload["ready"] = database_ready
+        payload["maintenance"] = maintenance
+        return JSONResponse(content=payload)
+
     @app.get("/api/platform/health")
     async def platform_health() -> Response:
         return Response(
