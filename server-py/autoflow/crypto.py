@@ -48,3 +48,26 @@ def decrypt(row: EncryptedValue | dict, secret: str | None = None) -> str:
         iv, ciphertext + tag, None
     )
     return decrypted.decode("utf-8")
+
+
+def encrypt_bytes(value: bytes, secret: str | None = None) -> EncryptedValue:
+    iv = os.urandom(12)
+    ciphertext_with_tag = AESGCM(key_material(secret)).encrypt(iv, value, None)
+    ciphertext = ciphertext_with_tag[:-16]
+    tag = ciphertext_with_tag[-16:]
+    return EncryptedValue(
+        iv=base64.b64encode(iv).decode("ascii"),
+        tag=base64.b64encode(tag).decode("ascii"),
+        ciphertext=base64.b64encode(ciphertext).decode("ascii"),
+    )
+
+
+def decrypt_bytes(row: EncryptedValue | dict, secret: str | None = None) -> bytes:
+    if isinstance(row, EncryptedValue):
+        iv_text, tag_text, ciphertext_text = row.iv, row.tag, row.ciphertext
+    else:
+        iv_text, tag_text, ciphertext_text = row["iv"], row["tag"], row["ciphertext"]
+    iv = base64.b64decode(iv_text)
+    tag = base64.b64decode(tag_text)
+    ciphertext = base64.b64decode(ciphertext_text)
+    return AESGCM(key_material(secret)).decrypt(iv, ciphertext + tag, None)

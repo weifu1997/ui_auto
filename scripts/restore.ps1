@@ -1,7 +1,12 @@
-param([Parameter(Mandatory=$true)][string]$Backup, [string]$Root = "D:\AutoFlow")
+param([Parameter(Mandatory=$true)][string]$Backup, [string]$Root = "D:\AutoFlow", [string]$PythonExe = "")
 $ErrorActionPreference = "Stop"
 $backupPath = (Resolve-Path -LiteralPath $Backup).Path
 if (-not (Test-Path -LiteralPath (Join-Path $backupPath "backup.json"))) { throw "Invalid AutoFlow backup" }
+$python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { Join-Path $Root "app\venv\Scripts\python.exe" }
+$scriptRoot = (Resolve-Path -LiteralPath $PSScriptRoot).ProviderPath
+$manifestScript = Join-Path $scriptRoot "backup-manifest.py"
+& $python $manifestScript verify $backupPath
+if ($LASTEXITCODE -ne 0) { throw "Backup manifest verification failed" }
 $service = Join-Path $Root "AutoFlow.exe"
 if (Test-Path -LiteralPath $service) { & $service stop }
 $data = Join-Path $Root "data"; New-Item -ItemType Directory -Force -Path $data | Out-Null
