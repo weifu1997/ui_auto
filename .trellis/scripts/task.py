@@ -4,22 +4,22 @@
 Task Management Script.
 
 Usage:
-    python task.py create "<title>" [--slug <name>] [--assignee <dev>] [--priority P0|P1|P2|P3] [--parent <dir>] [--package <pkg>] [--no-start]
-    python task.py add-context <dir> <file> <path> [reason] # Add jsonl entry
-    python task.py validate <dir>              # Validate jsonl files
-    python task.py list-context <dir>          # List jsonl entries
-    python task.py start <dir>                 # Set active task
-    python task.py current [--source] [--json] # Show active task
-    python task.py finish                      # Clear active task
-    python task.py set-branch <dir> <branch>   # Set git branch
-    python task.py set-base-branch <dir> <branch>  # Set PR target branch
-    python task.py set-scope <dir> <scope>     # Set scope for PR title
-    python task.py set-meta <dir> <key> <value>  # Set a task metadata key
-    python task.py archive <task-dir>          # Archive completed task
-    python task.py list                        # List active tasks
-    python task.py list-archive [month]        # List archived tasks
-    python task.py add-subtask <parent-dir> <child-dir>     # Link child to parent
-    python task.py remove-subtask <parent-dir> <child-dir>  # Unlink child from parent
+    python3 task.py create "<title>" [--slug <name>] [--assignee <dev>] [--priority P0|P1|P2|P3] [--parent <dir>] [--package <pkg>] [--no-start]
+    python3 task.py add-context <dir> <file> <path> [reason] # Add jsonl entry
+    python3 task.py validate <dir>              # Validate jsonl files
+    python3 task.py list-context <dir>          # List jsonl entries
+    python3 task.py start <dir>                 # Set active task
+    python3 task.py current [--source] [--json] # Show active task
+    python3 task.py finish                      # Clear active task
+    python3 task.py set-branch <dir> <branch>   # Set git branch
+    python3 task.py set-base-branch <dir> <branch>  # Set PR target branch
+    python3 task.py set-scope <dir> <scope>     # Set scope for PR title
+    python3 task.py set-meta <dir> <key> <value>  # Set a task metadata key
+    python3 task.py archive <task-dir>          # Archive completed task
+    python3 task.py list                        # List active tasks
+    python3 task.py list-archive [month]        # List archived tasks
+    python3 task.py add-subtask <parent-dir> <child-dir>     # Link child to parent
+    python3 task.py remove-subtask <parent-dir> <child-dir>  # Unlink child from parent
 """
 
 from __future__ import annotations
@@ -82,16 +82,26 @@ def cmd_start(args: argparse.Namespace) -> int:
     # Resolve task directory (supports task name, relative path, or absolute path)
     full_path = resolve_task_dir(task_input, repo_root)
 
-    if not full_path.is_dir():
+    if not full_path or not full_path.is_dir():
         print(colored(f"Error: Task not found: {task_input}", Colors.RED))
         print("Hint: Use task name (e.g., 'my-task') or full path (e.g., '.trellis/tasks/01-31-my-task')")
         return 1
 
-    # Convert to relative path for storage
+    # Convert to relative path for storage. repo_root is resolved because
+    # full_path already is (resolve_task_dir only returns paths inside the
+    # resolved root), so an unresolved repo_root would mismatch under a
+    # symlink (e.g. /tmp on macOS) and reject a perfectly normal task.
     try:
-        task_dir = full_path.relative_to(repo_root).as_posix()
+        task_dir = full_path.relative_to(repo_root.resolve()).as_posix()
     except ValueError:
-        task_dir = str(full_path)
+        # resolve_task_dir already refused everything outside the repo, so
+        # this is unreachable in practice. Refuse rather than fall back to
+        # str(full_path) — that fallback (a lexical relative_to() paired with
+        # an absolute-path fallback) is exactly the pattern that let a `..`
+        # ref escape into storage before this fix.
+        print(colored(f"Error: Task not found: {task_input}", Colors.RED))
+        print("Hint: Use task name (e.g., 'my-task') or full path (e.g., '.trellis/tasks/01-31-my-task')")
+        return 1
 
     task_json_path = full_path / FILE_TASK_JSON
 
@@ -378,25 +388,25 @@ def show_usage() -> None:
     print("""Task Management Script
 
 Usage:
-  python task.py create <title>                     Create new task directory
-  python task.py create <title> --package <pkg>     Create task for a specific package
-  python task.py create <title> --parent <dir>      Create task as child of parent
-  python task.py create <title> --no-start          Create without making it active in this session
-  python task.py add-context <dir> <jsonl> <path> [reason]  Add entry to jsonl
-  python task.py validate <dir>                     Validate jsonl files
-  python task.py list-context <dir>                 List jsonl entries
-  python task.py start <dir>                        Set active task
-  python task.py current [--source]                 Show active task
-  python task.py finish                             Clear active task
-  python task.py set-branch <dir> <branch>          Set git branch
-  python task.py set-base-branch <dir> <branch>     Set PR target branch
-  python task.py set-scope <dir> <scope>            Set scope for PR title
-  python task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
-  python task.py archive <task-dir>                 Archive completed task
-  python task.py add-subtask <parent> <child>       Link child task to parent
-  python task.py remove-subtask <parent> <child>    Unlink child from parent
-  python task.py list [--mine] [--status <status>] [--json]  List tasks
-  python task.py list-archive [YYYY-MM]             List archived tasks
+  python3 task.py create <title>                     Create new task directory
+  python3 task.py create <title> --package <pkg>     Create task for a specific package
+  python3 task.py create <title> --parent <dir>      Create task as child of parent
+  python3 task.py create <title> --no-start          Create without making it active in this session
+  python3 task.py add-context <dir> <jsonl> <path> [reason]  Add entry to jsonl
+  python3 task.py validate <dir>                     Validate jsonl files
+  python3 task.py list-context <dir>                 List jsonl entries
+  python3 task.py start <dir>                        Set active task
+  python3 task.py current [--source]                 Show active task
+  python3 task.py finish                             Clear active task
+  python3 task.py set-branch <dir> <branch>          Set git branch
+  python3 task.py set-base-branch <dir> <branch>     Set PR target branch
+  python3 task.py set-scope <dir> <scope>            Set scope for PR title
+  python3 task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
+  python3 task.py archive <task-dir>                 Archive completed task
+  python3 task.py add-subtask <parent> <child>       Link child task to parent
+  python3 task.py remove-subtask <parent> <child>    Unlink child from parent
+  python3 task.py list [--mine] [--status <status>] [--json]  List tasks
+  python3 task.py list-archive [YYYY-MM]             List archived tasks
 
 Monorepo options:
   --package <pkg>      Package name (validated against config.yaml packages)
@@ -407,21 +417,21 @@ List options:
   --json               Output machine-readable JSON (also available on `current`)
 
 Examples:
-  python task.py create "Add login feature" --slug add-login
-  python task.py create "Add login feature" --slug add-login --package cli
-  python task.py create "Add login feature" --meta linear=ENG-123 --meta epic=auth
-  python task.py create "Child task" --slug child --parent .trellis/tasks/01-21-parent
-  python task.py add-context <dir> implement .trellis/spec/cli/backend/auth.md "Auth guidelines"
-  python task.py set-branch <dir> task/add-login
-  python task.py start .trellis/tasks/01-21-add-login
-  python task.py current --source
-  python task.py finish
-  python task.py archive add-login
-  python task.py add-subtask parent-task child-task  # Link existing tasks
-  python task.py remove-subtask parent-task child-task
-  python task.py list                               # List all active tasks
-  python task.py list --mine                        # List my tasks only
-  python task.py list --mine --status in_progress   # List my in-progress tasks
+  python3 task.py create "Add login feature" --slug add-login
+  python3 task.py create "Add login feature" --slug add-login --package cli
+  python3 task.py create "Add login feature" --meta linear=ENG-123 --meta epic=auth
+  python3 task.py create "Child task" --slug child --parent .trellis/tasks/01-21-parent
+  python3 task.py add-context <dir> implement .trellis/spec/cli/backend/auth.md "Auth guidelines"
+  python3 task.py set-branch <dir> task/add-login
+  python3 task.py start .trellis/tasks/01-21-add-login
+  python3 task.py current --source
+  python3 task.py finish
+  python3 task.py archive add-login
+  python3 task.py add-subtask parent-task child-task  # Link existing tasks
+  python3 task.py remove-subtask parent-task child-task
+  python3 task.py list                               # List all active tasks
+  python3 task.py list --mine                        # List my tasks only
+  python3 task.py list --mine --status in_progress   # List my in-progress tasks
 """)
 
 
@@ -452,7 +462,7 @@ def main() -> int:
         )
         print("See .trellis/workflow.md planning artifact guidance or run:", file=sys.stderr)
         print(
-            "  python ./.trellis/scripts/get_context.py --mode phase --step 1",
+            "  python3 ./.trellis/scripts/get_context.py --mode phase --step 1",
             file=sys.stderr,
         )
         print(
