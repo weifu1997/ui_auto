@@ -819,9 +819,16 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             """
             UPDATE platform_projects
             SET name = ?, description = ?, archived_at = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND workspace_id = ?
             """,
-            (name, description, archived_at, now(), project_id),
+            (
+                name,
+                description,
+                archived_at,
+                now(),
+                project_id,
+                project["workspace_id"],
+            ),
         )
         services.audit(
             project["workspace_id"],
@@ -862,8 +869,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             project_id, data, body.get("expectedVersion")
         )
         services.database.execute(
-            "UPDATE platform_projects SET updated_at = ? WHERE id = ?",
-            (now(), project_id),
+            """
+            UPDATE platform_projects SET updated_at = ?
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (now(), project_id, project["workspace_id"]),
         )
         services.audit(
             project["workspace_id"],
@@ -1049,15 +1059,18 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     }
                 },
             )
+        services.require_workspace_role(template[1], user.id)
         if template[6] != user.id:
-            services.require_workspace_role(template[1], user.id, True)
+            services.require_workspace_capability(
+                template[1], user.id, "project.manage"
+            )
         if request.method == "DELETE":
             services.database.execute(
                 """
                 UPDATE internal_templates SET deleted_at = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND workspace_id = ?
                 """,
-                (now(), now(), template_id),
+                (now(), now(), template_id, template[1]),
             )
             services.audit(
                 template[1],
@@ -1080,9 +1093,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             """
             UPDATE internal_templates
             SET name = ?, description = ?, category = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND workspace_id = ?
             """,
-            (name, description, category, updated_at, template_id),
+            (name, description, category, updated_at, template_id, template[1]),
         )
         services.audit(
             template[1],
@@ -1177,6 +1190,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         if not revision_id:
             raise PlatformError(400, "REVISION_ID_REQUIRED")
         source_project_id = template[7]
+        services.require_project_capability(
+            source_project_id, user.id, "release.publish"
+        )
         revision = services.database.execute(
             """
             SELECT id, status, flow_snapshot, environment_snapshot,
@@ -1208,9 +1224,16 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             """
             UPDATE internal_templates
             SET snapshot = ?, source_revision_id = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND workspace_id = ? AND source_project_id = ?
             """,
-            (json(snapshot), revision_id, updated_at, template_id),
+            (
+                json(snapshot),
+                revision_id,
+                updated_at,
+                template_id,
+                template[1],
+                source_project_id,
+            ),
         )
         services.audit(
             template[1],
@@ -2327,7 +2350,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             services.database.execute("ROLLBACK")
             raise
         services.database.execute(
-            "UPDATE datasets SET updated_at = ? WHERE id = ?", (now(), dataset_id)
+            "UPDATE datasets SET updated_at = ? WHERE id = ? AND project_id = ?",
+            (now(), dataset_id, project_id),
         )
         services.audit(
             project["workspace_id"],
@@ -2355,8 +2379,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         request: Request, project_id: str, version_id: str
     ) -> Response:
         user = services.session_user(dict(request.headers))
-        version = services.dataset_version_for(project_id, version_id)
         services.require_project_role(project_id, user.id)
+        version = services.dataset_version_for(project_id, version_id)
         rows = services.dataset_rows_for(version["id"])
         return _send(
             Response(),
@@ -2631,9 +2655,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             )
             services.database.execute(
                 """
-                UPDATE schedules SET last_run_at = ?, updated_at = ? WHERE id = ?
+                UPDATE schedules
+                SET last_run_at = ?, updated_at = ?
+                WHERE id = ? AND project_id = ?
                 """,
-                (now(), now(), schedule_id),
+                (now(), now(), schedule_id, project_id),
             )
             services.audit(
                 project["workspace_id"],
@@ -2648,9 +2674,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         enabled = 1 if action == "enable" else 0
         services.database.execute(
             """
-            UPDATE schedules SET enabled = ?, updated_at = ? WHERE id = ?
+            UPDATE schedules
+            SET enabled = ?, updated_at = ?
+            WHERE id = ? AND project_id = ?
             """,
-            (enabled, now(), schedule_id),
+            (enabled, now(), schedule_id, project_id),
         )
         services.audit(
             project["workspace_id"],
@@ -3064,9 +3092,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         services.database.execute(
             """
             UPDATE webhook_triggers SET last_triggered_at = ?
-            WHERE id = ?
+            WHERE id = ? AND project_id = ?
             """,
-            (now(), trigger_id),
+            (now(), trigger_id, trigger[1]),
         )
         project = services.project_for(trigger[1])
         services.audit(
@@ -3357,7 +3385,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             workspace_id, user.id, "automation.manage"
         )
         try:
-            result = services.send_test_notification(channel_id)
+            result = services.send_test_notification(channel_id, workspace_id)
+        except PlatformError:
+            raise
         except Exception as exc:
             error = (
                 "NOTIFICATION_TIMEOUT"
@@ -3415,10 +3445,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                        c.name, c.channel_type, c.enabled
                 FROM notification_subscriptions s
                 JOIN notification_channels c ON c.id = s.channel_id
-                WHERE s.project_id = ? AND c.archived_at IS NULL
+                WHERE s.project_id = ? AND c.workspace_id = ?
+                  AND c.archived_at IS NULL
                 ORDER BY c.name
                 """,
-                (project_id,),
+                (project_id, project["workspace_id"]),
             ).fetchall()
             return _send(
                 Response(),
@@ -3524,7 +3555,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             FROM deliveries d
             JOIN platform_runs r ON r.id = d.run_id
             JOIN notification_channels c ON c.id = d.channel_id
-            WHERE {where}
+            JOIN platform_projects p ON p.id = r.project_id
+            WHERE {where} AND c.workspace_id = p.workspace_id
             """,
             tuple(params),
         ).fetchone()[0]
@@ -3535,7 +3567,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             FROM deliveries d
             JOIN platform_runs r ON r.id = d.run_id
             JOIN notification_channels c ON c.id = d.channel_id
-            WHERE {where}
+            JOIN platform_projects p ON p.id = r.project_id
+            WHERE {where} AND c.workspace_id = p.workspace_id
             ORDER BY d.created_at DESC LIMIT ? OFFSET ?
             """,
             (*params, page_size, (page - 1) * page_size),
@@ -3740,9 +3773,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             )
             return _send(Response(), 200, deleted)
         services.require_project_role(project_id, user.id)
-        run = services.run_by_id(run_id)
-        if run["projectId"] != project_id:
-            raise PlatformError(404, "RUN_NOT_FOUND")
+        run = services.run_by_id(run_id, project_id)
         return _send(Response(), 200, {"run": services.run_response(run)})
 
     @router.api_route(
@@ -3757,9 +3788,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             project_id, user.id, "run.execute"
         )
         project = result["project"]
-        run = services.run_by_id(run_id)
-        if run["projectId"] != project_id:
-            raise PlatformError(404, "RUN_NOT_FOUND")
+        run = services.run_by_id(run_id, project_id)
         if run["status"] not in ("queued", "running"):
             return _send(
                 Response(),
@@ -3773,18 +3802,18 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 SET cancellation_requested = 1,
                     status = 'canceled',
                     updated_at = ?
-                WHERE id = ? AND status = 'queued'
+                WHERE id = ? AND project_id = ? AND status = 'queued'
                 """,
-                (now(), run["id"]),
+                (now(), run["id"], project_id),
             )
         else:
             services.database.execute(
                 """
                 UPDATE platform_runs
                 SET cancellation_requested = 1, updated_at = ?
-                WHERE id = ? AND status = 'running'
+                WHERE id = ? AND project_id = ? AND status = 'running'
                 """,
-                (now(), run["id"]),
+                (now(), run["id"], project_id),
             )
         services.cancel_managed_run(run["id"])
         services.append_run_event(
@@ -3793,7 +3822,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         return _send(
             Response(),
             202,
-            {"run": services.run_response(services.run_by_id(run["id"]))},
+            {
+                "run": services.run_response(
+                    services.run_by_id(run["id"], project_id)
+                )
+            },
         )
 
     @router.api_route(
@@ -3805,9 +3838,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     ) -> Response:
         user = services.session_user(dict(request.headers))
         services.require_project_capability(project_id, user.id, "run.execute")
-        run = services.run_by_id(run_id)
-        if run["projectId"] != project_id:
-            raise PlatformError(404, "RUN_NOT_FOUND")
+        run = services.run_by_id(run_id, project_id)
         if run["status"] not in ("failed", "canceled"):
             raise PlatformError(409, "RUN_NOT_RETRYABLE")
         retried = services.retry_run_snapshot(project_id, run_id, user.id)
@@ -4256,9 +4287,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     ) -> Response:
         user = services.session_user(dict(request.headers))
         services.require_project_role(project_id, user.id)
-        validation = services.element_validation_by_id(validation_id)
-        if validation["projectId"] != project_id:
-            raise PlatformError(404, "ELEMENT_VALIDATION_NOT_FOUND")
+        validation = services.element_validation_by_id(validation_id, project_id)
         return _send(Response(), 200, {"validation": validation})
 
     @router.api_route(
@@ -4630,9 +4659,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     UPDATE flow_revisions
                     SET status = 'published', published_at = ?,
                         reviewed_by = ?, review_note = ?
-                    WHERE id = ?
+                    WHERE id = ? AND project_id = ?
                     """,
-                    (now(), user.id, note or None, revision_id),
+                    (now(), user.id, note or None, revision_id, project_id),
                 )
                 services.database.execute("COMMIT")
             except Exception:

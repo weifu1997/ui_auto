@@ -21,7 +21,8 @@
   "children": [
     "08-19-production-baseline-governance-ci",
     "08-19-artifact-backup-health-observability-fixes",
-    "08-20-local-accounts-membership-three-role-rbac"
+    "08-20-local-accounts-membership-three-role-rbac",
+    "08-20-route-wide-workspace-project-isolation"
   ],
   "parent": null,
   "relatedFiles": [],

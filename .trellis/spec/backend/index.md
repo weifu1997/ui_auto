@@ -24,3 +24,4 @@ Server-side conventions and executable contracts for the Platform API layer unde
 | [Identity, Membership & RBAC](./identity-membership-rbac.md)          | Local-account bootstrap, workspace roles/capabilities, safe invitation/reset lifecycles, session revocation and admin audit     |
 | [Run Batch & Recording Contracts](./run-batch-recording-contracts.md) | Batch execution, run-record deletion, browser-recording routes, validation, lifecycle, isolation, and regression requirements   |
 | [Production Startup](./production-startup.md)                         | `npm run build` / `npm run start` prerequisites, environment contract, readiness/maintenance behavior, and Worker route removal |
+| [Route-Wide Workspace And Project Isolation](./route-workspace-project-isolation.md) | Executable route inventory, parent-scoped child resolution, cross-workspace error and side-effect contracts |
