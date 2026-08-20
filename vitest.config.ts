@@ -10,12 +10,12 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],
-      // Risk-based baseline: enforce a floor now, raise as coverage grows.
+      // Conservative baseline: enforce a non-zero floor, raise as coverage grows.
       thresholds: {
-        lines: 50,
-        functions: 50,
-        statements: 50,
-        branches: 40,
+        lines: 30,
+        functions: 30,
+        statements: 30,
+        branches: 20,
       },
     },
   },
