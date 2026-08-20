@@ -111,6 +111,21 @@ when adding related storage instead of scattering another unvalidated key
 through pages. `AgentsPage.tsx` contains older explicit session writes; treat
 those as compatibility code, not a pattern to copy.
 
+### Server-Issued Authorization Projection
+
+`PlatformSession` persists only the server projection: nullable
+`user.globalRole`, a selected workspace role, and that workspace's named
+capabilities. `platform-context.ts` rejects unknown roles/capabilities before
+they reach UI selectors. `canUseCapability` must read the selected workspace
+only; it is navigation/command presentation, never an API authorization
+decision. When a session contract changes, update the validator, typed API
+model, all browser fixtures, and the server negative tests together.
+
+Invitation and password-reset raw tokens are capability values, not session
+state. Show a newly issued link from React component state once, then discard
+it on close; do not write it to localStorage, sessionStorage, Zustand
+persistence, query caches, logs, or rendered audit detail.
+
 ## Avoid
 
 - Do not persist secrets, raw run requests, transient loading flags, form

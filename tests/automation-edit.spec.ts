@@ -1,11 +1,12 @@
 import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   token: "automation-edit-token",
   user: { id: "edit-user", email: "edit@example.test", name: "Edit user" },
-  workspaces: [{ id: "workspace-1", name: "Workspace", role: "owner" }],
-};
+  workspaces: [{ id: "workspace-1", name: "Workspace" }],
+});
 
 async function installAutomationMocks(page: Page) {
   await page.route("**/api/platform/projects/sauce-demo/datasets", (route) => route.fulfill({

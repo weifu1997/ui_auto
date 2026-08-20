@@ -1825,6 +1825,32 @@
   color: var(--muted);
   font-size: var(--text-caption);
 }
+.administration-table {
+  margin-top: var(--space-5);
+  padding: var(--card-pad);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.administration-table .ant-table-wrapper {
+  margin-top: var(--space-4);
+}
+.administration-accounts {
+  margin-top: var(--space-6);
+}
+.administration-loading {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.side-profile .ant-select {
+  width: 164px;
+  margin-top: var(--space-2);
+}
 .debug-session-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2155,6 +2181,13 @@
   }
   .workspace-main {
     padding: 28px 17px;
+  }
+  .administration-table {
+    padding: var(--space-4);
+  }
+  .administration-table .panel-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .workspace-summary {
     grid-template-columns: repeat(2, 1fr);

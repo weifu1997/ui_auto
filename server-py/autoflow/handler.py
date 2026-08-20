@@ -208,76 +208,10 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
 
     @router.api_route("/api/auth/register", methods=["POST"])
     async def register(request: Request) -> Response:
-        body = await request.json()
-        if not isinstance(body, dict):
-            body = {}
-        email = _text(body.get("email")).strip().lower()
-        password = _text(body.get("password")).strip()
-        if (
-            not email
-            or "@" not in email
-            or not password
-            or len(password) < 8
-            or len(password) > 1024
-        ):
-            raise PlatformError(400, "REGISTER_INPUT_INVALID")
-        existing = services.database.execute(
-            """
-            SELECT user_id FROM platform_user_credentials
-            WHERE user_id IN (SELECT id FROM platform_users WHERE email = ?)
-            """,
-            (email,),
-        ).fetchone()
-        if existing:
-            raise PlatformError(409, "EMAIL_ALREADY_REGISTERED")
-        user = {
-            "id": str(uuid.uuid4()),
-            "email": email,
-            "name": _text(body.get("name")).strip()[:100] or email.split("@")[0],
-        }
-        services.database.execute("BEGIN IMMEDIATE")
-        try:
-            services.database.execute(
-                """
-                INSERT INTO platform_users (id, email, name, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user["id"], user["email"], user["name"], now()),
-            )
-            created = now()
-            services.database.execute(
-                """
-                INSERT INTO platform_user_credentials
-                  (user_id, password_hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user["id"], password_hash(password), created, created),
-            )
-            from .services import AuthUser
-
-            workspace = services.create_workspace(
-                AuthUser(user["id"], user["email"], user["name"]),
-                f"{user['name']}'s workspace",
-            )
-            services.audit(
-                workspace["id"],
-                {"type": "user", "id": user["id"]},
-                "auth.registered",
-                {"type": "user", "id": user["id"]},
-                {"email": email, "ip": _client_ip(request)},
-            )
-            services.database.execute("COMMIT")
-        except Exception:
-            services.database.execute("ROLLBACK")
-            raise
-        session = services.create_auth_session(
-            AuthUser(user["id"], user["email"], user["name"])
-        )
-        response = _send(Response(), 201, session)
-        response.headers["set-cookie"] = set_session_cookie(
-            session["token"], session["expiresAt"]
-        )
-        return response
+        # Bootstrap and invitation acceptance are the only account creation
+        # paths. Keeping this route as a stable terminal error avoids silently
+        # re-opening public registration through stale clients.
+        raise PlatformError(410, "REGISTRATION_DISABLED")
 
     @router.api_route("/api/auth/login", methods=["POST"])
     async def login(request: Request) -> Response:
@@ -303,7 +237,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             raise PlatformError(400, "LOGIN_INPUT_INVALID")
         user_row = services.database.execute(
             """
-            SELECT id, email, name FROM platform_users
+            SELECT id, email, name, global_role FROM platform_users
             WHERE email = ? AND enabled = 1
             """,
             (email,),
@@ -338,7 +272,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             raise PlatformError(401, "LOGIN_INVALID")
         from .services import AuthUser
 
-        user = AuthUser(user_row[0], user_row[1], user_row[2])
+        user = AuthUser(user_row[0], user_row[1], user_row[2], user_row[3])
         session = services.create_auth_session(user)
         login_workspace = services.database.execute(
             """
@@ -360,6 +294,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         response.headers["set-cookie"] = set_session_cookie(
             session["token"], session["expiresAt"]
         )
+        response.headers["cache-control"] = "no-store"
         return response
 
     @router.api_route("/api/auth/logout", methods=["POST"])
@@ -404,10 +339,165 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             Response(),
             200,
             {
-                "user": {"id": user.id, "email": user.email, "name": user.name},
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "globalRole": user.global_role,
+                },
                 "workspaces": services.workspaces_for_user(user.id),
             },
         )
+
+    @router.api_route("/api/auth/invitations/accept", methods=["POST"])
+    async def accept_invitation(request: Request) -> Response:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        current_user = None
+        try:
+            current_user = services.session_user(dict(request.headers))
+        except PlatformError:
+            # A new account does not have a session yet. The invitation service
+            # still validates a supplied stale session as an anonymous request.
+            pass
+        user, created = services.accept_workspace_invitation(
+            _text(body.get("token")),
+            _text(body.get("email")),
+            _text(body.get("password")) or None,
+            _text(body.get("name")) or None,
+            current_user,
+        )
+        result = {
+            "accepted": True,
+            "newAccount": created,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "globalRole": user.global_role,
+            },
+        }
+        response = _send(Response(), 201 if created else 200, result)
+        if created:
+            session = services.create_auth_session(user)
+            response.headers["set-cookie"] = set_session_cookie(
+                session["token"], session["expiresAt"]
+            )
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route("/api/auth/password-resets/accept", methods=["POST"])
+    async def accept_password_reset(request: Request) -> Response:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        services.accept_password_reset(
+            _text(body.get("token")), _text(body.get("password"))
+        )
+        response = _send(Response(), 200, {"reset": True})
+        response.headers["set-cookie"] = clear_session_cookie()
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route("/api/admin/accounts", methods=["GET"])
+    async def accounts(request: Request) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_super_admin(user.id)
+        return _send(Response(), 200, {"accounts": services.accounts()})
+
+    @router.api_route("/api/admin/accounts/{account_id}", methods=["PATCH"])
+    async def account_detail(request: Request, account_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_super_admin(user.id)
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        if isinstance(body.get("enabled"), bool):
+            account = services.set_account_enabled(account_id, body["enabled"], user.id)
+        elif body.get("globalRole") in (None, "super_admin") and "globalRole" in body:
+            account = services.set_account_global_role(
+                account_id, body.get("globalRole"), user.id
+            )
+        else:
+            raise PlatformError(400, "ACCOUNT_UPDATE_INVALID")
+        return _send(Response(), 200, {"account": account})
+
+    @router.api_route(
+        "/api/admin/accounts/{account_id}/password-reset", methods=["POST"]
+    )
+    async def issue_password_reset(request: Request, account_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_super_admin(user.id)
+        reset = services.issue_password_reset(account_id, user.id)
+        response = _send(Response(), 201, {"passwordReset": reset})
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route("/api/workspaces/{workspace_id}/members", methods=["GET"])
+    async def workspace_members(request: Request, workspace_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "member.manage")
+        return _send(
+            Response(), 200, {"members": services.workspace_members(workspace_id)}
+        )
+
+    @router.api_route(
+        "/api/workspaces/{workspace_id}/members/{member_id}",
+        methods=["PATCH", "DELETE"],
+    )
+    async def workspace_member_detail(
+        request: Request, workspace_id: str, member_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "member.manage")
+        if request.method == "DELETE":
+            services.remove_workspace_member(workspace_id, member_id, user.id)
+            return _send(Response(), 200, {"removed": True})
+        body = await request.json()
+        if not isinstance(body, dict) or not isinstance(body.get("role"), str):
+            raise PlatformError(400, "WORKSPACE_ROLE_INVALID")
+        member = services.update_workspace_member_role(
+            workspace_id, member_id, body["role"], user.id
+        )
+        return _send(Response(), 200, {"member": member})
+
+    @router.api_route(
+        "/api/workspaces/{workspace_id}/invitations", methods=["GET", "POST"]
+    )
+    async def workspace_invitations(request: Request, workspace_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "invite.manage")
+        if request.method == "GET":
+            return _send(
+                Response(),
+                200,
+                {"invitations": services.workspace_invitations(workspace_id)},
+            )
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        invitation = services.create_workspace_invitation(
+            workspace_id,
+            user.id,
+            _text(body.get("email")),
+            _text(body.get("role")),
+        )
+        response = _send(Response(), 201, {"invitation": invitation})
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route(
+        "/api/workspaces/{workspace_id}/invitations/{invitation_id}/revoke",
+        methods=["POST"],
+    )
+    async def revoke_workspace_invitation(
+        request: Request, workspace_id: str, invitation_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "invite.manage")
+        services.revoke_workspace_invitation(workspace_id, invitation_id, user.id)
+        return _send(Response(), 200, {"revoked": True})
 
     @router.api_route("/api/workspaces", methods=["GET", "POST"])
     async def workspaces(request: Request) -> Response:
@@ -421,6 +511,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         body = await request.json()
         if not isinstance(body, dict) or not _text(body.get("name")).strip():
             raise PlatformError(400, "WORKSPACE_NAME_REQUIRED")
+        services.require_super_admin(user.id)
         return _send(
             Response(),
             201,
@@ -430,8 +521,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     @router.api_route("/api/workspaces/{workspace_id}/projects", methods=["GET", "POST"])
     async def workspace_projects(request: Request, workspace_id: str) -> Response:
         user = services.session_user(dict(request.headers))
-        services.require_workspace_role(workspace_id, user.id)
         if request.method == "GET":
+            services.require_workspace_role(workspace_id, user.id)
             archived_only = request.query_params.get("archived") == "1"
             query = """
                 SELECT id, workspace_id, source_project_id, slug, name, description,
@@ -463,6 +554,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             ]
             return _send(Response(), 200, {"projects": projects})
 
+        services.require_workspace_capability(workspace_id, user.id, "project.manage")
         body = await request.json()
         if not isinstance(body, dict) or not _text(body.get("name")).strip():
             raise PlatformError(400, "PROJECT_NAME_REQUIRED")
@@ -685,7 +777,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             result = services.require_project_role(project_id, user.id)
         else:
             result = services.require_project_capability(
-                project_id, user.id, "project.edit"
+                project_id, user.id, "project.manage"
             )
         project = result["project"]
         if request.method == "GET":
@@ -1890,7 +1982,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             result = services.require_project_role(project_id, user.id)
         else:
             result = services.require_project_capability(
-                project_id, user.id, "project.edit"
+                project_id, user.id, "project.manage"
             )
         project = result["project"]
         current = services.database.execute(

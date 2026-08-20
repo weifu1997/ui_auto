@@ -12,6 +12,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "setup:py": "node scripts/setup-py.mjs",
+    "bootstrap:super-admin": "node scripts/bootstrap-super-admin.mjs",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "test:unit": "vitest run",
     "test:startup": "node --test scripts/start-production.test.mjs",

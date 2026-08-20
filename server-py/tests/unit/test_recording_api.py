@@ -175,12 +175,12 @@ def test_recording_session_cancel_active_returns_canceled_session(tmp_path):
         services.close()
 
 
-def test_recording_session_create_rejects_member_without_flow_edit(tmp_path):
+def test_recording_session_create_rejects_unknown_workspace_role(tmp_path):
     services, user, session = _setup(tmp_path)
     try:
         workspace_id = services.project_for("project-1")["workspace_id"]
         services.database.execute(
-            "UPDATE workspace_members SET role = 'viewer' WHERE workspace_id = ? AND user_id = ?",
+            "UPDATE workspace_members SET role = 'unknown-role' WHERE workspace_id = ? AND user_id = ?",
             (workspace_id, user.id),
         )
         router = create_platform_router(services)
@@ -199,10 +199,10 @@ def test_recording_session_create_rejects_member_without_flow_edit(tmp_path):
                     "startUrl": "/login",
                 }).encode(),
             )
-            raise AssertionError("viewer must not create recording sessions")
+            raise AssertionError("unknown role must not create recording sessions")
         except PlatformError as error:
             assert error.status == 403
-            assert error.code == "CAPABILITY_REQUIRED"
+            assert error.code == "WORKSPACE_ACCESS_DENIED"
     finally:
         services.close()
 

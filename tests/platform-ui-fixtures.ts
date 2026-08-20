@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { platformAdminSession } from "./platform-session-fixture";
 
 export type PlatformUiCalls = {
   revisions: Record<string, unknown>[];
@@ -54,11 +55,11 @@ type PlatformRunUiMockOptions = {
   batchRunStatus?: "queued" | "running" | "success" | "failed" | "canceled";
 };
 
-const session = {
+const session = platformAdminSession({
   token: "platform-ui-token",
   user: { id: "platform-ui-user", email: "platform-ui@example.test", name: "Platform UI user" },
-  workspaces: [{ id: "platform-ui-workspace", name: "Platform UI workspace", role: "owner" }],
-};
+  workspaces: [{ id: "platform-ui-workspace", name: "Platform UI workspace" }],
+});
 
 async function configurePlatformSession(
   page: Page,

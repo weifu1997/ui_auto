@@ -28,6 +28,15 @@ const LazyTemplatesPage = lazy(() =>
 const LazyProjectShell = lazy(() =>
   import("./pages/ProjectShell").then((m) => ({ default: m.ProjectShell })),
 );
+const LazyWorkspaceAdministrationPage = lazy(() =>
+  import("./pages/WorkspaceAdministrationPage").then((m) => ({ default: m.WorkspaceAdministrationPage })),
+);
+const LazyInvitationAcceptPage = lazy(() =>
+  import("./InvitationAcceptPage").then((m) => ({ default: m.InvitationAcceptPage })),
+);
+const LazyPasswordResetPage = lazy(() =>
+  import("./PasswordResetPage").then((m) => ({ default: m.PasswordResetPage })),
+);
 
 const routeFallback = (
   <div className="route-loading"><Spin size="large" /></div>
@@ -93,9 +102,27 @@ function App() {
     <ThemeHost>
       <AntdApp>
         <AntdFeedbackBridge />
-        <ApplicationSessionGate>
-          <ServerWorkspaceSynchronizer />
-          <Routes>
+        <Routes>
+          <Route
+            path="/invitations/accept"
+            element={<Suspense fallback={routeFallback}><LazyInvitationAcceptPage /></Suspense>}
+          />
+          <Route
+            path="/password-resets/accept"
+            element={<Suspense fallback={routeFallback}><LazyPasswordResetPage /></Suspense>}
+          />
+          <Route path="*" element={<ApplicationSessionGate><AuthenticatedApplication /></ApplicationSessionGate>} />
+        </Routes>
+      </AntdApp>
+    </ThemeHost>
+  );
+}
+
+function AuthenticatedApplication() {
+  return (
+    <>
+      <ServerWorkspaceSynchronizer />
+      <Routes>
             <Route path="/" element={<Navigate to="/projects" replace />} />
             <Route
               path="/projects"
@@ -104,6 +131,10 @@ function App() {
             <Route
               path="/templates"
               element={<Suspense fallback={routeFallback}><LazyTemplatesPage /></Suspense>}
+            />
+            <Route
+              path="/workspace/administration"
+              element={<Suspense fallback={routeFallback}><LazyWorkspaceAdministrationPage /></Suspense>}
             />
             <Route
               path="/project/:projectId/:section"
@@ -131,10 +162,8 @@ function App() {
               }
             />
             <Route path="*" element={<Navigate to="/projects" replace />} />
-          </Routes>
-        </ApplicationSessionGate>
-      </AntdApp>
-    </ThemeHost>
+      </Routes>
+    </>
   );
 }
 

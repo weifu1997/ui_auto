@@ -50,11 +50,26 @@ def test_run_platform_migrations_records_exactly_once():
             (9, "drop-agent-and-debug-tables"),
             (10, "drop-dead-tables-and-columns"),
             (11, "run-batches"),
+            (12, "local-accounts-membership-rbac"),
+            (13, "deployment-security-audit"),
         ]
         columns = _columns(database, "flow_revisions")
         assert "flow_id" in columns
         assert "flow_name" in columns
         assert "environment_id" in columns
+        assert "global_role" in _columns(database, "platform_users")
+        assert "workspace_invitations" in {
+            row[0]
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        assert "deployment_audit_events" in {
+            row[0]
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
     finally:
         database.close()
 

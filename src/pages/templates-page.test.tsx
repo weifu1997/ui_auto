@@ -75,8 +75,13 @@ vi.mock("../platform-api", () => ({
 vi.mock("../platform-context", () => ({
   readStoredPlatformSession: () => ({
     token: "mock-token",
-    user: { id: "user-1", email: "user@test.com", name: "User" },
-    workspaces: [{ id: "ws-1", name: "Workspace", role: "owner" }],
+    user: { id: "user-1", email: "user@test.com", name: "User", globalRole: null },
+    workspaces: [{
+      id: "ws-1",
+      name: "Workspace",
+      role: "admin",
+      capabilities: ["project.view", "project.edit", "project.manage", "flow.edit", "element.manage", "variable.manage", "environment.manage", "secret.manage", "release.submit", "release.publish", "run.execute", "dataset.manage", "automation.manage", "member.manage", "invite.manage", "workspace.manage"],
+    }],
   }),
   readStoredPlatformWorkspaceId: () => "ws-1",
 }));

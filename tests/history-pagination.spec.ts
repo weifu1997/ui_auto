@@ -1,11 +1,12 @@
 import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   token: "pagination-token",
   user: { id: "pagination-user", email: "pagination@example.test", name: "Pagination user" },
-  workspaces: [{ id: "pagination-workspace", name: "Pagination workspace", role: "owner" }],
-};
+  workspaces: [{ id: "pagination-workspace", name: "Pagination workspace" }],
+});
 
 async function seedRunsWorkspace(page: Page, getRuns: () => Array<Record<string, unknown>>, onQuery: (query: URLSearchParams) => void) {
   await page.goto("/projects");

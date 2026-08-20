@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ElementAsset, Project } from "../mock-data";
+import { storePlatformSession, storePlatformWorkspaceId } from "../platform-context";
 import { useWorkspaceStore } from "../workspace-store";
 
 vi.mock("../antd-feedback", () => ({
@@ -28,6 +29,22 @@ describe("元素库删除", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    storePlatformSession({
+      token: "element-test-token",
+      user: {
+        id: "element-test-user",
+        email: "element@example.test",
+        name: "Element test user",
+        globalRole: null,
+      },
+      workspaces: [{
+        id: "element-workspace",
+        name: "Element workspace",
+        role: "admin",
+        capabilities: ["element.manage", "run.execute"],
+      }],
+    });
+    storePlatformWorkspaceId("element-workspace");
     useWorkspaceStore.getState().setElements("p-1", [element]);
   });
 

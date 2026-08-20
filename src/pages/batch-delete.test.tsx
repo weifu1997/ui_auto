@@ -103,7 +103,17 @@ vi.mock("../platform-api", async (importOriginal) => {
 
 vi.mock("../platform-context", () => ({
   platformProjectContext: () => undefined,
-  readStoredPlatformSession: () => ({ token: "t1", user: { id: "u1" }, workspaces: [] }),
+  readStoredPlatformSession: () => ({
+    token: "t1",
+    user: { id: "u1", email: "u1@example.test", name: "Test user", globalRole: null },
+    workspaces: [{
+      id: "workspace-1",
+      name: "Workspace",
+      role: "admin",
+      capabilities: ["flow.edit", "element.manage", "variable.manage", "run.execute"],
+    }],
+  }),
+  readStoredPlatformWorkspaceId: () => "workspace-1",
   readPlatformProjectMap: () => ({ "proj-1": "proj-1" }),
 }));
 

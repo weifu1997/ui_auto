@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -37,17 +38,30 @@ def request(
 
 
 def run(base_url: str) -> None:
-    email = f"managed-{int(time.time() * 1000)}@example.test"
-    status, registered = request(
+    email = os.environ.get("AUTOFLOW_SMOKE_EMAIL", "").strip().lower()
+    password = os.environ.get("AUTOFLOW_SMOKE_PASSWORD", "")
+    if not email or not password:
+        raise AssertionError(
+            "AUTOFLOW_SMOKE_EMAIL and AUTOFLOW_SMOKE_PASSWORD are required; "
+            "bootstrap the controlled super-admin with npm run bootstrap:super-admin first"
+        )
+    status, logged_in = request(
         base_url,
-        "/api/auth/register",
+        "/api/auth/login",
         "POST",
-        {"email": email, "password": "password-123", "name": "Managed"},
+        {"email": email, "password": password},
+    )
+    assert status == 200
+    token = logged_in["token"]
+    status, workspace_response = request(
+        base_url,
+        "/api/workspaces",
+        "POST",
+        {"name": f"Managed smoke {int(time.time() * 1000)}"},
+        token,
     )
     assert status == 201
-    token = registered["token"]
-    _, workspaces = request(base_url, "/api/workspaces", token=token)
-    workspace_id = workspaces["workspaces"][0]["id"]
+    workspace_id = workspace_response["workspace"]["id"]
     status, project_response = request(
         base_url,
         f"/api/workspaces/{workspace_id}/projects",
