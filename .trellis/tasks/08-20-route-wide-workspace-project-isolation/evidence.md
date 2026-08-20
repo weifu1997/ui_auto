@@ -46,7 +46,7 @@ review, merge or deployment evidence is claimed here.
 
 The original linked worktree could not write its shared Git index because that
 metadata is read-only. A writable temporary clone was used only to preserve
-the same verified tree as commit `f24d1fb`; the original worktree remains
+the same verified tree as commit `aa86a69`; the original worktree remains
 unchanged apart from its working files. The commit has not been pushed because
 the environment rejected the required external Git approval.
 

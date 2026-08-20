@@ -15,12 +15,12 @@
   "branch": null,
   "base_branch": "phase1/local-accounts-membership-three-role-rbac",
   "worktree_path": "/tmp/ui_auto-phase1-isolation",
-  "commit": "f24d1fb",
+  "commit": "aa86a69",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "08-19-team-production-readiness-assessment",
   "relatedFiles": [],
-  "notes": "Implementation and focused evidence recorded in evidence.md. Commit f24d1fb was created in a writable temporary clone from IAM dependency commit a514f64; push/PR/CI remain pending because external Git approval was rejected. Full Python unit and Playwright E2E gates are blocked by pre-existing TestClient/sandbox lifecycle limits.",
+  "notes": "Implementation and focused evidence recorded in evidence.md. Commit aa86a69 was created in a writable temporary clone from IAM dependency commit a514f64; push/PR/CI remain pending because external Git approval was rejected. Full Python unit and Playwright E2E gates are blocked by pre-existing TestClient/sandbox lifecycle limits.",
   "meta": {}
 }
