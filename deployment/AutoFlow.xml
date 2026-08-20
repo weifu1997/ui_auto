@@ -12,7 +12,7 @@
   <env name="PLATFORM_DATA_DIRECTORY" value="%BASE%\data" />
   <env name="AUTOFLOW_STATIC_DIRECTORY" value="%BASE%\app\dist" />
   <env name="PLAYWRIGHT_BROWSERS_PATH" value="%BASE%\browsers" />
-  <env name="PLATFORM_SECRET_KEY" value="__PLATFORM_SECRET_KEY__" />
+  <env name="PLATFORM_SECRET_KEY_FILE" value="%BASE%\runtime\platform-secret.key" />
   <env name="AUTOFLOW_CORS_ORIGINS" value="__AUTOFLOW_CORS_ORIGINS__" />
   <env name="PLATFORM_NOTIFICATION_HOST_ALLOWLIST" value="__NOTIFICATION_HOST_ALLOWLIST__" />
   <env name="PLATFORM_ALLOW_PRIVATE_NOTIFICATION_URLS" value="__ALLOW_PRIVATE_NOTIFICATION_URLS__" />
