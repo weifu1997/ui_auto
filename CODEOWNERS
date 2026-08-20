@@ -1,0 +1,8 @@
+# Governance ownership (GOV-02). The order matters; the last matching pattern wins.
+*                                   @weifu1997
+
+# Security-sensitive backend and deployment surfaces require explicit review.
+server-py/autoflow/                 @weifu1997
+scripts/                            @weifu1997
+deployment/                         @weifu1997
+.github/                            @weifu1997
