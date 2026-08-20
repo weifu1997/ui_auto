@@ -146,4 +146,4 @@ jobs:
       - name: Static security scan (Python)
         run: |
           python -m pip install bandit
-          bandit -r server-py/autoflow -q -ll
+          bandit -c .bandit -r server-py/autoflow -q -ll
