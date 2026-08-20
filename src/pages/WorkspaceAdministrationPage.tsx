@@ -654,7 +654,7 @@ export function WorkspaceAdministrationPage() {
       </Modal>
 
       <Modal
-        title="复制一次性邀请链接"
+        title="复制邀请链接"
         open={Boolean(inviteLink)}
         footer={<Button type="primary" onClick={() => setInviteLink(undefined)}>已复制或安全保存</Button>}
         onCancel={() => setInviteLink(undefined)}
