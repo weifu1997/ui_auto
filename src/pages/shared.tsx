@@ -16,6 +16,23 @@ import { useEffect, useRef, useState } from "react";
 import "../App.css";
 import "../responsive.css";
 
+function formatConflictActorTime(raw: string | null): string {
+  if (!raw) return "";
+  try {
+    const draft = JSON.parse(raw) as { remoteUpdatedBy?: string; remoteUpdatedAt?: string };
+    const parts: string[] = [];
+    if (draft.remoteUpdatedAt) {
+      parts.push(new Date(draft.remoteUpdatedAt).toLocaleString("zh-CN"));
+    }
+    if (draft.remoteUpdatedBy) {
+      parts.push(`更新者 ${draft.remoteUpdatedBy}`);
+    }
+    return parts.length ? `其他成员已于 ${parts.join("，")} 更新该资源。` : "";
+  } catch {
+    return "";
+  }
+}
+
 export type ProjectSection =
   | "overview"
   | "flows"
@@ -312,7 +329,7 @@ export function ProjectLayout({
             type="warning"
             showIcon
             title="检测到其他成员已更新同一资源"
-            description="本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。"
+            description={`${formatConflictActorTime(sessionStorage.getItem(`autoflow-conflict-${project.id}`))}本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。`}
             action={<span className="sync-conflict-actions"><Button size="small" onClick={() => { const draft = sessionStorage.getItem(`autoflow-conflict-${project.id}`) ?? ""; void navigator.clipboard.writeText(draft).then(() => message.success("本地草稿已复制")); }}>复制本地修改</Button><Button size="small" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "refresh" } }))}>刷新远端</Button><Button size="small" type="primary" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "resubmit" } }))}>重新提交</Button></span>}
           />}
           {children}
