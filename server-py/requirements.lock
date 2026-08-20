@@ -1,3 +1,6 @@
+# Linux-generated reference lock (REL-01). Use only with verify-lock.py for
+# drift checks; do NOT pip install -r this on Windows (it contains Linux-only
+# transitive deps such as uvloop). Install uses requirements.txt.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
