@@ -16,7 +16,7 @@
   "base_branch": "phase1/route-wide-workspace-project-isolation",
   "worktree_path": "/tmp/ui-auto-iso-commit.HM2wAE",
   "commit": "9d348a7",
-  "pr_url": null,
+  "pr_url": "https://github.com/weifu1997/ui_auto/pull/9",
   "subtasks": [],
   "children": [],
   "parent": "08-19-team-production-readiness-assessment",
