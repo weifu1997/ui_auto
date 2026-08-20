@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/prd.md","reason":"Approved ISO-01 scope, role expectations and Phase 1/2 boundaries."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/design.md","reason":"Canonical authorization and parent-scoped resource design."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"ISO-01 evidence, P0 priority and exit requirement."}
+{"file":".trellis/spec/backend/identity-membership-rbac.md","reason":"Final server-side roles, capability and safe-error contracts consumed by route isolation."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Isolation spans route, service, storage, tests and capability projection."}

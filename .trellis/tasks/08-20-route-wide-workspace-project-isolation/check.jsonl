@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/identity-membership-rbac.md","reason":"Review server-side capability enforcement, session/role semantics and audit boundaries."}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Review cross-workspace access audit and sensitive-data redaction."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review minimal UI capability projection changes and browser regression gates."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/implement.md","reason":"Verify ISO-01 Phase 1 exit criteria without claiming Phase 2 operations work."}

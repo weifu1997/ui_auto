@@ -2041,7 +2041,9 @@ class PlatformServices:
                 delivery_project[0] if delivery_project else None,
             )
 
-    def send_test_notification(self, channel_id: str) -> dict[str, Any]:
+    def send_test_notification(
+        self, channel_id: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
         from .http import PlatformError
 
         row = self.database.execute(
@@ -2049,8 +2051,9 @@ class PlatformServices:
             SELECT id, channel_type, config_iv, config_tag, config_ciphertext
             FROM notification_channels
             WHERE id = ? AND archived_at IS NULL
+              AND (? IS NULL OR workspace_id = ?)
             """,
-            (channel_id,),
+            (channel_id, workspace_id, workspace_id),
         ).fetchone()
         if not row:
             raise PlatformError(404, "NOTIFICATION_CHANNEL_NOT_FOUND")
@@ -3080,7 +3083,9 @@ class PlatformServices:
             retry_rows=retry_rows,
         )
 
-    def run_by_id(self, run_id: str) -> dict[str, Any]:
+    def run_by_id(
+        self, run_id: str, project_id: str | None = None
+    ) -> dict[str, Any]:
         from .http import PlatformError
 
         row = self.database.execute(
@@ -3088,9 +3093,10 @@ class PlatformServices:
             SELECT id, project_id, revision_id, environment_id, agent_id,
                    executor_type, status, snapshot, cancellation_requested,
                    result, created_at, updated_at, retry_of_run_id
-            FROM platform_runs WHERE id = ?
+            FROM platform_runs
+            WHERE id = ? AND (? IS NULL OR project_id = ?)
             """,
-            (run_id,),
+            (run_id, project_id, project_id),
         ).fetchone()
         if not row:
             raise PlatformError(404, "RUN_NOT_FOUND")
@@ -3244,16 +3250,19 @@ class PlatformServices:
             }
         return response
 
-    def element_validation_by_id(self, validation_id: str) -> dict[str, Any]:
+    def element_validation_by_id(
+        self, validation_id: str, project_id: str | None = None
+    ) -> dict[str, Any]:
         from .http import PlatformError
 
         row = self.database.execute(
             """
             SELECT id, project_id, environment_id, agent_id, status,
                    element_snapshot, result, error, created_at, updated_at
-            FROM element_validations WHERE id = ?
+            FROM element_validations
+            WHERE id = ? AND (? IS NULL OR project_id = ?)
             """,
-            (validation_id,),
+            (validation_id, project_id, project_id),
         ).fetchone()
         if not row:
             raise PlatformError(404, "ELEMENT_VALIDATION_NOT_FOUND")
