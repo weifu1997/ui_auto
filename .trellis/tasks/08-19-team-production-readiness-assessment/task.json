@@ -32,7 +32,8 @@
     "08-20-quality-gates",
     "08-20-locked-dependencies",
     "08-20-docs-governance",
-    "08-20-secret-custody"
+    "08-20-secret-custody",
+    "08-20-capacity-plan"
   ],
   "parent": null,
   "relatedFiles": [],
