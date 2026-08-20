@@ -58,10 +58,16 @@ if (!selectedVenv) {
   selectedVenv = venvs[0];
 }
 
+const requirementsFile = existsSync(
+  join(repoRoot, "server-py", "requirements.lock"),
+)
+  ? "requirements.lock"
+  : "requirements.txt";
+
 run(
   selectedVenv.python,
-  ["-m", "pip", "install", "-r", join(repoRoot, "server-py", "requirements.txt")],
-  "Install Python dependencies",
+  ["-m", "pip", "install", "-r", join(repoRoot, "server-py", requirementsFile)],
+  `Install Python dependencies (${requirementsFile})`,
 );
 
 const browserCache = process.env.PLAYWRIGHT_BROWSERS_PATH
