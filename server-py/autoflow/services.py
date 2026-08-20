@@ -14,6 +14,7 @@ import io
 import ipaddress
 import re
 import socket
+import shutil
 import ssl
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass
@@ -3595,6 +3596,44 @@ class PlatformServices:
             kind="validation",
             workspace_id=self.project_for(validation["projectId"])["workspace_id"],
         )
+
+    def metrics(self) -> dict[str, Any]:
+        """OBS-02 service-level metrics (DB-backed, JSON)."""
+        run_counts: dict[str, int] = {}
+        for row in self.database.execute(
+            "SELECT status, COUNT(*) FROM platform_runs GROUP BY status"
+        ).fetchall():
+            run_counts[str(row[0])] = int(row[1])
+
+        delivery_counts: dict[str, int] = {}
+        for row in self.database.execute(
+            "SELECT status, COUNT(*) FROM deliveries GROUP BY status"
+        ).fetchall():
+            delivery_counts[str(row[0])] = int(row[1])
+
+        disk: dict[str, int] | None = None
+        try:
+            usage = shutil.disk_usage(str(self.data_directory))
+            disk = {"total": usage.total, "used": usage.used, "free": usage.free}
+        except Exception:
+            pass
+
+        return {
+            "runs": run_counts,
+            "deliveries": delivery_counts,
+            "disk": disk,
+            "artifactBytes": self._artifact_bytes(),
+        }
+
+    def _artifact_bytes(self) -> int:
+        total = 0
+        try:
+            for path in self.managed_runner.artifact_directory.rglob("*"):
+                if path.is_file():
+                    total += path.stat().st_size
+        except Exception:
+            pass
+        return total
 
     def redact_run_value(self, run: dict[str, Any], value: Any) -> Any:
         try:
