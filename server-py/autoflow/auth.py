@@ -56,10 +56,12 @@ def password_matches(password: str, encoded: str) -> bool:
 
 
 def _secure_cookie() -> str:
+    # SEC-01：Secure 默认开启。服务部署在经批准的 HTTPS 终止之后；仅本地 HTTP 调试时
+    # 通过 AUTOFLOW_COOKIE_SECURE=0 显式关闭。
     return (
-        "; Secure"
-        if os.environ.get("AUTOFLOW_COOKIE_SECURE") == "1"
-        else ""
+        ""
+        if os.environ.get("AUTOFLOW_COOKIE_SECURE") == "0"
+        else "; Secure"
     )
 
 

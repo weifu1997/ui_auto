@@ -21,6 +21,7 @@ from typing import Any
 
 from .http import PlatformError
 from .services import PlatformServices
+from .transport import effective_https, require_https, trusted_proxy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
@@ -149,6 +150,35 @@ class CorsMiddleware:
         await self.app(scope, receive, send_with_cors)
 
 
+class SecureTransportMiddleware:
+    """Enforce approved HTTPS transport when AUTOFLOW_REQUIRE_HTTPS=1.
+
+    The app itself is bound to loopback and terminates TLS only at an approved proxy;
+    any authenticated request that arrives without HTTPS is rejected before routing.
+    """
+
+    def __init__(
+        self,
+        app,
+        trusted_proxy: str | None,
+        require_https: bool,
+    ):
+        self.app = app
+        self.trusted_proxy = trusted_proxy
+        self.require_https = require_https
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and self.require_https:
+            if not effective_https(scope, self.trusted_proxy):
+                response = JSONResponse(
+                    status_code=426,
+                    content={"error": "HTTPS_REQUIRED"},
+                )
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def create_app(services: PlatformServices | None = None) -> FastAPI:
     if services is None:
         data_directory = os.environ.get(
@@ -178,6 +208,11 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
     app.state.services = services
     app.state.maintenance_health = maintenance_health
     app.add_middleware(CorsMiddleware, allowed_origins=_configured_origins())
+    app.add_middleware(
+        SecureTransportMiddleware,
+        trusted_proxy=trusted_proxy(),
+        require_https=require_https(),
+    )
     app.include_router(create_platform_router(services))
 
     @app.exception_handler(PlatformError)
