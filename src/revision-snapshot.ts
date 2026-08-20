@@ -1,4 +1,4 @@
-import type { ElementAsset, Environment, Flow, FlowStep } from "./mock-data";
+import type { ElementAsset, Environment, Flow, FlowStep, Variable } from "./mock-data";
 
 const stepKeys = [
   "id",
@@ -42,6 +42,27 @@ export function canonicalStep(step: FlowStep) {
   return pick(step as unknown as Record<string, unknown>, stepKeys);
 }
 
+export function variableReference(variable: Variable) {
+  return `${variable.scope === "环境" ? "env" : "project"}.${variable.name}`;
+}
+
+export function requiredSecretVariables(variables: Variable[], steps: FlowStep[]) {
+  return variables.filter((variable) => {
+    if (!variable.secret || (variable.scope !== "环境" && variable.scope !== "项目")) return false;
+    const reference = variableReference(variable).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const token = new RegExp(`{{\\s*${reference}\\s*}}`);
+    return steps.some((step) => token.test(step.value));
+  });
+}
+
+export function snapshotVariables(variables: Variable[]) {
+  return Object.fromEntries(
+    variables
+      .filter((variable) => !variable.secret && (variable.scope === "项目" || variable.scope === "环境"))
+      .map((variable) => [variableReference(variable), variable.value]),
+  );
+}
+
 export function revisionFlow(flow: Flow, variables: Record<string, string>) {
   return {
     id: flow.id,
@@ -71,4 +92,20 @@ export function revisionElements(elements: ElementAsset[]) {
       value: element.value,
       environment: element.environment,
     }));
+}
+
+export function revisionInput(
+  flow: Flow,
+  environment: Environment,
+  elements: ElementAsset[],
+  variables: Variable[],
+) {
+  return {
+    flow: revisionFlow(flow, snapshotVariables(variables)),
+    environment: revisionEnvironment(environment),
+    elements: revisionElements(
+      elements.filter((e) => !e.environment || e.environment === environment.id),
+    ),
+    secretNames: requiredSecretVariables(variables, flow.definition ?? []).map(variableReference),
+  };
 }

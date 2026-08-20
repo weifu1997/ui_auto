@@ -3,23 +3,76 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
-from .core import json
+from .core import json, now
 from .handler import create_platform_router
 from typing import Any
 
 from .http import PlatformError
 from .services import PlatformServices
+from .transport import effective_https, require_https, trusted_proxy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+LOGGER = logging.getLogger(__name__)
+MAINTENANCE_FAILURE_CODE = "MAINTENANCE_PASS_FAILED"
+
+
+@dataclass
+class MaintenanceHealth:
+    healthy: bool = True
+    last_failure_at: str | None = None
+    failure_code: str | None = None
+
+    def payload(self) -> dict[str, bool | str | None]:
+        return {
+            "healthy": self.healthy,
+            "lastFailureAt": self.last_failure_at,
+            "failureCode": self.failure_code,
+        }
+
+    def mark_failed(self, failed_at: str) -> None:
+        self.healthy = False
+        self.last_failure_at = failed_at
+        self.failure_code = MAINTENANCE_FAILURE_CODE
+
+    def mark_healthy(self) -> None:
+        self.healthy = True
+        self.failure_code = None
+
+
+@dataclass
+class _MaintenanceSchedule:
+    retention_audit_days: int
+    retention_run_days: int
+    retention_artifact_days: int
+    retention_dry_run: bool
+    last_retention_cleanup: float = 0.0
+
+
+def _maintenance_schedule() -> _MaintenanceSchedule:
+    return _MaintenanceSchedule(
+        retention_audit_days=max(
+            1, int(os.environ.get("AUTOFLOW_RETENTION_AUDIT_DAYS", "180"))
+        ),
+        retention_run_days=max(
+            1, int(os.environ.get("AUTOFLOW_RETENTION_RUN_DAYS", "90"))
+        ),
+        retention_artifact_days=max(
+            1, int(os.environ.get("AUTOFLOW_RETENTION_ARTIFACT_DAYS", "15"))
+        ),
+        retention_dry_run=os.environ.get("AUTOFLOW_RETENTION_DRY_RUN") == "1",
+    )
 
 
 def _configured_origins() -> list[str]:
@@ -103,26 +156,70 @@ class CorsMiddleware:
         await self.app(scope, receive, send_with_cors)
 
 
+class SecureTransportMiddleware:
+    """Enforce approved HTTPS transport when AUTOFLOW_REQUIRE_HTTPS=1.
+
+    The app itself is bound to loopback and terminates TLS only at an approved proxy;
+    any authenticated request that arrives without HTTPS is rejected before routing.
+    """
+
+    def __init__(
+        self,
+        app,
+        trusted_proxy: str | None,
+        require_https: bool,
+    ):
+        self.app = app
+        self.trusted_proxy = trusted_proxy
+        self.require_https = require_https
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and self.require_https:
+            if not effective_https(scope, self.trusted_proxy):
+                response = JSONResponse(
+                    status_code=426,
+                    content={"error": "HTTPS_REQUIRED"},
+                )
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def create_app(services: PlatformServices | None = None) -> FastAPI:
     if services is None:
         data_directory = os.environ.get(
             "PLATFORM_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
         )
         services = PlatformServices(data_directory)
-    app = FastAPI(title="AutoFlow Workbench Python Backend", docs_url=None, redoc_url=None)
-    app.state.services = services
-    app.add_middleware(CorsMiddleware, allowed_origins=_configured_origins())
-    app.include_router(create_platform_router(services))
+    maintenance_health = MaintenanceHealth()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        maintenance_task = asyncio.create_task(_maintenance_loop(services))
+        maintenance_task = asyncio.create_task(
+            _maintenance_loop(services, maintenance_health)
+        )
         try:
             yield
         finally:
             maintenance_task.cancel()
             await asyncio.gather(maintenance_task, return_exceptions=True)
             services.close()
+
+    app = FastAPI(
+        title="AutoFlow Workbench Python Backend",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
+    app.state.services = services
+    app.state.maintenance_health = maintenance_health
+    app.add_middleware(CorsMiddleware, allowed_origins=_configured_origins())
+    app.add_middleware(
+        SecureTransportMiddleware,
+        trusted_proxy=trusted_proxy(),
+        require_https=require_https(),
+    )
+    app.include_router(create_platform_router(services))
 
     @app.exception_handler(PlatformError)
     async def platform_error_handler(
@@ -157,8 +254,33 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
 
     @app.get("/ready")
     async def ready() -> JSONResponse:
-        services.database.execute("PRAGMA quick_check")
-        return JSONResponse(content={"ready": True})
+        maintenance = maintenance_health.payload()
+        try:
+            check = services.database.execute("PRAGMA quick_check").fetchone()
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={"ready": False, "maintenance": maintenance},
+            )
+        database_ready = bool(check) and str(check[0]).lower() == "ok"
+        return JSONResponse(
+            status_code=200 if database_ready else 503,
+            content={"ready": database_ready, "maintenance": maintenance},
+        )
+
+    @app.get("/metrics")
+    async def metrics() -> JSONResponse:
+        maintenance = maintenance_health.payload()
+        try:
+            check = services.database.execute("PRAGMA quick_check").fetchone()
+        except Exception:
+            database_ready = False
+        else:
+            database_ready = bool(check) and str(check[0]).lower() == "ok"
+        payload = services.metrics()
+        payload["ready"] = database_ready
+        payload["maintenance"] = maintenance
+        return JSONResponse(content=payload)
 
     @app.get("/api/platform/health")
     async def platform_health() -> Response:
@@ -214,69 +336,83 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
     return app
 
 
-async def _maintenance_loop(services: PlatformServices) -> None:
-    last_retention_cleanup = 0.0
-    retention_event_days = max(1, int(os.environ.get("AUTOFLOW_RETENTION_EVENT_DAYS", "180")))
-    retention_delivery_days = max(
-        1, int(os.environ.get("AUTOFLOW_RETENTION_DELIVERY_DAYS", "90"))
+def _maintenance_pass(services: PlatformServices, schedule: _MaintenanceSchedule) -> None:
+    services.process_due_schedules()
+    services.deliver_pending_notifications()
+    services.recording_coordinator.sweep_expired()
+    watchdog_cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=30)
+    ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    stuck = services.database.execute(
+        """
+        SELECT id FROM platform_runs
+        WHERE executor_type = 'managed' AND status = 'running'
+          AND updated_at <= ?
+        """,
+        (watchdog_cutoff,),
+    ).fetchall()
+    for row in stuck:
+        services.finalize_run_as_interrupted(row[0], "MANAGED_RUN_WATCHDOG_TIMEOUT")
+        services.cancel_managed_run(row[0])
+    current_time = time.monotonic()
+    if current_time - schedule.last_retention_cleanup < 3600:
+        return
+    summary = services.retention_cleanup(
+        audit_days=schedule.retention_audit_days,
+        run_days=schedule.retention_run_days,
+        artifact_days=schedule.retention_artifact_days,
+        dry_run=schedule.retention_dry_run,
     )
+    if any(summary.values()):
+        LOGGER.info(
+            json(
+                {
+                    "event": "retention.pass",
+                    "dryRun": schedule.retention_dry_run,
+                    "summary": summary,
+                }
+            )
+        )
+    schedule.last_retention_cleanup = current_time
+
+
+async def _run_maintenance_pass(
+    services: PlatformServices, schedule: _MaintenanceSchedule
+) -> None:
+    await asyncio.to_thread(_maintenance_pass, services, schedule)
+
+
+async def _maintenance_loop(
+    services: PlatformServices,
+    maintenance_health: MaintenanceHealth | None = None,
+    *,
+    interval_seconds: float = 10,
+    max_passes: int | None = None,
+) -> None:
+    maintenance_health = maintenance_health or MaintenanceHealth()
+    schedule = _maintenance_schedule()
+    completed_passes = 0
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(interval_seconds)
         try:
-            await asyncio.to_thread(services.process_due_schedules)
-            await asyncio.to_thread(services.deliver_pending_notifications)
-            await asyncio.to_thread(services.recording_coordinator.sweep_expired)
-            from datetime import datetime, timedelta, timezone
-
-            watchdog_cutoff = (
-                datetime.now(timezone.utc) - timedelta(minutes=30)
-            ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-            stuck = services.database.execute(
-                """
-                SELECT id FROM platform_runs
-                WHERE executor_type = 'managed' AND status = 'running'
-                  AND updated_at <= ?
-                """,
-                (watchdog_cutoff,),
-            ).fetchall()
-            for row in stuck:
-                services.finalize_run_as_interrupted(
-                    row[0], "MANAGED_RUN_WATCHDOG_TIMEOUT"
-                )
-                services.cancel_managed_run(row[0])
-            if time.monotonic() - last_retention_cleanup >= 3600:
-                last_retention_cleanup = time.monotonic()
-                from .core import now
-
-                event_cutoff = (
-                    datetime.now(timezone.utc)
-                    - timedelta(days=retention_event_days)
-                ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-                delivery_cutoff = (
-                    datetime.now(timezone.utc)
-                    - timedelta(days=retention_delivery_days)
-                ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-                services.database.execute(
-                    "DELETE FROM platform_sessions WHERE expires_at <= ?", (now(),)
-                )
-                services.database.execute(
-                    "DELETE FROM platform_run_events WHERE created_at <= ?",
-                    (event_cutoff,),
-                )
-                services.database.execute(
-                    "DELETE FROM flow_outputs WHERE created_at <= ?",
-                    (event_cutoff,),
-                )
-                services.database.execute(
-                    """
-                    DELETE FROM deliveries
-                    WHERE status IN ('delivered', 'failed') AND created_at <= ?
-                    """,
-                    (delivery_cutoff,),
-                )
+            await _run_maintenance_pass(services, schedule)
         except Exception:
-            # Request handling and the next interval both retry maintenance.
-            pass
+            failed_at = now()
+            maintenance_health.mark_failed(failed_at)
+            LOGGER.error(
+                json(
+                    {
+                        "event": "maintenance.failed",
+                        "failureAt": failed_at,
+                        "failureCode": MAINTENANCE_FAILURE_CODE,
+                    }
+                )
+            )
+        else:
+            maintenance_health.mark_healthy()
+        completed_passes += 1
+        if max_passes is not None and completed_passes >= max_passes:
+            return
 
 
 app = create_app()

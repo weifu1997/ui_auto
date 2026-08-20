@@ -97,3 +97,10 @@ page. Inline style objects are not the normal component styling mechanism.
 - Do not extract a one-off page fragment into a generic component directory.
 - Do not mix a broad visual redesign or export conversion into a focused page
   change.
+
+## Layout & Filter Bar Conventions
+
+- Use `FilterBar` and `FilterItem` from `src/pages/shared.tsx` for search, status, and date range filters across list and dashboard views. Avoid mixing raw `<span>` text nodes directly with Ant Design inputs inside `Space`.
+- Table action columns should use `Space size={4}` and icon-only `Button type="text" size="small"` wrapped in `Tooltip` with an explicit `aria-label`. Standard action column widths: 56px (1 action), 88px (2 actions), 120px (3 actions).
+- Metric summaries use `MetricCard` from `src/pages/shared.tsx` with semantic tones (`default`, `success`, `warning`, `info`).
+- Table and drawer interior empty states should consistently use `<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="..." />`.

@@ -61,6 +61,18 @@ def _target_url(base_url: str, value: str) -> str:
     return target.geturl()
 
 
+_NAVIGATE_WAIT_UNTIL = "commit"
+# 导航类操作的 timeout 下限（毫秒）：避免用户误将环境 timeout 配置为过小值（比如 10s）
+# 导致 SPA 应用、远程部署机网络抖动等情况频繁超时。导航阶段至少给 30s；
+# 点击/输入等元素级操作仍然严格按用户环境配置。
+_NAVIGATE_TIMEOUT_FLOOR_MS = 30_000
+
+
+def _navigate_timeout_ms(environment_or_step: dict[str, Any], default_seconds: int = 30) -> int:
+    """根据环境/步骤的 timeout 字段计算导航超时，并用合理下限兜底。"""
+    return max(_NAVIGATE_TIMEOUT_FLOOR_MS, max(1, int(environment_or_step.get("timeout", default_seconds))) * 1000)
+
+
 def _ensure_page_opened(
     page: Any,
     element: dict[str, Any] | None,
@@ -71,10 +83,10 @@ def _ensure_page_opened(
     environment = input.get("environment", {})
     base_url = str(environment.get("baseUrl", ""))
     path = str(element.get("path") or "/")
-    timeout = max(1, int(environment.get("timeout", 30))) * 1000
+    timeout = _navigate_timeout_ms(environment)
     page.goto(
         _target_url(base_url, path),
-        wait_until="domcontentloaded",
+        wait_until=_NAVIGATE_WAIT_UNTIL,
         timeout=timeout,
     )
 
@@ -177,8 +189,8 @@ def _execute_step(
         if action == "打开页面":
             page.goto(
                 _target_url(str(input.get("environment", {}).get("baseUrl", "")), value),
-                wait_until="domcontentloaded",
-                timeout=timeout,
+                wait_until=_NAVIGATE_WAIT_UNTIL,
+                timeout=_navigate_timeout_ms(step),
             )
         elif action == "点击":
             _required(locator).click(timeout=timeout)
@@ -344,15 +356,17 @@ def execute_browser_run(
                         raise failure
                 else:
                     completed_steps += 1
-                    hooks["event"](
-                        "step.succeeded",
-                        {
-                            "index": index,
-                            "stepId": step.get("id"),
-                            "title": step.get("title"),
-                            "durationMs": int((time.time() - step_started) * 1000),
-                        },
-                    )
+                    step_duration_ms = int((time.time() - step_started) * 1000)
+                    event_data = {
+                        "index": index,
+                        "stepId": step.get("id"),
+                        "title": step.get("title"),
+                        "message": f"{step.get('title') or 'Step'} completed",
+                        "durationMs": step_duration_ms,
+                    }
+                    hooks["event"]("step.completed", event_data)
+                    # 兼容：同时写旧事件名「step.succeeded」，以便历史代码路径和外部工具在过渡期读取。
+                    hooks["event"]("step.succeeded", event_data)
             if context and not sensitive:
                 path = hooks["artifact_path"]("trace", "zip")
                 context.tracing.stop(path=path)
@@ -438,8 +452,8 @@ def execute_element_validation(
                     str(environment.get("baseUrl", "")),
                     str(element.get("path") or "/"),
                 ),
-                wait_until="domcontentloaded",
-                timeout=30000,
+                wait_until=_NAVIGATE_WAIT_UNTIL,
+                timeout=_navigate_timeout_ms(environment),
             )
             if input.get("requiresLogin"):
                 login_detected = page.evaluate(

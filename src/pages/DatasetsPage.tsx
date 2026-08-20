@@ -91,11 +91,13 @@ export function DatasetsPage({ project }: { project: Project }) {
     { title: "更新于", dataIndex: "updatedAt", width: 180, render: (value: string) => new Date(value).toLocaleString() },
     {
       title: "",
-      width: 150,
-      render: (_, item) => <Space size={2}>
-        <Tooltip title="预览冻结版本"><Button size="small" icon={<FileSearchOutlined />} aria-label={`预览 ${item.name} 冻结版本`} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
-        <Tooltip title="导入新版本"><Button size="small" icon={<ReloadOutlined />} aria-label={`导入 ${item.name} 新版本`} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
-        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button size="small" danger aria-label={`归档数据集 ${item.name}`} icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
+      key: "actions",
+      width: 120,
+      align: "right",
+      render: (_, item) => <Space size={4}>
+        <Tooltip title="预览冻结版本"><Button type="text" size="small" icon={<FileSearchOutlined />} aria-label={`预览 ${item.name} 冻结版本`} onClick={() => void previewVersion(item)} disabled={!item.latestVersion} /></Tooltip>
+        <Tooltip title="导入新版本"><Button type="text" size="small" icon={<ReloadOutlined />} aria-label={`导入 ${item.name} 新版本`} onClick={() => { setVersionFile(undefined); setVersionTarget(item); }} /></Tooltip>
+        <Popconfirm title="归档该数据集？" description="历史运行仍会保留已冻结的数据版本。" onConfirm={() => archivePlatformDataset(platformSession.token, platformProjectId, item.id).then(loadDatasets).then(() => message.success("数据集已归档")).catch(() => message.error("数据集归档失败"))}><Tooltip title="归档"><Button type="text" size="small" danger aria-label={`归档数据集 ${item.name}`} icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
       </Space>,
     },
   ];
@@ -104,7 +106,7 @@ export function DatasetsPage({ project }: { project: Project }) {
     <>
       <PageHeading title="数据集" description="导入后生成不可变版本；参数化执行时每行独立创建一个运行快照。" actions={<Space><Tooltip title="刷新数据集"><Button icon={<ReloadOutlined />} aria-label="刷新数据集" loading={loading} onClick={() => void loadDatasets()} /></Tooltip><Button type="primary" icon={<PlusOutlined />} onClick={() => { importForm.resetFields(); setImportFile(undefined); setImportOpen(true); }}>导入数据集</Button></Space>} />
       <section className="surface project-table">
-        <Table rowKey="id" columns={columns} dataSource={datasets} loading={loading} pagination={false} locale={{ emptyText: <Empty description="尚未导入数据集" /> }} />
+        <Table rowKey="id" columns={columns} dataSource={datasets} loading={loading} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未导入数据集" /> }} />
       </section>
       <Modal title="导入数据集" open={importOpen} confirmLoading={submitting} okText="导入并创建版本" onCancel={() => setImportOpen(false)} onOk={() => void upload()}>
         <Form form={importForm} layout="vertical">

@@ -1,0 +1,2 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"质量门禁、Oxlint、TypeScript 构建、bundle 预算和测试规范"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"复核 Ant Design Token 与视觉对齐规范"}

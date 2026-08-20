@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Apply FastAPI, SQLite, Python test and production-runtime conventions."}
+{"file":".trellis/spec/backend/production-startup.md","reason":"Preserve the supported production environment, listener and deployment entry contract."}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Avoid logging secrets or sensitive artifact/notification details while adding maintenance observability."}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"Preserve run artifact, project isolation and destructive-operation contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace artifact paths across runner, database, API, deployment scripts and Windows smoke."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/design.md","reason":"Use the approved backup, health and rollback design boundary."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/implement.md","reason":"Keep this child restricted to Phase 0 BKP-01 and OBS-01."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/current-state-audit.md","reason":"Use reproduced E3/E4 evidence as the regression baseline."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"Close only BKP-01 and OBS-01 with their stated exit evidence."}

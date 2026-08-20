@@ -1,10 +1,11 @@
 import { expect, test } from "./platform-test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   token: "template-ui-token",
   user: { id: "template-owner", email: "owner@example.test", name: "Template owner" },
-  workspaces: [{ id: "template-workspace", name: "Template workspace", role: "owner" }],
-};
+  workspaces: [{ id: "template-workspace", name: "Template workspace" }],
+});
 
 test("publishes, updates, and applies an internal template", async ({ page }) => {
   let published: Record<string, unknown> | undefined;

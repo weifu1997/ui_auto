@@ -228,9 +228,19 @@ export function EnvironmentDrawer({
           <Input placeholder="https://staging.example.com" />
         </Form.Item>
         <div className="form-row">
-          <Form.Item name="browser" label="浏览器">
+          <Form.Item
+            name="browser"
+            label="浏览器"
+            tooltip="当前执行服务仅支持 Chromium（需在部署机上安装 Playwright Chromium）；Firefox / WebKit 为后续预留，暂不可运行。"
+          >
             <Select
-              options={[{ value: "Chromium", label: "Chromium" }]}
+              options={[
+                { value: "Chromium", label: "Chromium（推荐，支持运行）" },
+                { value: "Firefox", label: "Firefox（暂不可运行）" },
+                { value: "WebKit", label: "WebKit（暂不可运行）" },
+                { value: "Chrome", label: "Chrome（暂不可运行）" },
+                { value: "Microsoft Edge", label: "Microsoft Edge（暂不可运行）" },
+              ]}
             />
           </Form.Item>
           <Form.Item name="timeout" label="默认超时（秒）">

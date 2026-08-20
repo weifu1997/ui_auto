@@ -1,10 +1,11 @@
 import { expect, test } from "./platform-test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   token: "governance-ui-token",
   user: { id: "owner-1", email: "owner@example.test", name: "Owner" },
-  workspaces: [{ id: "workspace-1", name: "Workspace", role: "owner" }],
-};
+  workspaces: [{ id: "workspace-1", name: "Workspace" }],
+});
 
 const analyticsBody = {
   analytics: {

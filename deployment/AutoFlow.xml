@@ -5,12 +5,14 @@
   <executable>%BASE%\runtime\node.exe</executable>
   <arguments>scripts\start-production.mjs</arguments>
   <workingdirectory>%BASE%\app</workingdirectory>
-  <env name="AUTOFLOW_LISTEN_HOST" value="0.0.0.0" />
+  <env name="AUTOFLOW_LISTEN_HOST" value="127.0.0.1" />
+  <env name="AUTOFLOW_REQUIRE_HTTPS" value="1" />
+  <env name="AUTOFLOW_TRUSTED_PROXY" value="" />
+  <env name="AUTOFLOW_COOKIE_SECURE" value="1" />
   <env name="PLATFORM_DATA_DIRECTORY" value="%BASE%\data" />
-  <env name="PLATFORM_ARTIFACT_DIRECTORY" value="%BASE%\artifacts\platform" />
   <env name="AUTOFLOW_STATIC_DIRECTORY" value="%BASE%\app\dist" />
   <env name="PLAYWRIGHT_BROWSERS_PATH" value="%BASE%\browsers" />
-  <env name="PLATFORM_SECRET_KEY" value="__PLATFORM_SECRET_KEY__" />
+  <env name="PLATFORM_SECRET_KEY_FILE" value="%BASE%\runtime\platform-secret.key" />
   <env name="AUTOFLOW_CORS_ORIGINS" value="__AUTOFLOW_CORS_ORIGINS__" />
   <env name="PLATFORM_NOTIFICATION_HOST_ALLOWLIST" value="__NOTIFICATION_HOST_ALLOWLIST__" />
   <env name="PLATFORM_ALLOW_PRIVATE_NOTIFICATION_URLS" value="__ALLOW_PRIVATE_NOTIFICATION_URLS__" />

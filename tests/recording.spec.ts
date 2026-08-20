@@ -80,7 +80,10 @@ test("records, recovers controls, reviews, validates, and imports a flow draft",
   await page.setViewportSize({ width: 480, height: 900 });
   await expectRecordingFormLayout(page);
   await page.getByLabel("录制环境").click();
-  await page.getByRole("option", { name: "录制环境" }).click();
+  await page
+    .locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option")
+    .filter({ hasText: "录制环境" })
+    .click();
   await page.getByLabel("录制起始 URL").fill("https://default.example.test/login?token=discarded");
   await page.getByLabel("从头录制（不使用已有登录态）").check();
   await page.getByRole("button", { name: "开始录制" }).click();
@@ -104,7 +107,10 @@ test("records, recovers controls, reviews, validates, and imports a flow draft",
   await expect(review.getByText("录制打开页面")).toBeVisible();
   await expect(review.getByText("录制登录按钮：testid=login-submit（待校验）")).toBeVisible();
   await expect(review.getByText(/不支持的 iframe/)).toBeVisible();
-  await review.getByRole("button", { name: "确认导入" }).click();
+  await review.getByRole("button", { name: "校验全部" }).click();
+  const importButton = review.getByRole("button", { name: "确认导入" });
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
 
   await expect(page.locator(".step-list").getByText("录制点击登录", { exact: true })).toBeVisible();
   expect(calls.validations).toHaveLength(1);

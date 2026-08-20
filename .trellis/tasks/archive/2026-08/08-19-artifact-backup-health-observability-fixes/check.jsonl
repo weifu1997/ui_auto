@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"Check FastAPI, SQLite and Python test conventions for the changed runtime path."}
+{"file":".trellis/spec/backend/production-startup.md","reason":"Check production startup and deployment configuration remain supported."}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Check maintenance logs and responses never expose sensitive values."}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"Check artifact authorization and project isolation survive path changes."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check database, runner, API and operational-script path flow end to end."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/design.md","reason":"Check the implementation honors the parent backup and observability invariants."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/implement.md","reason":"Check Phase 0 exit/rollback boundaries and defer Phase 2 work."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/current-state-audit.md","reason":"Verify E3/E4 are eliminated without overclaiming production recovery readiness."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"Verify BKP-01 and OBS-01 exit evidence is observable."}

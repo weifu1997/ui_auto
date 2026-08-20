@@ -134,18 +134,18 @@ export function AgentsPage({ project }: { project: Project }) {
             { title: "版本", dataIndex: "revisionNumber", width: 90, render: (value: number) => `v${value}` },
             { title: "状态", dataIndex: "status", width: 110, render: (status: PlatformRevision["status"]) => <Tag color={status === "published" ? "success" : "default"}>{status === "published" ? "已发布" : status === "superseded" ? "已覆盖" : status}</Tag> },
             { title: "创建时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() },
-            { title: "", width: 140, render: (_: unknown, revision: PlatformRevision) => (
-              <Space size={0}>
-                <Tooltip title="使用当前环境执行"><Button size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip>
+            { title: "", key: "actions", width: 88, align: "right", render: (_: unknown, revision: PlatformRevision) => (
+              <Space size={4}>
+                <Tooltip title="使用当前环境执行"><Button type="text" size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip>
                 {revision.status === "published" && (
                   <Popconfirm title="回滚到此版本" description={`将回滚到 v${revision.revisionNumber} 并生成新版本`} okText="回滚" cancelText="取消" onConfirm={() => void rollbackToRevision(revision)}>
-                    <Tooltip title="回滚到此版本"><Button size="small" icon={<HistoryOutlined />} aria-label={`回滚到版本 v${revision.revisionNumber}`} /></Tooltip>
+                    <Tooltip title="回滚到此版本"><Button type="text" size="small" icon={<HistoryOutlined />} aria-label={`回滚到版本 v${revision.revisionNumber}`} /></Tooltip>
                   </Popconfirm>
                 )}
               </Space>
             ) },
           ]}
-          locale={{ emptyText: <Empty description="保存流程后将自动生成版本快照" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="保存流程后将自动生成版本快照" /> }}
         />
       </section>
     </>

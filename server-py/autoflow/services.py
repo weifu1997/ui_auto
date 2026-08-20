@@ -5,6 +5,7 @@ from __future__ import annotations
 import json as _json
 import os
 import sqlite3
+import time as _time
 import uuid
 import base64
 import concurrent.futures
@@ -13,6 +14,7 @@ import io
 import ipaddress
 import re
 import socket
+import shutil
 import ssl
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass
@@ -20,9 +22,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .audit import create_audit_writer
+from .audit import create_audit_writer, create_deployment_audit_writer
 from .core import (
-    PLATFORM_ARTIFACT_DIRECTORY,
     digest,
     failure_category,
     json,
@@ -41,9 +42,22 @@ from .managed_runner import ManagedRunner
 from .recorder import RecordingCoordinator
 from .recording_state import RecordingSessionStateStore
 from .resources import as_record
+from .workspaces import (
+    GLOBAL_ROLE_SUPER_ADMIN,
+    WORKSPACE_ROLE_ADMIN,
+    capabilities_for_role,
+    is_super_admin,
+    is_workspace_role,
+    normalize_workspace_role,
+    role_has_capability,
+)
 
 
 _CHROMIUM_AVAILABLE: bool | None = None
+_CHROMIUM_AVAILABLE_AT: float | None = None
+_CHROMIUM_CACHE_TTL_NEGATIVE: float = 30.0  # 不可用结果 30s 后允许重试，避免安装完 Chromium 还要重启进程
+_CHROMIUM_CACHE_TTL_POSITIVE: float = 3600.0  # 可用结果缓存 1h
+_TERMINAL_RUN_STATUSES = ("success", "failed", "canceled")
 
 
 BOOTSTRAP_SCHEMA = """
@@ -143,6 +157,18 @@ BOOTSTRAP_SCHEMA = """
       detail TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS deployment_audit_events (
+      id TEXT PRIMARY KEY,
+      actor_type TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS deployment_audit_events_created
+      ON deployment_audit_events (created_at DESC);
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -334,6 +360,7 @@ class AuthUser:
     id: str
     email: str
     name: str
+    global_role: str | None = None
 
 
 def _format_notification_body(
@@ -412,8 +439,15 @@ class PlatformServices:
         self.database.isolation_level = None
         run_platform_migrations(self.database, BOOTSTRAP_SCHEMA)
         self.audit = create_audit_writer(self.database)
+        self.deployment_audit = create_deployment_audit_writer(self.database)
         self.managed_runner = ManagedRunner(
-            Path(data_directory) / "artifacts"
+            self.data_directory / "artifacts",
+            global_concurrency=int(
+                os.environ.get("AUTOFLOW_RUNNER_GLOBAL_CONCURRENCY", "2")
+            ),
+            workspace_concurrency=int(
+                os.environ.get("AUTOFLOW_RUNNER_WORKSPACE_CONCURRENCY", "1")
+            ),
         )
         self._recording_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="recording"
@@ -426,6 +460,15 @@ class PlatformServices:
         )
         self.webhook_requests: dict[str, list[float]] = {}
         configured_secret = os.environ.get("PLATFORM_SECRET_KEY")
+        if not configured_secret:
+            key_file = os.environ.get("PLATFORM_SECRET_KEY_FILE")
+            if key_file:
+                try:
+                    configured_secret = Path(key_file).read_text(
+                        encoding="utf-8"
+                    ).strip()
+                except Exception:
+                    configured_secret = None
         if os.environ.get("NODE_ENV") == "production" and not configured_secret:
             raise RuntimeError("PLATFORM_SECRET_KEY is required in production")
         self.key_material = key_material(configured_secret)
@@ -536,20 +579,24 @@ class PlatformServices:
         return {
             "token": token,
             "expiresAt": expires_at,
-            "user": {"id": user.id, "email": user.email, "name": user.name},
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "globalRole": user.global_role,
+            },
         }
 
     def session_user(self, headers: dict[str, str] | None = None) -> AuthUser:
         from .core import authorization
+        from .http import PlatformError
 
         token = authorization(headers)
         if not token:
-            from .http import PlatformError
-
             raise PlatformError(401, "AUTH_REQUIRED")
         row = self.database.execute(
             """
-            SELECT u.id, u.email, u.name
+            SELECT u.id, u.email, u.name, u.global_role
             FROM platform_sessions s
             JOIN platform_users u ON u.id = s.user_id
             WHERE s.token_hash = ? AND s.expires_at > ? AND u.enabled = 1
@@ -557,10 +604,27 @@ class PlatformServices:
             (digest(token), now()),
         ).fetchone()
         if not row:
-            from .http import PlatformError
-
             raise PlatformError(401, "SESSION_INVALID")
-        return AuthUser(row[0], row[1], row[2])
+        return AuthUser(row[0], row[1], row[2], row[3])
+
+    def global_role_for_user(self, user_id: str) -> str | None:
+        row = self.database.execute(
+            "SELECT global_role FROM platform_users WHERE id = ? AND enabled = 1",
+            (user_id,),
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
+
+    def require_super_admin(self, user_id: str) -> None:
+        from .http import PlatformError
+
+        if not is_super_admin(self.global_role_for_user(user_id)):
+            raise PlatformError(403, "SUPER_ADMIN_REQUIRED")
+
+    def revoke_user_sessions(self, user_id: str) -> int:
+        cursor = self.database.execute(
+            "DELETE FROM platform_sessions WHERE user_id = ?", (user_id,)
+        )
+        return max(0, cursor.rowcount)
 
     def create_workspace(self, user: AuthUser, name: str) -> dict[str, Any]:
         workspace = {
@@ -575,9 +639,9 @@ class PlatformServices:
         self.database.execute(
             """
             INSERT INTO workspace_members (workspace_id, user_id, role)
-            VALUES (?, ?, 'owner')
+            VALUES (?, ?, ?)
             """,
-            (workspace["id"], user.id),
+            (workspace["id"], user.id, WORKSPACE_ROLE_ADMIN),
         )
         self.audit(
             workspace["id"],
@@ -589,6 +653,23 @@ class PlatformServices:
         return workspace
 
     def workspaces_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        global_role = self.global_role_for_user(user_id)
+        if is_super_admin(global_role):
+            rows = self.database.execute(
+                "SELECT id, name, created_at FROM workspaces ORDER BY created_at ASC"
+            ).fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "createdAt": row[2],
+                    "role": GLOBAL_ROLE_SUPER_ADMIN,
+                    "capabilities": capabilities_for_role(
+                        GLOBAL_ROLE_SUPER_ADMIN, global_role
+                    ),
+                }
+                for row in rows
+            ]
         rows = self.database.execute(
             """
             SELECT w.id, w.name, w.created_at, m.role
@@ -604,10 +685,21 @@ class PlatformServices:
                 "id": row[0],
                 "name": row[1],
                 "createdAt": row[2],
-                "role": row[3],
+                "role": normalize_workspace_role(row[3]),
+                "capabilities": capabilities_for_role(str(row[3]), global_role),
             }
             for row in rows
+            if is_workspace_role(normalize_workspace_role(row[3]))
         ]
+
+    def _workspace_exists(self, workspace_id: str) -> None:
+        from .http import PlatformError
+
+        row = self.database.execute(
+            "SELECT id FROM workspaces WHERE id = ?", (workspace_id,)
+        ).fetchone()
+        if not row:
+            raise PlatformError(404, "WORKSPACE_NOT_FOUND")
 
     def member_role(self, workspace_id: str, user_id: str) -> str:
         from .http import PlatformError
@@ -619,19 +711,52 @@ class PlatformServices:
             """,
             (workspace_id, user_id),
         ).fetchone()
-        if not row:
+        role = normalize_workspace_role(str(row[0])) if row else ""
+        if not is_workspace_role(role):
             raise PlatformError(403, "WORKSPACE_ACCESS_DENIED")
-        return str(row[0])
+        return role
+
+    def effective_workspace_role(self, workspace_id: str, user_id: str) -> str:
+        self._workspace_exists(workspace_id)
+        global_role = self.global_role_for_user(user_id)
+        if is_super_admin(global_role):
+            membership = self.database.execute(
+                """
+                SELECT role FROM workspace_members
+                WHERE workspace_id = ? AND user_id = ?
+                """,
+                (workspace_id, user_id),
+            ).fetchone()
+            if not membership:
+                self.audit(
+                    workspace_id,
+                    {"type": "user", "id": user_id},
+                    "super_admin.workspace_accessed",
+                    {"type": "workspace", "id": workspace_id},
+                    {},
+                )
+            return GLOBAL_ROLE_SUPER_ADMIN
+        return self.member_role(workspace_id, user_id)
 
     def require_workspace_role(
         self, workspace_id: str, user_id: str, admin: bool = False
     ) -> str:
-        return self.member_role(workspace_id, user_id)
+        from .http import PlatformError
+
+        role = self.effective_workspace_role(workspace_id, user_id)
+        if admin and not role_has_capability(role, "workspace.manage"):
+            raise PlatformError(403, "CAPABILITY_REQUIRED")
+        return role
 
     def require_workspace_capability(
         self, workspace_id: str, user_id: str, capability: str
     ) -> str:
-        return self.require_workspace_role(workspace_id, user_id)
+        from .http import PlatformError
+
+        role = self.effective_workspace_role(workspace_id, user_id)
+        if not role_has_capability(role, capability):
+            raise PlatformError(403, "CAPABILITY_REQUIRED")
+        return role
 
     def project_for(self, project_id: str) -> dict[str, Any]:
         from .http import PlatformError
@@ -675,7 +800,12 @@ class PlatformServices:
         self, project_id: str, user_id: str, write: bool = False
     ) -> dict[str, Any]:
         project = self.project_for(project_id)
-        role = self.member_role(project["workspace_id"], user_id)
+        if write:
+            role = self.require_workspace_capability(
+                project["workspace_id"], user_id, "project.manage"
+            )
+        else:
+            role = self.require_workspace_role(project["workspace_id"], user_id)
         return {"project": project, "role": role}
 
     def require_project_admin(self, project_id: str, user_id: str) -> dict[str, Any]:
@@ -684,13 +814,798 @@ class PlatformServices:
     def require_project_capability(
         self, project_id: str, user_id: str, capability: str
     ) -> dict[str, Any]:
-        from .http import PlatformError
-        from .workspaces import role_has_capability
+        project = self.project_for(project_id)
+        role = self.require_workspace_capability(
+            project["workspace_id"], user_id, capability
+        )
+        return {"project": project, "role": role}
 
-        result = self.require_project_role(project_id, user_id)
-        if not role_has_capability(result["role"], capability):
-            raise PlatformError(403, "CAPABILITY_REQUIRED")
-        return result
+    def account_for(self, user_id: str) -> dict[str, Any]:
+        from .http import PlatformError
+
+        row = self.database.execute(
+            """
+            SELECT id, email, name, enabled, global_role, created_at
+            FROM platform_users WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            raise PlatformError(404, "ACCOUNT_NOT_FOUND")
+        return {
+            "id": row[0],
+            "email": row[1],
+            "name": row[2],
+            "enabled": bool(row[3]),
+            "globalRole": row[4],
+            "createdAt": row[5],
+        }
+
+    def accounts(self) -> list[dict[str, Any]]:
+        rows = self.database.execute(
+            """
+            SELECT id, email, name, enabled, global_role, created_at
+            FROM platform_users ORDER BY created_at ASC, email ASC
+            """
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "email": row[1],
+                "name": row[2],
+                "enabled": bool(row[3]),
+                "globalRole": row[4],
+                "createdAt": row[5],
+            }
+            for row in rows
+        ]
+
+    def workspace_members(self, workspace_id: str) -> list[dict[str, Any]]:
+        self._workspace_exists(workspace_id)
+        rows = self.database.execute(
+            """
+            SELECT u.id, u.email, u.name, u.enabled, u.global_role, m.role,
+                   u.created_at
+            FROM workspace_members m
+            JOIN platform_users u ON u.id = m.user_id
+            WHERE m.workspace_id = ?
+            ORDER BY m.role ASC, u.email ASC
+            """,
+            (workspace_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "email": row[1],
+                "name": row[2],
+                "enabled": bool(row[3]),
+                "globalRole": row[4],
+                "role": normalize_workspace_role(row[5]),
+                "createdAt": row[6],
+            }
+            for row in rows
+            if is_workspace_role(normalize_workspace_role(row[5]))
+        ]
+
+    def _workspace_ids_for_user(self, user_id: str) -> list[str]:
+        return [
+            str(row[0])
+            for row in self.database.execute(
+                "SELECT workspace_id FROM workspace_members WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        ]
+
+    def _audit_account_change(
+        self,
+        actor_id: str,
+        action: str,
+        target_user_id: str,
+        detail: dict[str, Any],
+        workspace_ids: list[str] | None = None,
+    ) -> None:
+        targets = workspace_ids or self._workspace_ids_for_user(target_user_id)
+        if not targets:
+            targets = self._workspace_ids_for_user(actor_id)
+        if not targets:
+            first_workspace = self.database.execute(
+                "SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+            targets = [str(first_workspace[0])] if first_workspace else []
+        for workspace_id in dict.fromkeys(targets):
+            self.audit(
+                workspace_id,
+                {"type": "user", "id": actor_id},
+                action,
+                {"type": "user", "id": target_user_id},
+                detail,
+            )
+
+    def _assert_not_last_workspace_admin(
+        self, workspace_id: str, user_id: str
+    ) -> None:
+        from .http import PlatformError
+
+        membership = self.database.execute(
+            """
+            SELECT m.role, u.enabled
+            FROM workspace_members m
+            JOIN platform_users u ON u.id = m.user_id
+            WHERE m.workspace_id = ? AND m.user_id = ?
+            """,
+            (workspace_id, user_id),
+        ).fetchone()
+        if not membership or normalize_workspace_role(membership[0]) != WORKSPACE_ROLE_ADMIN:
+            return
+        if not bool(membership[1]):
+            return
+        count = self.database.execute(
+            """
+            SELECT COUNT(*)
+            FROM workspace_members m
+            JOIN platform_users u ON u.id = m.user_id
+            WHERE m.workspace_id = ? AND m.role = ? AND u.enabled = 1
+            """,
+            (workspace_id, WORKSPACE_ROLE_ADMIN),
+        ).fetchone()[0]
+        if count <= 1:
+            raise PlatformError(409, "LAST_WORKSPACE_ADMIN_REQUIRED")
+
+    def _assert_not_last_super_admin(self, user_id: str) -> None:
+        from .http import PlatformError
+
+        row = self.database.execute(
+            "SELECT global_role, enabled FROM platform_users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row or not is_super_admin(row[0]) or not bool(row[1]):
+            return
+        count = self.database.execute(
+            """
+            SELECT COUNT(*) FROM platform_users
+            WHERE global_role = ? AND enabled = 1
+            """,
+            (GLOBAL_ROLE_SUPER_ADMIN,),
+        ).fetchone()[0]
+        if count <= 1:
+            raise PlatformError(409, "LAST_SUPER_ADMIN_REQUIRED")
+
+    def _validate_invitation_email(self, email: str) -> str:
+        from .http import PlatformError
+
+        normalized = email.strip().lower()
+        if not normalized or "@" not in normalized or len(normalized) > 320:
+            raise PlatformError(400, "INVITE_EMAIL_INVALID")
+        return normalized
+
+    def invitation_response(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        expires_at = str(row[5])
+        state = "active"
+        if row[8]:
+            state = "consumed"
+        elif row[7]:
+            state = "revoked"
+        elif expires_at <= now():
+            state = "expired"
+        return {
+            "id": row[0],
+            "workspaceId": row[1],
+            "email": row[2],
+            "role": normalize_workspace_role(row[3]),
+            "createdBy": row[4],
+            "expiresAt": expires_at,
+            "createdAt": row[6],
+            "revokedAt": row[7],
+            "consumedAt": row[8],
+            "status": state,
+        }
+
+    def workspace_invitations(self, workspace_id: str) -> list[dict[str, Any]]:
+        self._workspace_exists(workspace_id)
+        rows = self.database.execute(
+            """
+            SELECT id, workspace_id, email, role, created_by, expires_at,
+                   created_at, revoked_at, consumed_at
+            FROM workspace_invitations
+            WHERE workspace_id = ?
+            ORDER BY created_at DESC
+            """,
+            (workspace_id,),
+        ).fetchall()
+        return [self.invitation_response(row) for row in rows]
+
+    def create_workspace_invitation(
+        self,
+        workspace_id: str,
+        actor_id: str,
+        email: str,
+        role: str,
+    ) -> dict[str, Any]:
+        from .http import PlatformError
+        import secrets
+
+        self._workspace_exists(workspace_id)
+        email = self._validate_invitation_email(email)
+        if not is_workspace_role(role):
+            raise PlatformError(400, "INVITE_ROLE_INVALID")
+        token = secrets.token_urlsafe(32)
+        invitation = {
+            "id": str(uuid.uuid4()),
+            "workspaceId": workspace_id,
+            "email": email,
+            "role": role,
+            "tokenHash": digest(token),
+            "expiresAt": _iso_add_seconds(24 * 60 * 60),
+            "createdAt": now(),
+        }
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            replaced_at = now()
+            replaced = self.database.execute(
+                """
+                SELECT id FROM workspace_invitations
+                WHERE workspace_id = ? AND email = ? AND consumed_at IS NULL
+                  AND revoked_at IS NULL AND expires_at > ?
+                """,
+                (workspace_id, email, replaced_at),
+            ).fetchall()
+            self.database.execute(
+                """
+                UPDATE workspace_invitations
+                SET revoked_at = ?
+                WHERE workspace_id = ? AND email = ? AND consumed_at IS NULL
+                  AND revoked_at IS NULL AND expires_at > ?
+                """,
+                (replaced_at, workspace_id, email, replaced_at),
+            )
+            for previous in replaced:
+                self.audit(
+                    workspace_id,
+                    {"type": "user", "id": actor_id},
+                    "workspace.invitation_revoked",
+                    {"type": "invitation", "id": str(previous[0])},
+                    {"reason": "replaced"},
+                )
+            self.database.execute(
+                """
+                INSERT INTO workspace_invitations (
+                  id, workspace_id, email, role, token_hash, expires_at,
+                  created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    invitation["id"],
+                    workspace_id,
+                    email,
+                    role,
+                    invitation["tokenHash"],
+                    invitation["expiresAt"],
+                    actor_id,
+                    invitation["createdAt"],
+                ),
+            )
+            self.audit(
+                workspace_id,
+                {"type": "user", "id": actor_id},
+                "workspace.invitation_created",
+                {"type": "invitation", "id": invitation["id"]},
+                {"role": role},
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+        return {
+            "id": invitation["id"],
+            "workspaceId": workspace_id,
+            "email": email,
+            "role": role,
+            "expiresAt": invitation["expiresAt"],
+            "token": token,
+        }
+
+    def revoke_workspace_invitation(
+        self, workspace_id: str, invitation_id: str, actor_id: str
+    ) -> None:
+        from .http import PlatformError
+
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.database.execute(
+                """
+                SELECT id, consumed_at, revoked_at, expires_at
+                FROM workspace_invitations WHERE id = ? AND workspace_id = ?
+                """,
+                (invitation_id, workspace_id),
+            ).fetchone()
+            if not row:
+                raise PlatformError(404, "INVITE_NOT_FOUND")
+            if row[1] or row[2] or str(row[3]) <= now():
+                raise PlatformError(409, "INVITE_NOT_REVOCABLE")
+            self.database.execute(
+                "UPDATE workspace_invitations SET revoked_at = ? WHERE id = ?",
+                (now(), invitation_id),
+            )
+            self.audit(
+                workspace_id,
+                {"type": "user", "id": actor_id},
+                "workspace.invitation_revoked",
+                {"type": "invitation", "id": invitation_id},
+                {},
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def accept_workspace_invitation(
+        self,
+        token: str,
+        email: str,
+        password: str | None,
+        name: str | None,
+        current_user: AuthUser | None = None,
+    ) -> tuple[AuthUser, bool]:
+        from .auth import password_hash
+        from .http import PlatformError
+
+        if not token or len(token) > 1024:
+            raise PlatformError(400, "INVITE_TOKEN_INVALID")
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            invite = self.database.execute(
+                """
+                SELECT id, workspace_id, email, role, expires_at, revoked_at, consumed_at
+                FROM workspace_invitations WHERE token_hash = ?
+                """,
+                (digest(token),),
+            ).fetchone()
+            if not invite:
+                raise PlatformError(404, "INVITE_INVALID")
+            # The consumed state deliberately wins before every other check so
+            # replays have one terminal, non-enumerating contract.
+            if invite[6]:
+                raise PlatformError(410, "INVITE_ALREADY_USED")
+            if invite[5]:
+                raise PlatformError(410, "INVITE_REVOKED")
+            if str(invite[4]) <= now():
+                raise PlatformError(410, "INVITE_EXPIRED")
+            # Do not validate caller-controlled fields before the consumed
+            # check above. A replay must preserve its single terminal result
+            # even when the caller changes or omits every other field.
+            email = self._validate_invitation_email(email)
+            if email != invite[2]:
+                raise PlatformError(403, "INVITE_EMAIL_MISMATCH")
+            role = normalize_workspace_role(invite[3])
+            if not is_workspace_role(role):
+                raise PlatformError(409, "INVITE_ROLE_INVALID")
+
+            existing = self.database.execute(
+                """
+                SELECT id, email, name, enabled, global_role
+                FROM platform_users WHERE email = ?
+                """,
+                (email,),
+            ).fetchone()
+            created = False
+            if existing:
+                # A disabled target cannot authenticate, so checking for its
+                # matching session first would make the stable disabled-account
+                # terminal response unreachable through the HTTP endpoint.
+                if not bool(existing[3]):
+                    raise PlatformError(403, "INVITE_ACCOUNT_DISABLED")
+                if not current_user or current_user.id != existing[0]:
+                    raise PlatformError(409, "INVITE_LOGIN_REQUIRED")
+                user = AuthUser(existing[0], existing[1], existing[2], existing[4])
+            else:
+                if current_user:
+                    raise PlatformError(403, "INVITE_EMAIL_MISMATCH")
+                if not password or len(password) < 8 or len(password) > 1024:
+                    raise PlatformError(400, "INVITE_PASSWORD_INVALID")
+                created = True
+                user = AuthUser(
+                    str(uuid.uuid4()),
+                    email,
+                    (name or "").strip()[:100] or email.split("@", 1)[0],
+                )
+                created_at = now()
+                self.database.execute(
+                    """
+                    INSERT INTO platform_users (id, email, name, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user.id, user.email, user.name, created_at),
+                )
+                self.database.execute(
+                    """
+                    INSERT INTO platform_user_credentials
+                      (user_id, password_hash, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user.id, password_hash(password), created_at, created_at),
+                )
+
+            membership = self.database.execute(
+                """
+                SELECT 1 FROM workspace_members
+                WHERE workspace_id = ? AND user_id = ?
+                """,
+                (invite[1], user.id),
+            ).fetchone()
+            if membership:
+                raise PlatformError(409, "INVITE_MEMBERSHIP_EXISTS")
+            self.database.execute(
+                """
+                INSERT INTO workspace_members (workspace_id, user_id, role)
+                VALUES (?, ?, ?)
+                """,
+                (invite[1], user.id, role),
+            )
+            cursor = self.database.execute(
+                """
+                UPDATE workspace_invitations SET consumed_at = ?
+                WHERE id = ? AND consumed_at IS NULL
+                """,
+                (now(), invite[0]),
+            )
+            if cursor.rowcount != 1:
+                raise PlatformError(410, "INVITE_ALREADY_USED")
+            self.audit(
+                invite[1],
+                {"type": "user", "id": user.id},
+                "workspace.invitation_accepted",
+                {"type": "invitation", "id": invite[0]},
+                {"role": role, "newAccount": created},
+            )
+            self.database.execute("COMMIT")
+            return user, created
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def update_workspace_member_role(
+        self, workspace_id: str, user_id: str, role: str, actor_id: str
+    ) -> dict[str, Any]:
+        from .http import PlatformError
+
+        if not is_workspace_role(role):
+            raise PlatformError(400, "WORKSPACE_ROLE_INVALID")
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.database.execute(
+                """
+                SELECT role FROM workspace_members
+                WHERE workspace_id = ? AND user_id = ?
+                """,
+                (workspace_id, user_id),
+            ).fetchone()
+            if not current:
+                raise PlatformError(404, "WORKSPACE_MEMBER_NOT_FOUND")
+            current_role = normalize_workspace_role(current[0])
+            if current_role == role:
+                self.database.execute("COMMIT")
+                return next(
+                    item
+                    for item in self.workspace_members(workspace_id)
+                    if item["id"] == user_id
+                )
+            if current_role == WORKSPACE_ROLE_ADMIN and role != WORKSPACE_ROLE_ADMIN:
+                self._assert_not_last_workspace_admin(workspace_id, user_id)
+            self.database.execute(
+                """
+                UPDATE workspace_members SET role = ?
+                WHERE workspace_id = ? AND user_id = ?
+                """,
+                (role, workspace_id, user_id),
+            )
+            revoked = self.revoke_user_sessions(user_id)
+            self.audit(
+                workspace_id,
+                {"type": "user", "id": actor_id},
+                "workspace.member_role_changed",
+                {"type": "user", "id": user_id},
+                {"role": role, "revokedSessions": revoked},
+            )
+            result = self.account_for(user_id)
+            self.database.execute("COMMIT")
+            return {**result, "role": role}
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def remove_workspace_member(
+        self, workspace_id: str, user_id: str, actor_id: str
+    ) -> None:
+        from .http import PlatformError
+
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            membership = self.database.execute(
+                """
+                SELECT 1 FROM workspace_members
+                WHERE workspace_id = ? AND user_id = ?
+                """,
+                (workspace_id, user_id),
+            ).fetchone()
+            if not membership:
+                raise PlatformError(404, "WORKSPACE_MEMBER_NOT_FOUND")
+            self._assert_not_last_workspace_admin(workspace_id, user_id)
+            self.database.execute(
+                "DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+                (workspace_id, user_id),
+            )
+            revoked = self.revoke_user_sessions(user_id)
+            self.audit(
+                workspace_id,
+                {"type": "user", "id": actor_id},
+                "workspace.member_removed",
+                {"type": "user", "id": user_id},
+                {"revokedSessions": revoked},
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def set_account_enabled(
+        self, user_id: str, enabled: bool, actor_id: str
+    ) -> dict[str, Any]:
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            account = self.account_for(user_id)
+            if account["enabled"] == enabled:
+                self.database.execute("COMMIT")
+                return account
+            if not enabled:
+                self._assert_not_last_super_admin(user_id)
+                for workspace_id in self._workspace_ids_for_user(user_id):
+                    self._assert_not_last_workspace_admin(workspace_id, user_id)
+            self.database.execute(
+                "UPDATE platform_users SET enabled = ? WHERE id = ?",
+                (1 if enabled else 0, user_id),
+            )
+            revoked = self.revoke_user_sessions(user_id)
+            self._audit_account_change(
+                actor_id,
+                "account.enabled_changed",
+                user_id,
+                {"enabled": enabled, "revokedSessions": revoked},
+            )
+            result = self.account_for(user_id)
+            self.database.execute("COMMIT")
+            return result
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def set_account_global_role(
+        self, user_id: str, global_role: str | None, actor_id: str
+    ) -> dict[str, Any]:
+        from .http import PlatformError
+
+        if global_role not in (None, GLOBAL_ROLE_SUPER_ADMIN):
+            raise PlatformError(400, "GLOBAL_ROLE_INVALID")
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            account = self.account_for(user_id)
+            if account["globalRole"] == global_role:
+                self.database.execute("COMMIT")
+                return account
+            if global_role == GLOBAL_ROLE_SUPER_ADMIN and not account["enabled"]:
+                raise PlatformError(409, "ACCOUNT_DISABLED")
+            if account["globalRole"] == GLOBAL_ROLE_SUPER_ADMIN:
+                self._assert_not_last_super_admin(user_id)
+            self.database.execute(
+                "UPDATE platform_users SET global_role = ? WHERE id = ?",
+                (global_role, user_id),
+            )
+            revoked = self.revoke_user_sessions(user_id)
+            self._audit_account_change(
+                actor_id,
+                "account.global_role_changed",
+                user_id,
+                {"globalRole": global_role, "revokedSessions": revoked},
+            )
+            result = self.account_for(user_id)
+            self.database.execute("COMMIT")
+            return result
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def issue_password_reset(self, user_id: str, actor_id: str) -> dict[str, Any]:
+        import secrets
+
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            self.account_for(user_id)
+            token = secrets.token_urlsafe(32)
+            reset = {
+                "id": str(uuid.uuid4()),
+                "tokenHash": digest(token),
+                "expiresAt": _iso_add_seconds(24 * 60 * 60),
+                "createdAt": now(),
+            }
+            self.database.execute(
+                """
+                UPDATE password_reset_tokens SET revoked_at = ?
+                WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
+                  AND expires_at > ?
+                """,
+                (now(), user_id, now()),
+            )
+            self.database.execute(
+                """
+                INSERT INTO password_reset_tokens (
+                  id, user_id, token_hash, expires_at, created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    reset["id"],
+                    user_id,
+                    reset["tokenHash"],
+                    reset["expiresAt"],
+                    actor_id,
+                    reset["createdAt"],
+                ),
+            )
+            self._audit_account_change(
+                actor_id,
+                "account.password_reset_issued",
+                user_id,
+                {},
+            )
+            self.database.execute("COMMIT")
+            return {"id": reset["id"], "token": token, "expiresAt": reset["expiresAt"]}
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def accept_password_reset(self, token: str, password: str) -> None:
+        from .auth import password_hash
+        from .http import PlatformError
+
+        if not token or len(token) > 1024:
+            raise PlatformError(400, "PASSWORD_RESET_TOKEN_INVALID")
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            reset = self.database.execute(
+                """
+                SELECT id, user_id, expires_at, revoked_at, consumed_at
+                FROM password_reset_tokens WHERE token_hash = ?
+                """,
+                (digest(token),),
+            ).fetchone()
+            if not reset:
+                raise PlatformError(404, "PASSWORD_RESET_INVALID")
+            if reset[4]:
+                raise PlatformError(410, "PASSWORD_RESET_ALREADY_USED")
+            if reset[3]:
+                raise PlatformError(410, "PASSWORD_RESET_REVOKED")
+            if str(reset[2]) <= now():
+                raise PlatformError(410, "PASSWORD_RESET_EXPIRED")
+            if not password or len(password) < 8 or len(password) > 1024:
+                raise PlatformError(400, "PASSWORD_RESET_PASSWORD_INVALID")
+            account = self.account_for(reset[1])
+            if not account["enabled"]:
+                raise PlatformError(403, "ACCOUNT_DISABLED")
+            changed_at = now()
+            self.database.execute(
+                """
+                UPDATE platform_user_credentials
+                SET password_hash = ?, updated_at = ? WHERE user_id = ?
+                """,
+                (password_hash(password), changed_at, reset[1]),
+            )
+            self.database.execute(
+                "UPDATE password_reset_tokens SET consumed_at = ? WHERE id = ?",
+                (changed_at, reset[0]),
+            )
+            revoked = self.revoke_user_sessions(reset[1])
+            self._audit_account_change(
+                reset[1],
+                "account.password_reset_accepted",
+                reset[1],
+                {"revokedSessions": revoked},
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
+
+    def bootstrap_super_admin(
+        self, email: str, name: str | None, password: str | None
+    ) -> AuthUser:
+        from .auth import password_hash
+        from .http import PlatformError
+
+        email = self._validate_invitation_email(email)
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
+            existing_admin = self.database.execute(
+                """
+                SELECT id FROM platform_users
+                WHERE global_role = ? AND enabled = 1
+                """,
+                (GLOBAL_ROLE_SUPER_ADMIN,),
+            ).fetchone()
+            if existing_admin:
+                raise PlatformError(409, "SUPER_ADMIN_ALREADY_CONFIGURED")
+            existing = self.database.execute(
+                """
+                SELECT id, email, name, global_role FROM platform_users
+                WHERE email = ?
+                """,
+                (email,),
+            ).fetchone()
+            created = False
+            if existing:
+                credential = self.database.execute(
+                    "SELECT 1 FROM platform_user_credentials WHERE user_id = ?",
+                    (existing[0],),
+                ).fetchone()
+                if not credential:
+                    if not password or len(password) < 8 or len(password) > 1024:
+                        raise PlatformError(400, "BOOTSTRAP_PASSWORD_INVALID")
+                    created_at = now()
+                    self.database.execute(
+                        """
+                        INSERT INTO platform_user_credentials
+                          (user_id, password_hash, created_at, updated_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (existing[0], password_hash(password), created_at, created_at),
+                    )
+                self.database.execute(
+                    """
+                    UPDATE platform_users
+                    SET enabled = 1, global_role = ? WHERE id = ?
+                    """,
+                    (GLOBAL_ROLE_SUPER_ADMIN, existing[0]),
+                )
+                user = AuthUser(existing[0], existing[1], existing[2], GLOBAL_ROLE_SUPER_ADMIN)
+            else:
+                if not password or len(password) < 8 or len(password) > 1024:
+                    raise PlatformError(400, "BOOTSTRAP_PASSWORD_INVALID")
+                user = AuthUser(
+                    str(uuid.uuid4()),
+                    email,
+                    (name or "").strip()[:100] or email.split("@", 1)[0],
+                    GLOBAL_ROLE_SUPER_ADMIN,
+                )
+                created = True
+                created_at = now()
+                self.database.execute(
+                    """
+                    INSERT INTO platform_users (id, email, name, global_role, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user.id, user.email, user.name, user.global_role, created_at),
+                )
+                self.database.execute(
+                    """
+                    INSERT INTO platform_user_credentials
+                      (user_id, password_hash, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user.id, password_hash(password), created_at, created_at),
+                )
+            revoked_sessions = self.revoke_user_sessions(user.id)
+            self.deployment_audit(
+                {"type": "system", "id": "bootstrap"},
+                "account.super_admin_bootstrapped",
+                {"type": "user", "id": user.id},
+                {
+                    "created": created,
+                    "promoted": not created,
+                    "revokedSessions": revoked_sessions,
+                },
+            )
+            self.database.execute("COMMIT")
+            return user
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
 
     def document_for(self, project_id: str) -> dict[str, Any]:
         row = self.database.execute(
@@ -1144,7 +2059,9 @@ class PlatformServices:
                 delivery_project[0] if delivery_project else None,
             )
 
-    def send_test_notification(self, channel_id: str) -> dict[str, Any]:
+    def send_test_notification(
+        self, channel_id: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
         from .http import PlatformError
 
         row = self.database.execute(
@@ -1152,8 +2069,9 @@ class PlatformServices:
             SELECT id, channel_type, config_iv, config_tag, config_ciphertext
             FROM notification_channels
             WHERE id = ? AND archived_at IS NULL
+              AND (? IS NULL OR workspace_id = ?)
             """,
-            (channel_id,),
+            (channel_id, workspace_id, workspace_id),
         ).fetchone()
         if not row:
             raise PlatformError(404, "NOTIFICATION_CHANNEL_NOT_FOUND")
@@ -2183,7 +3101,9 @@ class PlatformServices:
             retry_rows=retry_rows,
         )
 
-    def run_by_id(self, run_id: str) -> dict[str, Any]:
+    def run_by_id(
+        self, run_id: str, project_id: str | None = None
+    ) -> dict[str, Any]:
         from .http import PlatformError
 
         row = self.database.execute(
@@ -2191,9 +3111,10 @@ class PlatformServices:
             SELECT id, project_id, revision_id, environment_id, agent_id,
                    executor_type, status, snapshot, cancellation_requested,
                    result, created_at, updated_at, retry_of_run_id
-            FROM platform_runs WHERE id = ?
+            FROM platform_runs
+            WHERE id = ? AND (? IS NULL OR project_id = ?)
             """,
-            (run_id,),
+            (run_id, project_id, project_id),
         ).fetchone()
         if not row:
             raise PlatformError(404, "RUN_NOT_FOUND")
@@ -2212,6 +3133,70 @@ class PlatformServices:
             "updatedAt": row[11],
             "retryOfRunId": row[12],
         }
+
+
+    def delete_run(self, project_id: str, run_id: str) -> dict[str, Any]:
+        from .http import PlatformError
+
+        run = self.database.execute(
+            "SELECT id, project_id, status FROM platform_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if not run:
+            raise PlatformError(404, "RUN_NOT_FOUND")
+        if run[1] != project_id:
+            raise PlatformError(404, "RUN_NOT_FOUND")
+        if run[2] not in _TERMINAL_RUN_STATUSES:
+            raise PlatformError(409, "RUN_NOT_DELETABLE")
+        with self.database:
+            self.database.execute("DELETE FROM deliveries WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM flow_outputs WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM platform_artifacts WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM platform_run_events WHERE run_id = ?", (run_id,))
+            self.database.execute("DELETE FROM platform_runs WHERE id = ? AND project_id = ?", (run_id, project_id))
+        return {"runId": run_id, "deleted": True}
+
+    def delete_runs(self, project_id: str, run_ids: list[str]) -> dict[str, Any]:
+        if not run_ids:
+            return {"runIds": [], "deletedCount": 0}
+        placeholders = ",".join("?" for _ in run_ids)
+        terminal_placeholders = ",".join("?" for _ in _TERMINAL_RUN_STATUSES)
+        rows = self.database.execute(
+            f"""
+            SELECT id FROM platform_runs
+            WHERE project_id = ?
+              AND id IN ({placeholders})
+              AND status IN ({terminal_placeholders})
+            """,
+            [project_id, *run_ids, *_TERMINAL_RUN_STATUSES],
+        ).fetchall()
+        deletable_run_ids = [row[0] for row in rows]
+        if not deletable_run_ids:
+            return {"runIds": [], "deletedCount": 0}
+        deletable_placeholders = ",".join("?" for _ in deletable_run_ids)
+        with self.database:
+            self.database.execute(
+                f"DELETE FROM deliveries WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            self.database.execute(
+                f"DELETE FROM flow_outputs WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            self.database.execute(
+                f"DELETE FROM platform_artifacts WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            self.database.execute(
+                f"DELETE FROM platform_run_events WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
+            cursor = self.database.execute(
+                f"DELETE FROM platform_runs WHERE id IN ({deletable_placeholders}) AND project_id = ?",
+                [*deletable_run_ids, project_id],
+            )
+            deleted_count = cursor.rowcount
+        return {"runIds": deletable_run_ids, "deletedCount": deleted_count}
 
     def run_response(self, run: dict[str, Any]) -> dict[str, Any]:
         agent = self.database.execute(
@@ -2283,16 +3268,19 @@ class PlatformServices:
             }
         return response
 
-    def element_validation_by_id(self, validation_id: str) -> dict[str, Any]:
+    def element_validation_by_id(
+        self, validation_id: str, project_id: str | None = None
+    ) -> dict[str, Any]:
         from .http import PlatformError
 
         row = self.database.execute(
             """
             SELECT id, project_id, environment_id, agent_id, status,
                    element_snapshot, result, error, created_at, updated_at
-            FROM element_validations WHERE id = ?
+            FROM element_validations
+            WHERE id = ? AND (? IS NULL OR project_id = ?)
             """,
-            (validation_id,),
+            (validation_id, project_id, project_id),
         ).fetchone()
         if not row:
             raise PlatformError(404, "ELEMENT_VALIDATION_NOT_FOUND")
@@ -2538,6 +3526,7 @@ class PlatformServices:
                 "completed": completed,
             },
             kind="run",
+            workspace_id=self.project_for(run["projectId"])["workspace_id"],
         )
 
     def enqueue_managed_validation(
@@ -2614,7 +3603,46 @@ class PlatformServices:
                 "completed": completed,
             },
             kind="validation",
+            workspace_id=self.project_for(validation["projectId"])["workspace_id"],
         )
+
+    def metrics(self) -> dict[str, Any]:
+        """OBS-02 service-level metrics (DB-backed, JSON)."""
+        run_counts: dict[str, int] = {}
+        for row in self.database.execute(
+            "SELECT status, COUNT(*) FROM platform_runs GROUP BY status"
+        ).fetchall():
+            run_counts[str(row[0])] = int(row[1])
+
+        delivery_counts: dict[str, int] = {}
+        for row in self.database.execute(
+            "SELECT status, COUNT(*) FROM deliveries GROUP BY status"
+        ).fetchall():
+            delivery_counts[str(row[0])] = int(row[1])
+
+        disk: dict[str, int] | None = None
+        try:
+            usage = shutil.disk_usage(str(self.data_directory))
+            disk = {"total": usage.total, "used": usage.used, "free": usage.free}
+        except Exception:
+            pass
+
+        return {
+            "runs": run_counts,
+            "deliveries": delivery_counts,
+            "disk": disk,
+            "artifactBytes": self._artifact_bytes(),
+        }
+
+    def _artifact_bytes(self) -> int:
+        total = 0
+        try:
+            for path in self.managed_runner.artifact_directory.rglob("*"):
+                if path.is_file():
+                    total += path.stat().st_size
+        except Exception:
+            pass
+        return total
 
     def redact_run_value(self, run: dict[str, Any], value: Any) -> Any:
         try:
@@ -2646,6 +3674,115 @@ class PlatformServices:
             return redact(value)
         except Exception:
             return "***"
+
+    def retention_cleanup(
+        self,
+        audit_days: int = 180,
+        run_days: int = 90,
+        artifact_days: int = 15,
+        dry_run: bool = False,
+    ) -> dict[str, int]:
+        """DATA-01 retention pass.
+
+        Removes expired artifacts (file + row), runs (cascade events/outputs/
+        artifacts), audit events, expired sessions and delivered notifications.
+        Returns counts; when ``dry_run`` is True nothing is deleted.
+        """
+        artifact_directory = self.managed_runner.artifact_directory
+
+        def cutoff(days: int) -> str:
+            return (
+                datetime.now(timezone.utc) - timedelta(days=days)
+            ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        artifact_cutoff = cutoff(artifact_days)
+        run_cutoff = cutoff(run_days)
+        audit_cutoff = cutoff(audit_days)
+
+        summary = {
+            "artifacts": 0,
+            "runs": 0,
+            "runEvents": 0,
+            "flowOutputs": 0,
+            "auditEvents": 0,
+            "sessions": 0,
+            "deliveries": 0,
+        }
+
+        def _delete_artifact_file(path_value: str | None) -> None:
+            if not path_value:
+                return
+            try:
+                candidate = Path(path_value).resolve()
+                base = Path(artifact_directory).resolve()
+                if str(candidate).startswith(str(base) + os.sep) and candidate.is_file():
+                    candidate.unlink()
+            except Exception:
+                pass
+
+        # 1. Expired artifacts (shortest retention) — file + row.
+        artifact_rows = self.database.execute(
+            "SELECT id, path FROM platform_artifacts WHERE created_at <= ?",
+            (artifact_cutoff,),
+        ).fetchall()
+        for row in artifact_rows:
+            summary["artifacts"] += 1
+            if not dry_run:
+                _delete_artifact_file(row[1])
+                self.database.execute(
+                    "DELETE FROM platform_artifacts WHERE id = ?", (row[0],)
+                )
+
+        # 2. Expired runs — cascade events/outputs/artifacts, then the run.
+        run_ids = self.database.execute(
+            "SELECT id FROM platform_runs WHERE created_at <= ?",
+            (run_cutoff,),
+        ).fetchall()
+        for run_row in run_ids:
+            run_id = run_row[0]
+            summary["runs"] += 1
+            if dry_run:
+                continue
+            run_artifact_rows = self.database.execute(
+                "SELECT id, path FROM platform_artifacts WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+            for artifact_row in run_artifact_rows:
+                _delete_artifact_file(artifact_row[1])
+                self.database.execute(
+                    "DELETE FROM platform_artifacts WHERE id = ?", (artifact_row[0],)
+                )
+            summary["runEvents"] += self.database.execute(
+                "DELETE FROM platform_run_events WHERE run_id = ?", (run_id,)
+            ).rowcount
+            summary["flowOutputs"] += self.database.execute(
+                "DELETE FROM flow_outputs WHERE run_id = ?", (run_id,)
+            ).rowcount
+            self.database.execute(
+                "DELETE FROM deliveries WHERE run_id = ?", (run_id,)
+            )
+            self.database.execute(
+                "DELETE FROM platform_runs WHERE id = ?", (run_id,)
+            )
+
+        # 3. Expired audit events.
+        summary["auditEvents"] = self.database.execute(
+            "DELETE FROM audit_events WHERE created_at <= ?", (audit_cutoff,)
+        ).rowcount
+
+        # 4. Expired sessions and delivered notifications.
+        summary["sessions"] = self.database.execute(
+            "DELETE FROM platform_sessions WHERE expires_at <= ?", (now(),)
+        ).rowcount
+        summary["deliveries"] = self.database.execute(
+            """
+            DELETE FROM deliveries
+            WHERE status IN ('delivered', 'failed') AND created_at <= ?
+            """,
+            (run_cutoff,),
+        ).rowcount
+
+        return summary
 
     def persist_flow_outputs(
         self,
@@ -2856,24 +3993,123 @@ class PlatformServices:
             raise PlatformError(400, "AGENT_BROWSER_UNSUPPORTED")
 
     def ensure_chromium_available(self) -> None:
-        global _CHROMIUM_AVAILABLE
+        import platform as _platform
+        import sys as _sys
+        global _CHROMIUM_AVAILABLE, _CHROMIUM_AVAILABLE_AT
         from .http import PlatformError
 
-        if _CHROMIUM_AVAILABLE is not None:
-            if not _CHROMIUM_AVAILABLE:
-                raise PlatformError(409, "AGENT_BROWSER_UNSUPPORTED")
-            return
-        available = False
+        now = _time.monotonic()
+        cached_value = _CHROMIUM_AVAILABLE
+        cached_at = _CHROMIUM_AVAILABLE_AT
+        if cached_value is not None and cached_at is not None:
+            ttl = (
+                _CHROMIUM_CACHE_TTL_POSITIVE
+                if cached_value
+                else _CHROMIUM_CACHE_TTL_NEGATIVE
+            )
+            if now - cached_at < ttl:
+                if not cached_value:
+                    raise PlatformError(409, "AGENT_BROWSER_UNSUPPORTED")
+                return
+        available: bool = False
+        executable: Path | None = None
+        probe_error: Exception | None = None
+        system_name: str = _platform.system()
+        browsers_root: Path = Path(
+            os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+            or (Path.home() / ".cache" / "ms-playwright")
+        )
+        # 根据平台选择 Chromium 二进制相对路径。若添加新浏览器类型，同步更新。
+        if system_name == "Linux":
+            candidate_rel = Path("chrome-linux64") / "chrome"
+        elif system_name == "Darwin":
+            candidate_rel = (
+                Path("chrome-mac") / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+            )
+        elif system_name == "Windows":
+            candidate_rel = Path("chrome-win64") / "chrome.exe"
+        else:
+            candidate_rel = Path("chrome")  # 占位，下面会抛出 unsupported platform
         try:
-            from playwright.sync_api import sync_playwright
+            # 注意：在 uvicorn async handler 中同步调用 sync_playwright() 会被
+            # Playwright 直接拒绝（"It looks like you are using Playwright Sync API
+            # inside the asyncio loop."），因此这里不启动 Playwright 运行时，
+            # 而是直接解析 Playwright 官方浏览器缓存目录结构定位二进制。
+            # 缓存位置 & 二进制相对路径已在函数外层按平台计算好（browsers_root /
+            # candidate_rel）。如果不支持的平台，在这里直接抛错走 fallback。
+            if system_name not in {"Linux", "Darwin", "Windows"}:
+                raise RuntimeError(f"Unsupported platform system={system_name!r}")
+            # Playwright 的子目录命名是 chromium-<revision_number>，取所有匹配项中
+            # 路径存在（按 mtime 取最新）的那一个。如果没有设置 PLAYWRIGHT_BROWSERS_PATH
+            # 且 ms-playwright 也不存在，可能用户用 PLAYWRIGHT_BROWSERS_PATH=/nonexistent
+            # 覆盖了默认，此时 fallback 到 async API 以兼容自定义安装。
+            found_candidates: list[Path] = []
+            if browsers_root.exists():
+                for entry in browsers_root.iterdir():
+                    if entry.is_dir() and entry.name.startswith("chromium-"):
+                        candidate = entry / candidate_rel
+                        if candidate.exists():
+                            found_candidates.append(candidate)
+            if found_candidates:
+                found_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                executable = found_candidates[0]
+                available = True
+            else:
+                # Fallback：如果目录扫描没找到（例如非标准的 PLAYWRIGHT_BROWSERS_PATH
+                # 映射、或自定义编译的 Chromium），则在新线程中通过 asyncio event loop
+                # 调用 Playwright async API 查 executable_path — 这样不会与主线程
+                # uvicorn 已运行的 event loop 冲突。
+                try:
+                    import asyncio as _asyncio
+                    import threading as _threading
 
-            with sync_playwright() as playwright:
-                executable = playwright.chromium.executable_path
-                available = bool(executable) and Path(executable).exists()
-        except Exception:
+                    async def _probe_async() -> str | None:
+                        from playwright.async_api import async_playwright
+
+                        async with async_playwright() as pw:
+                            return pw.chromium.executable_path  # type: ignore[no-any-return]
+
+                    def _runner(loop: _asyncio.AbstractEventLoop) -> str | None:
+                        future = _asyncio.run_coroutine_threadsafe(_probe_async(), loop)
+                        try:
+                            return future.result(timeout=30)
+                        finally:
+                            loop.call_soon_threadsafe(loop.stop)
+
+                    new_loop = _asyncio.new_event_loop()
+                    thread = _threading.Thread(
+                        target=new_loop.run_forever, daemon=True
+                    )
+                    thread.start()
+                    try:
+                        async_path = _runner(new_loop)
+                    finally:
+                        thread.join(timeout=5)
+                    if async_path:
+                        executable = Path(async_path)
+                        available = executable.exists()
+                except Exception as exc:  # noqa: BLE001
+                    probe_error = exc
+                    available = False
+        except Exception as exc:  # noqa: BLE001
+            probe_error = exc
             available = False
         _CHROMIUM_AVAILABLE = available
+        _CHROMIUM_AVAILABLE_AT = now
         if not available:
+            details: list[str] = [f"[autoflow:chromium] probe failed at {now:.1f}s (pid {os.getpid()})"]
+            if probe_error is not None:
+                details.append(f"  exception: {type(probe_error).__name__}: {probe_error}")
+            elif executable is None:
+                details.append("  no chromium-<rev> directory found in browsers root")
+                details.append(f"  browsers_root={browsers_root!s} (exists={browsers_root.exists()})")
+                details.append(f"  expected relative binary: {candidate_rel}")
+            else:
+                details.append(f"  executable not found on disk: {executable}")
+                details.append(f"  file exists={executable.exists()}, parent exists={executable.parent.exists()}")
+            details.append(f"  system={system_name} HOME={os.environ.get('HOME')!r} PLAYWRIGHT_BROWSERS_PATH={os.environ.get('PLAYWRIGHT_BROWSERS_PATH')!r}")
+            _sys.stderr.write("\n".join(details) + "\n")
+            _sys.stderr.flush()
             raise PlatformError(409, "AGENT_BROWSER_UNSUPPORTED")
 
     def put_document(
@@ -3002,7 +4238,7 @@ class PlatformServices:
                 categories[category] = categories.get(category, 0) + 1
 
             for event in events:
-                if event["kind"] != "step.completed":
+                if event["kind"] not in ("step.completed", "step.succeeded"):
                     continue
                 duration_ms = event["data"].get("durationMs")
                 try:

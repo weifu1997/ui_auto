@@ -68,6 +68,63 @@ if spec["datasetVersionId"]:
 # Insert only after every selected spec has passed preflight.
 ```
 
+## Scenario: Run Record Deletion
+
+### 1. Scope / Trigger
+
+- Trigger: deleting one or more run records crosses the Runs page, Platform API, service transaction, project boundary, dependent run tables, and audit trail.
+
+### 2. Signatures
+
+- `DELETE /api/platform/projects/{project_id}/runs/{run_id}`
+- `POST /api/platform/projects/{project_id}/runs/batch-delete` with `{ runIds: string[] }` (1-100 entries).
+- Service owners: `PlatformServices.delete_run(project_id, run_id)` and `delete_runs(project_id, run_ids)`.
+
+### 3. Contracts
+
+- Both routes require `run.execute`. Only terminal runs (`success`, `failed`, `canceled`) are deletable; queued/running work must first use the cancel lifecycle.
+- Resolve the deletable ID set with both `project_id` and terminal status before deleting anything. Use that resolved set for `deliveries`, `flow_outputs`, `platform_artifacts`, `platform_run_events`, and `platform_runs`; never use raw request IDs for dependent-table deletes.
+- Single delete returns `{ runId, deleted: true }`. Batch delete returns only IDs actually deleted: `{ runIds, deletedCount }`.
+- A successful delete writes `run.deleted` with IDs/count only. The frontend updates local state only after API success and must surface API failure instead of reporting a false success.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Empty/non-array `runIds`, blank ID, malformed JSON, or more than 100 IDs | `RUN_DELETE_INPUT_INVALID` |
+| Single run is absent or belongs to another project | `RUN_NOT_FOUND` |
+| Single run is queued/running | `RUN_NOT_DELETABLE` (409) |
+| Batch includes absent, foreign-project, or active IDs | Skip those IDs; return only the terminal current-project IDs actually deleted |
+
+### 5. Good / Base / Bad Cases
+
+- Good: deleting terminal runs removes their events/artifacts and returns the deleted IDs/count.
+- Base: a stale batch containing missing IDs deletes the remaining eligible current-project records without inventing success for skipped IDs.
+- Bad: deleting dependent rows using raw request IDs can erase another project's events/artifacts even when the final `platform_runs` delete is project-scoped.
+
+### 6. Tests Required
+
+- `test_batch_delete_runs.py`: route availability, capability path, single/batch responses, active-run rejection, dependent-row cleanup, and foreign-project preservation.
+- `batch-delete.test.tsx`: terminal selection and visible single/batch commands; add a rejection case whenever Runs page error handling changes.
+- Assert the UI does not remove local rows or show success after a Platform delete rejects.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+database.execute("DELETE FROM platform_run_events WHERE run_id IN (...)" , request_run_ids)
+database.execute("DELETE FROM platform_runs WHERE project_id = ? AND id IN (...)" , params)
+```
+
+#### Correct
+
+```python
+deletable_ids = select_terminal_run_ids(project_id, request_run_ids)
+delete_run_dependencies(deletable_ids)
+delete_project_runs(project_id, deletable_ids)
+```
+
 ## Scenario: Browser Recording Sessions
 
 ### 1. Scope / Trigger

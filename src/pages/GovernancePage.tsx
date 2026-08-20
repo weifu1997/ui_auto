@@ -4,7 +4,7 @@ import type { Project } from "../mock-data";
 import { getPlatformAnalytics, getPlatformAuditEvents } from "../platform-api";
 import type { PlatformAnalytics, PlatformAnalyticsQuery, PlatformAuditEvent, PlatformAuditQuery, PlatformSession } from "../platform-api";
 import { readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
-import { PageHeading, PlatformProjectRequired } from "./shared";
+import { FilterBar, FilterItem, MetricCard, PageHeading, PlatformProjectRequired } from "./shared";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Button, DatePicker, Empty, Input, Select, Table, Tag, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";
@@ -101,17 +101,25 @@ export function GovernancePage({ project }: { project: Project }) {
   return (
     <>
       <PageHeading title="治理分析" description="聚合已冻结运行快照、步骤事件和发布审计；质量指标不读取密钥或原始通知配置。" actions={<Tooltip title="刷新治理数据"><Button icon={<ReloadOutlined />} aria-label="刷新治理数据" loading={loading} onClick={() => void loadGovernance()} /></Tooltip>} />
-      <div className="audit-filters">
-        <Select aria-label="时间窗口" value={analyticsQuery.window ?? 0} onChange={(value) => { setAnalyticsQuery((query) => ({ ...query, window: value || undefined, from: undefined, to: undefined })); setAnalyticsRangeKey((key) => key + 1); }} options={[{ value: 7, label: "近 7 天" }, { value: 14, label: "近 14 天" }, { value: 30, label: "近 30 天" }, { value: 0, label: "全部" }]} style={{ width: 110 }} />
-        <DatePicker.RangePicker key={analyticsRangeKey} showTime format="YYYY-MM-DD HH:mm" onChange={(dates) => setAnalyticsQuery((query) => ({ ...query, window: undefined, from: dates?.[0]?.toISOString(), to: dates?.[1]?.toISOString() }))} />
-        <Select aria-label="趋势周期" value={analyticsQuery.period ?? "day"} onChange={(value) => setAnalyticsQuery((query) => ({ ...query, period: value as "day" | "week" }))} options={[{ value: "day", label: "按日" }, { value: "week", label: "按周" }]} style={{ width: 90 }} />
-        <Select aria-label="失败归类维度" value={analyticsQuery.categoryBy ?? "message"} onChange={(value) => setAnalyticsQuery((query) => ({ ...query, categoryBy: value as "message" | "code" | "step" }))} options={[{ value: "message", label: "归类:消息" }, { value: "code", label: "归类:错误码" }, { value: "step", label: "归类:步骤" }]} style={{ width: 130 }} />
-      </div>
+      <FilterBar>
+        <FilterItem label="时间窗口">
+          <Select aria-label="时间窗口" value={analyticsQuery.window ?? 0} onChange={(value) => { setAnalyticsQuery((query) => ({ ...query, window: value || undefined, from: undefined, to: undefined })); setAnalyticsRangeKey((key) => key + 1); }} options={[{ value: 7, label: "近 7 天" }, { value: 14, label: "近 14 天" }, { value: 30, label: "近 30 天" }, { value: 0, label: "全部" }]} style={{ width: 110 }} />
+        </FilterItem>
+        <FilterItem label="区间">
+          <DatePicker.RangePicker key={analyticsRangeKey} showTime format="YYYY-MM-DD HH:mm" onChange={(dates) => setAnalyticsQuery((query) => ({ ...query, window: undefined, from: dates?.[0]?.toISOString(), to: dates?.[1]?.toISOString() }))} />
+        </FilterItem>
+        <FilterItem label="趋势周期">
+          <Select aria-label="趋势周期" value={analyticsQuery.period ?? "day"} onChange={(value) => setAnalyticsQuery((query) => ({ ...query, period: value as "day" | "week" }))} options={[{ value: "day", label: "按日" }, { value: "week", label: "按周" }]} style={{ width: 90 }} />
+        </FilterItem>
+        <FilterItem label="归类维度">
+          <Select aria-label="失败归类维度" value={analyticsQuery.categoryBy ?? "message"} onChange={(value) => setAnalyticsQuery((query) => ({ ...query, categoryBy: value as "message" | "code" | "step" }))} options={[{ value: "message", label: "归类:消息" }, { value: "code", label: "归类:错误码" }, { value: "step", label: "归类:步骤" }]} style={{ width: 130 }} />
+        </FilterItem>
+      </FilterBar>
       <section className="metric-grid governance-metrics">
-        <div className="surface metric-card"><span>运行总数</span><strong>{summary.totalRuns}</strong><small>{windowText}{deltaTag(summary.totalRuns, previous?.totalRuns, true)}</small></div>
-        <div className="surface metric-card"><span>成功率</span><strong>{summary.successRate}%</strong><small>已结束运行{deltaTag(summary.successRate, previous?.successRate, true)}</small></div>
-        <div className="surface metric-card"><span>失败率</span><strong>{summary.failedRate}%</strong><small>占总运行比例{deltaTag(summary.failedRate, previous?.failedRate, false)}</small></div>
-        <div className="surface metric-card"><span>取消率</span><strong>{summary.canceledRate}%</strong><small>占总运行比例{deltaTag(summary.canceledRate, previous?.canceledRate, false)}</small></div>
+        <MetricCard label="运行总数" value={summary.totalRuns} detail={<>{windowText}{deltaTag(summary.totalRuns, previous?.totalRuns, true)}</>} />
+        <MetricCard label="成功率" value={`${summary.successRate}%`} tone="success" detail={<>已结束运行{deltaTag(summary.successRate, previous?.successRate, true)}</>} />
+        <MetricCard label="失败率" value={`${summary.failedRate}%`} tone="warning" detail={<>占总运行比例{deltaTag(summary.failedRate, previous?.failedRate, false)}</>} />
+        <MetricCard label="取消率" value={`${summary.canceledRate}%`} detail={<>占总运行比例{deltaTag(summary.canceledRate, previous?.canceledRate, false)}</>} />
       </section>
       <div className="governance-grid">
         <section className="surface governance-panel"><div className="panel-heading"><div><h2>执行趋势</h2><span>按{analyticsQuery.period === "week" ? "周" : "日"}汇总的运行结果</span></div></div><Table size="small" loading={loading} rowKey="date" pagination={false} dataSource={trend.slice(-10)} columns={[{ title: analyticsQuery.period === "week" ? "周" : "日期", dataIndex: "date" }, { title: "总计", dataIndex: "total", width: 70 }, { title: "通过", dataIndex: "success", width: 70 }, { title: "失败", dataIndex: "failed", width: 70 }, { title: "取消", dataIndex: "canceled", width: 70 }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无已结束运行" /> }} /></section>

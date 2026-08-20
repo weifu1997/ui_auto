@@ -7,6 +7,8 @@ export type ApiRun = Run;
 type RunStore = {
   apiRuns: Record<string, ApiRun[]>;
   upsertRun: (projectId: string, run: ApiRun) => void;
+  removeRuns: (projectId: string, runIds: string[]) => void;
+  removeRun: (projectId: string, runId: string) => void;
 };
 
 export const useRunStore = create<RunStore>()(
@@ -23,6 +25,27 @@ export const useRunStore = create<RunStore>()(
               [projectId]: exists
                 ? current.map((item) => (item.id === run.id ? { ...item, ...run } : item))
                 : [run, ...current],
+            },
+          };
+        }),
+      removeRuns: (projectId, runIds) =>
+        set((state) => {
+          const current = state.apiRuns[projectId] ?? [];
+          const idSet = new Set(runIds);
+          return {
+            apiRuns: {
+              ...state.apiRuns,
+              [projectId]: current.filter((item) => !idSet.has(item.id)),
+            },
+          };
+        }),
+      removeRun: (projectId, runId) =>
+        set((state) => {
+          const current = state.apiRuns[projectId] ?? [];
+          return {
+            apiRuns: {
+              ...state.apiRuns,
+              [projectId]: current.filter((item) => item.id !== runId),
             },
           };
         }),

@@ -10,10 +10,88 @@ export async function getPlatformHealth(signal?: AbortSignal) {
   return (await response.json()) as { ok: boolean; queue?: string };
 }
 
+export type PlatformGlobalRole = "super_admin" | null;
+export type PlatformWorkspaceRole = "super_admin" | "admin" | "member";
+export const platformCapabilities = [
+  "project.view",
+  "project.edit",
+  "project.manage",
+  "flow.edit",
+  "element.manage",
+  "variable.manage",
+  "environment.manage",
+  "secret.manage",
+  "release.submit",
+  "release.publish",
+  "run.execute",
+  "dataset.manage",
+  "automation.manage",
+  "member.manage",
+  "invite.manage",
+  "workspace.manage",
+  "account.manage",
+] as const;
+export type PlatformCapability = typeof platformCapabilities[number];
+
+export type PlatformSessionUser = {
+  id: string;
+  email: string;
+  name: string;
+  globalRole: PlatformGlobalRole;
+};
+
+export type PlatformWorkspace = {
+  id: string;
+  name: string;
+  role: PlatformWorkspaceRole;
+  capabilities: PlatformCapability[];
+};
+
+export type CreatedPlatformWorkspace = Pick<PlatformWorkspace, "id" | "name"> & {
+  createdAt: string;
+};
+
 export type PlatformSession = {
   token: string;
-  user: { id: string; email: string; name: string };
-  workspaces: Array<{ id: string; name: string; role: string }>;
+  user: PlatformSessionUser;
+  workspaces: PlatformWorkspace[];
+};
+
+export type PlatformWorkspaceMember = {
+  id: string;
+  email: string;
+  name: string;
+  enabled: boolean;
+  globalRole: PlatformGlobalRole;
+  role: Exclude<PlatformWorkspaceRole, "super_admin">;
+  createdAt: string;
+};
+
+export type PlatformWorkspaceInvitation = {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: Exclude<PlatformWorkspaceRole, "super_admin">;
+  createdBy: string;
+  expiresAt: string;
+  createdAt: string;
+  revokedAt: string | null;
+  consumedAt: string | null;
+  status: "active" | "consumed" | "revoked" | "expired";
+};
+
+export type CreatedPlatformWorkspaceInvitation = Pick<
+  PlatformWorkspaceInvitation,
+  "id" | "workspaceId" | "email" | "role" | "expiresAt"
+> & { token: string };
+
+export type PlatformAccount = {
+  id: string;
+  email: string;
+  name: string;
+  enabled: boolean;
+  globalRole: PlatformGlobalRole;
+  createdAt: string;
 };
 
 export type PlatformProject = {
@@ -43,7 +121,82 @@ export type PlatformResource<T = Record<string, unknown>> = {
   updatedAt: string;
   updatedBy: string;
 };
-export type PlatformTemplate = { id: string; name: string; description: string; category: string; sourceProjectId?: string; sourceRevisionId?: string; createdBy?: string; createdAt: string; updatedAt: string; favorite: boolean; snapshot?: Record<string, unknown> };
+export type PlatformTemplateSnapshot = {
+  flow?: {
+    id?: string;
+    name?: string;
+    steps?: Array<{
+      id?: string;
+      element?: string;
+      elementId?: string;
+      action?: string;
+      value?: string;
+      [key: string]: unknown;
+    }>;
+    secretNames?: string[];
+    [key: string]: unknown;
+  };
+  elements?: Array<{
+    id: string;
+    name: string;
+    environment?: string;
+    method?: string;
+    value?: string;
+    selector?: string;
+    [key: string]: unknown;
+  }>;
+  variables?: Array<{
+    id: string;
+    name: string;
+    scope?: string;
+    secret?: boolean;
+    value?: string;
+    [key: string]: unknown;
+  }>;
+  environments?: Array<{
+    id?: string;
+    name?: string;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
+
+export type PlatformTemplateConflict = {
+  resourceType: string;
+  originalName: string;
+  newName: string;
+};
+
+export type TemplateApplyCandidate = {
+  id: string;
+  name: string;
+  selector: string;
+  method: string;
+  environment?: string;
+};
+
+export type TemplateApplySelection = {
+  flow?: boolean;
+  elements?: string[] | boolean;
+  variables?: string[] | boolean;
+  environments?: string[] | boolean;
+};
+
+export type TemplateApplyInput = {
+  projectId: string;
+  selection?: TemplateApplySelection;
+  elementMappings?: Record<string, string | null>;
+};
+
+export type TemplateApplyResult = {
+  templateId: string;
+  projectId: string;
+  created: Record<string, string[]>;
+  conflicts?: PlatformTemplateConflict[];
+  warnings?: string[];
+};
+
+export type PlatformTemplate = { id: string; name: string; description: string; category: string; sourceProjectId?: string; sourceRevisionId?: string; createdBy?: string; createdAt: string; updatedAt: string; favorite: boolean; snapshot?: PlatformTemplateSnapshot };
 
 export type PlatformRevision = {
   id: string;
@@ -299,16 +452,6 @@ export async function loginPlatform(input: { email: string; password: string; na
   return { ...session, token: "cookie" } satisfies PlatformSession;
 }
 
-export async function registerPlatform(input: { email: string; password: string; name?: string }) {
-  await request<{ token: string; user: PlatformSession["user"] }>("/auth/register", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  bumpSessionGeneration();
-  const session = await request<Omit<PlatformSession, "token">>("/auth/session");
-  return { ...session, token: "cookie" } satisfies PlatformSession;
-}
-
 export function logoutPlatform() {
   bumpSessionGeneration();
   return request<{ loggedOut: true }>("/auth/logout", { method: "POST" }, "cookie");
@@ -318,6 +461,124 @@ export async function restorePlatformSession() {
   const session = await request<Omit<PlatformSession, "token">>("/auth/session");
   bumpSessionGeneration();
   return { ...session, token: "cookie" } satisfies PlatformSession;
+}
+
+export function acceptWorkspaceInvitation(input: {
+  token: string;
+  email: string;
+  password?: string;
+  name?: string;
+}) {
+  return request<{
+    accepted: true;
+    newAccount: boolean;
+    user: PlatformSessionUser;
+  }>("/auth/invitations/accept", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function acceptPlatformPasswordReset(input: { token: string; password: string }) {
+  return request<{ reset: true }>("/auth/password-resets/accept", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getWorkspaceMembers(token: string, workspaceId: string) {
+  return request<{ members: PlatformWorkspaceMember[] }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/members`,
+    {},
+    token,
+  );
+}
+
+export function updateWorkspaceMemberRole(
+  token: string,
+  workspaceId: string,
+  memberId: string,
+  role: PlatformWorkspaceMember["role"],
+) {
+  return request<{ member: PlatformWorkspaceMember }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`,
+    { method: "PATCH", body: JSON.stringify({ role }) },
+    token,
+  );
+}
+
+export function removeWorkspaceMember(token: string, workspaceId: string, memberId: string) {
+  return request<{ removed: true }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export function getWorkspaceInvitations(token: string, workspaceId: string) {
+  return request<{ invitations: PlatformWorkspaceInvitation[] }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+    {},
+    token,
+  );
+}
+
+export function createWorkspaceInvitation(
+  token: string,
+  workspaceId: string,
+  input: Pick<PlatformWorkspaceInvitation, "email" | "role">,
+) {
+  return request<{ invitation: CreatedPlatformWorkspaceInvitation }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function revokeWorkspaceInvitation(
+  token: string,
+  workspaceId: string,
+  invitationId: string,
+) {
+  return request<{ revoked: true }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}/revoke`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function createPlatformWorkspace(token: string, name: string) {
+  return request<{ workspace: CreatedPlatformWorkspace }>(
+    "/workspaces",
+    { method: "POST", body: JSON.stringify({ name }) },
+    token,
+  );
+}
+
+export function getPlatformAccounts(token: string) {
+  return request<{ accounts: PlatformAccount[] }>("/admin/accounts", {}, token);
+}
+
+export function updatePlatformAccount(
+  token: string,
+  accountId: string,
+  input: { enabled: boolean } | { globalRole: PlatformGlobalRole },
+) {
+  return request<{ account: PlatformAccount }>(
+    `/admin/accounts/${encodeURIComponent(accountId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function issuePlatformPasswordReset(token: string, accountId: string) {
+  return request<{
+    passwordReset: { id: string; token: string; expiresAt: string };
+  }>(
+    `/admin/accounts/${encodeURIComponent(accountId)}/password-reset`,
+    { method: "POST" },
+    token,
+  );
 }
 
 export function importLocalWorkspace(
@@ -419,8 +680,33 @@ export function favoritePlatformTemplate(token: string, templateId: string, favo
   return request<{ templateId: string; favorite: boolean }>(`/platform/templates/${encodeURIComponent(templateId)}/favorite`, { method: favorite ? "POST" : "DELETE" }, token);
 }
 
-export function applyPlatformTemplate(token: string, templateId: string, projectId: string) {
-  return request<{ templateId: string; projectId: string; created: Record<string, string[]> }>(`/platform/templates/${encodeURIComponent(templateId)}/apply`, { method: "POST", body: JSON.stringify({ projectId }) }, token);
+export function rePublishPlatformTemplate(token: string, templateId: string, revisionId: string) {
+  return request<{ template: PlatformTemplate }>(
+    `/platform/templates/${encodeURIComponent(templateId)}/re-publish`,
+    { method: "POST", body: JSON.stringify({ revisionId }) },
+    token,
+  );
+}
+
+export function getTemplateApplyCandidates(token: string, templateId: string, projectId: string) {
+  return request<{ candidates: TemplateApplyCandidate[] }>(
+    `/platform/templates/${encodeURIComponent(templateId)}/apply-candidates?projectId=${encodeURIComponent(projectId)}`,
+    {},
+    token,
+  );
+}
+
+export function applyPlatformTemplate(
+  token: string,
+  templateId: string,
+  input: string | TemplateApplyInput,
+) {
+  const body = typeof input === "string" ? { projectId: input } : input;
+  return request<TemplateApplyResult>(
+    `/platform/templates/${encodeURIComponent(templateId)}/apply`,
+    { method: "POST", body: JSON.stringify(body) },
+    token,
+  );
 }
 
 export function getPlatformProjectDocument(token: string, projectId: string) {
@@ -630,6 +916,25 @@ export function retryPlatformRun(token: string, projectId: string, runId: string
   return request<{ runIds: string[]; runs: PlatformRun[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/retry`,
     { method: "POST" },
+    token,
+  );
+}
+
+export function deletePlatformRun(token: string, projectId: string, runId: string) {
+  return request<{ runId: string; deleted: boolean }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export function deletePlatformRuns(token: string, projectId: string, runIds: string[]) {
+  return request<{ runIds: string[]; deletedCount: number }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/batch-delete`,
+    {
+      method: "POST",
+      body: JSON.stringify({ runIds }),
+    },
     token,
   );
 }

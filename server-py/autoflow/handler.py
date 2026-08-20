@@ -31,7 +31,12 @@ from .resources import as_record, public_resource_data
 from .revisions import revision_number
 from .revision_snapshot import canonical_checksum
 from .services import PlatformServices
-from .templates import rewrite_template_references
+from .templates import (
+    extract_flow_element_references,
+    extract_flow_variable_references,
+    rewrite_flow_placeholders_and_elements,
+    rewrite_template_references,
+)
 
 
 RESOURCE_CAPABILITIES = {
@@ -203,76 +208,10 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
 
     @router.api_route("/api/auth/register", methods=["POST"])
     async def register(request: Request) -> Response:
-        body = await request.json()
-        if not isinstance(body, dict):
-            body = {}
-        email = _text(body.get("email")).strip().lower()
-        password = _text(body.get("password")).strip()
-        if (
-            not email
-            or "@" not in email
-            or not password
-            or len(password) < 8
-            or len(password) > 1024
-        ):
-            raise PlatformError(400, "REGISTER_INPUT_INVALID")
-        existing = services.database.execute(
-            """
-            SELECT user_id FROM platform_user_credentials
-            WHERE user_id IN (SELECT id FROM platform_users WHERE email = ?)
-            """,
-            (email,),
-        ).fetchone()
-        if existing:
-            raise PlatformError(409, "EMAIL_ALREADY_REGISTERED")
-        user = {
-            "id": str(uuid.uuid4()),
-            "email": email,
-            "name": _text(body.get("name")).strip()[:100] or email.split("@")[0],
-        }
-        services.database.execute("BEGIN IMMEDIATE")
-        try:
-            services.database.execute(
-                """
-                INSERT INTO platform_users (id, email, name, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user["id"], user["email"], user["name"], now()),
-            )
-            created = now()
-            services.database.execute(
-                """
-                INSERT INTO platform_user_credentials
-                  (user_id, password_hash, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user["id"], password_hash(password), created, created),
-            )
-            from .services import AuthUser
-
-            workspace = services.create_workspace(
-                AuthUser(user["id"], user["email"], user["name"]),
-                f"{user['name']}'s workspace",
-            )
-            services.audit(
-                workspace["id"],
-                {"type": "user", "id": user["id"]},
-                "auth.registered",
-                {"type": "user", "id": user["id"]},
-                {"email": email, "ip": _client_ip(request)},
-            )
-            services.database.execute("COMMIT")
-        except Exception:
-            services.database.execute("ROLLBACK")
-            raise
-        session = services.create_auth_session(
-            AuthUser(user["id"], user["email"], user["name"])
-        )
-        response = _send(Response(), 201, session)
-        response.headers["set-cookie"] = set_session_cookie(
-            session["token"], session["expiresAt"]
-        )
-        return response
+        # Bootstrap and invitation acceptance are the only account creation
+        # paths. Keeping this route as a stable terminal error avoids silently
+        # re-opening public registration through stale clients.
+        raise PlatformError(410, "REGISTRATION_DISABLED")
 
     @router.api_route("/api/auth/login", methods=["POST"])
     async def login(request: Request) -> Response:
@@ -298,7 +237,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             raise PlatformError(400, "LOGIN_INPUT_INVALID")
         user_row = services.database.execute(
             """
-            SELECT id, email, name FROM platform_users
+            SELECT id, email, name, global_role FROM platform_users
             WHERE email = ? AND enabled = 1
             """,
             (email,),
@@ -333,7 +272,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             raise PlatformError(401, "LOGIN_INVALID")
         from .services import AuthUser
 
-        user = AuthUser(user_row[0], user_row[1], user_row[2])
+        user = AuthUser(user_row[0], user_row[1], user_row[2], user_row[3])
         session = services.create_auth_session(user)
         login_workspace = services.database.execute(
             """
@@ -355,6 +294,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         response.headers["set-cookie"] = set_session_cookie(
             session["token"], session["expiresAt"]
         )
+        response.headers["cache-control"] = "no-store"
         return response
 
     @router.api_route("/api/auth/logout", methods=["POST"])
@@ -399,10 +339,165 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             Response(),
             200,
             {
-                "user": {"id": user.id, "email": user.email, "name": user.name},
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.name,
+                    "globalRole": user.global_role,
+                },
                 "workspaces": services.workspaces_for_user(user.id),
             },
         )
+
+    @router.api_route("/api/auth/invitations/accept", methods=["POST"])
+    async def accept_invitation(request: Request) -> Response:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        current_user = None
+        try:
+            current_user = services.session_user(dict(request.headers))
+        except PlatformError:
+            # A new account does not have a session yet. The invitation service
+            # still validates a supplied stale session as an anonymous request.
+            pass
+        user, created = services.accept_workspace_invitation(
+            _text(body.get("token")),
+            _text(body.get("email")),
+            _text(body.get("password")) or None,
+            _text(body.get("name")) or None,
+            current_user,
+        )
+        result = {
+            "accepted": True,
+            "newAccount": created,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "globalRole": user.global_role,
+            },
+        }
+        response = _send(Response(), 201 if created else 200, result)
+        if created:
+            session = services.create_auth_session(user)
+            response.headers["set-cookie"] = set_session_cookie(
+                session["token"], session["expiresAt"]
+            )
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route("/api/auth/password-resets/accept", methods=["POST"])
+    async def accept_password_reset(request: Request) -> Response:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        services.accept_password_reset(
+            _text(body.get("token")), _text(body.get("password"))
+        )
+        response = _send(Response(), 200, {"reset": True})
+        response.headers["set-cookie"] = clear_session_cookie()
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route("/api/admin/accounts", methods=["GET"])
+    async def accounts(request: Request) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_super_admin(user.id)
+        return _send(Response(), 200, {"accounts": services.accounts()})
+
+    @router.api_route("/api/admin/accounts/{account_id}", methods=["PATCH"])
+    async def account_detail(request: Request, account_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_super_admin(user.id)
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        if isinstance(body.get("enabled"), bool):
+            account = services.set_account_enabled(account_id, body["enabled"], user.id)
+        elif body.get("globalRole") in (None, "super_admin") and "globalRole" in body:
+            account = services.set_account_global_role(
+                account_id, body.get("globalRole"), user.id
+            )
+        else:
+            raise PlatformError(400, "ACCOUNT_UPDATE_INVALID")
+        return _send(Response(), 200, {"account": account})
+
+    @router.api_route(
+        "/api/admin/accounts/{account_id}/password-reset", methods=["POST"]
+    )
+    async def issue_password_reset(request: Request, account_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_super_admin(user.id)
+        reset = services.issue_password_reset(account_id, user.id)
+        response = _send(Response(), 201, {"passwordReset": reset})
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route("/api/workspaces/{workspace_id}/members", methods=["GET"])
+    async def workspace_members(request: Request, workspace_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "member.manage")
+        return _send(
+            Response(), 200, {"members": services.workspace_members(workspace_id)}
+        )
+
+    @router.api_route(
+        "/api/workspaces/{workspace_id}/members/{member_id}",
+        methods=["PATCH", "DELETE"],
+    )
+    async def workspace_member_detail(
+        request: Request, workspace_id: str, member_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "member.manage")
+        if request.method == "DELETE":
+            services.remove_workspace_member(workspace_id, member_id, user.id)
+            return _send(Response(), 200, {"removed": True})
+        body = await request.json()
+        if not isinstance(body, dict) or not isinstance(body.get("role"), str):
+            raise PlatformError(400, "WORKSPACE_ROLE_INVALID")
+        member = services.update_workspace_member_role(
+            workspace_id, member_id, body["role"], user.id
+        )
+        return _send(Response(), 200, {"member": member})
+
+    @router.api_route(
+        "/api/workspaces/{workspace_id}/invitations", methods=["GET", "POST"]
+    )
+    async def workspace_invitations(request: Request, workspace_id: str) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "invite.manage")
+        if request.method == "GET":
+            return _send(
+                Response(),
+                200,
+                {"invitations": services.workspace_invitations(workspace_id)},
+            )
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        invitation = services.create_workspace_invitation(
+            workspace_id,
+            user.id,
+            _text(body.get("email")),
+            _text(body.get("role")),
+        )
+        response = _send(Response(), 201, {"invitation": invitation})
+        response.headers["cache-control"] = "no-store"
+        return response
+
+    @router.api_route(
+        "/api/workspaces/{workspace_id}/invitations/{invitation_id}/revoke",
+        methods=["POST"],
+    )
+    async def revoke_workspace_invitation(
+        request: Request, workspace_id: str, invitation_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_workspace_capability(workspace_id, user.id, "invite.manage")
+        services.revoke_workspace_invitation(workspace_id, invitation_id, user.id)
+        return _send(Response(), 200, {"revoked": True})
 
     @router.api_route("/api/workspaces", methods=["GET", "POST"])
     async def workspaces(request: Request) -> Response:
@@ -416,6 +511,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         body = await request.json()
         if not isinstance(body, dict) or not _text(body.get("name")).strip():
             raise PlatformError(400, "WORKSPACE_NAME_REQUIRED")
+        services.require_super_admin(user.id)
         return _send(
             Response(),
             201,
@@ -425,8 +521,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     @router.api_route("/api/workspaces/{workspace_id}/projects", methods=["GET", "POST"])
     async def workspace_projects(request: Request, workspace_id: str) -> Response:
         user = services.session_user(dict(request.headers))
-        services.require_workspace_role(workspace_id, user.id)
         if request.method == "GET":
+            services.require_workspace_role(workspace_id, user.id)
             archived_only = request.query_params.get("archived") == "1"
             query = """
                 SELECT id, workspace_id, source_project_id, slug, name, description,
@@ -458,6 +554,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             ]
             return _send(Response(), 200, {"projects": projects})
 
+        services.require_workspace_capability(workspace_id, user.id, "project.manage")
         body = await request.json()
         if not isinstance(body, dict) or not _text(body.get("name")).strip():
             raise PlatformError(400, "PROJECT_NAME_REQUIRED")
@@ -680,7 +777,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             result = services.require_project_role(project_id, user.id)
         else:
             result = services.require_project_capability(
-                project_id, user.id, "project.edit"
+                project_id, user.id, "project.manage"
             )
         project = result["project"]
         if request.method == "GET":
@@ -722,9 +819,16 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             """
             UPDATE platform_projects
             SET name = ?, description = ?, archived_at = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND workspace_id = ?
             """,
-            (name, description, archived_at, now(), project_id),
+            (
+                name,
+                description,
+                archived_at,
+                now(),
+                project_id,
+                project["workspace_id"],
+            ),
         )
         services.audit(
             project["workspace_id"],
@@ -765,8 +869,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             project_id, data, body.get("expectedVersion")
         )
         services.database.execute(
-            "UPDATE platform_projects SET updated_at = ? WHERE id = ?",
-            (now(), project_id),
+            """
+            UPDATE platform_projects SET updated_at = ?
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (now(), project_id, project["workspace_id"]),
         )
         services.audit(
             project["workspace_id"],
@@ -952,15 +1059,18 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     }
                 },
             )
+        services.require_workspace_role(template[1], user.id)
         if template[6] != user.id:
-            services.require_workspace_role(template[1], user.id, True)
+            services.require_workspace_capability(
+                template[1], user.id, "project.manage"
+            )
         if request.method == "DELETE":
             services.database.execute(
                 """
                 UPDATE internal_templates SET deleted_at = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND workspace_id = ?
                 """,
-                (now(), now(), template_id),
+                (now(), now(), template_id, template[1]),
             )
             services.audit(
                 template[1],
@@ -983,9 +1093,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             """
             UPDATE internal_templates
             SET name = ?, description = ?, category = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND workspace_id = ?
             """,
-            (name, description, category, updated_at, template_id),
+            (name, description, category, updated_at, template_id, template[1]),
         )
         services.audit(
             template[1],
@@ -1054,6 +1164,157 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         )
 
     @router.api_route(
+        "/api/platform/templates/{template_id}/re-publish", methods=["POST"]
+    )
+    async def template_republish(
+        request: Request, template_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        template = services.database.execute(
+            """
+            SELECT id, workspace_id, name, description, category,
+                   snapshot, created_by, source_project_id,
+                   source_revision_id, created_at, updated_at
+            FROM internal_templates WHERE id = ? AND deleted_at IS NULL
+            """,
+            (template_id,),
+        ).fetchone()
+        if not template:
+            raise PlatformError(404, "TEMPLATE_NOT_FOUND")
+        if template[6] != user.id:
+            services.require_workspace_role(template[1], user.id, True)
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        revision_id = _text(body.get("revisionId")).strip()
+        if not revision_id:
+            raise PlatformError(400, "REVISION_ID_REQUIRED")
+        source_project_id = template[7]
+        services.require_project_capability(
+            source_project_id, user.id, "release.publish"
+        )
+        revision = services.database.execute(
+            """
+            SELECT id, status, flow_snapshot, environment_snapshot,
+                   element_snapshot
+            FROM flow_revisions WHERE id = ? AND project_id = ?
+            """,
+            (revision_id, source_project_id),
+        ).fetchone()
+        if not revision or revision[1] != "published":
+            raise PlatformError(409, "PUBLISHED_REVISION_REQUIRED")
+        variables = services.database.execute(
+            """
+            SELECT data FROM project_resources
+            WHERE project_id = ? AND resource_type = 'variables'
+              AND archived_at IS NULL
+            """,
+            (source_project_id,),
+        ).fetchall()
+        snapshot = {
+            "flow": parse_json(revision[2], {}),
+            "environments": [parse_json(revision[3], {})],
+            "elements": parse_json(revision[4], []),
+            "variables": [
+                public_resource_data(parse_json(row[0], {})) for row in variables
+            ],
+        }
+        updated_at = now()
+        services.database.execute(
+            """
+            UPDATE internal_templates
+            SET snapshot = ?, source_revision_id = ?, updated_at = ?
+            WHERE id = ? AND workspace_id = ? AND source_project_id = ?
+            """,
+            (
+                json(snapshot),
+                revision_id,
+                updated_at,
+                template_id,
+                template[1],
+                source_project_id,
+            ),
+        )
+        services.audit(
+            template[1],
+            {"type": "user", "id": user.id},
+            "template.republished",
+            {"type": "template", "id": template_id},
+            {"sourceRevisionId": revision_id},
+            source_project_id,
+        )
+        return _send(
+            Response(),
+            200,
+            {
+                "template": {
+                    "id": template_id,
+                    "name": template[2],
+                    "description": template[3],
+                    "category": template[4],
+                    "snapshot": snapshot,
+                    "sourceProjectId": template[7],
+                    "sourceRevisionId": revision_id,
+                    "createdBy": template[6],
+                    "createdAt": template[9],
+                    "updatedAt": updated_at,
+                }
+            },
+        )
+
+    @router.api_route(
+        "/api/platform/templates/{template_id}/apply-candidates",
+        methods=["GET"],
+    )
+    async def template_apply_candidates(
+        request: Request, template_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        template = services.database.execute(
+            """
+            SELECT id, workspace_id FROM internal_templates
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (template_id,),
+        ).fetchone()
+        if not template:
+            raise PlatformError(404, "TEMPLATE_NOT_FOUND")
+        project_id = request.query_params.get("projectId", "").strip()
+        if not project_id:
+            raise PlatformError(400, "PROJECT_ID_REQUIRED")
+        result = services.require_project_capability(
+            project_id, user.id, "flow.edit"
+        )
+        project = result["project"]
+        if project["workspace_id"] != template[1]:
+            raise PlatformError(403, "TEMPLATE_WORKSPACE_MISMATCH")
+        rows = services.database.execute(
+            """
+            SELECT data FROM project_resources
+            WHERE project_id = ? AND resource_type = 'elements'
+              AND archived_at IS NULL
+            ORDER BY updated_at DESC
+            """,
+            (project_id,),
+        ).fetchall()
+        candidates = []
+        for row in rows:
+            elem = parse_json(row[0], {})
+            if isinstance(elem, dict) and elem.get("id"):
+                candidates.append({
+                    "id": elem.get("id"),
+                    "name": elem.get("name") or "",
+                    "selector": elem.get("value") or elem.get("selector") or "",
+                    "method": elem.get("method") or "css",
+                    "environment": elem.get("environment") or "",
+                })
+        return _send(
+            Response(),
+            200,
+            {"candidates": candidates},
+        )
+
+    @router.api_route(
         "/api/platform/templates/{template_id}/apply", methods=["POST"]
     )
     async def template_apply(request: Request, template_id: str) -> Response:
@@ -1071,6 +1332,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         if not isinstance(body, dict):
             body = {}
         project_id = _text(body.get("projectId")).strip()
+        if not project_id:
+            raise PlatformError(400, "PROJECT_ID_REQUIRED")
         result = services.require_project_capability(
             project_id, user.id, "flow.edit"
         )
@@ -1080,33 +1343,296 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         snapshot = parse_json(template[2], {})
         if not isinstance(snapshot, dict):
             snapshot = {}
-        collections = {
-            "flows": [as_record(snapshot.get("flow"))],
-            "elements": [
-                as_record(item)
-                for item in snapshot.get("elements", [])
-                if isinstance(item, dict)
-            ],
-            "variables": [
-                as_record(item)
-                for item in snapshot.get("variables", [])
-                if isinstance(item, dict)
-            ],
-            "environments": [
-                as_record(item)
-                for item in snapshot.get("environments", [])
-                if isinstance(item, dict)
-            ],
-        }
+
+        raw_selection = body.get("selection")
+        selection: dict[str, Any] | None = raw_selection if isinstance(raw_selection, dict) else None
+
+        raw_mappings = body.get("elementMappings")
+        element_mappings: dict[str, str | None] = (
+            {
+                str(k): (str(v).strip() if isinstance(v, str) and v.strip() else None)
+                for k, v in raw_mappings.items()
+            }
+            if isinstance(raw_mappings, dict)
+            else {}
+        )
+
+        raw_flow = as_record(snapshot.get("flow"))
+        raw_elements = [
+            as_record(item)
+            for item in snapshot.get("elements", [])
+            if isinstance(item, dict)
+        ]
+        raw_variables = [
+            as_record(item)
+            for item in snapshot.get("variables", [])
+            if isinstance(item, dict)
+        ]
+        raw_environments = [
+            as_record(item)
+            for item in snapshot.get("environments", [])
+            if isinstance(item, dict)
+        ]
+
+        if selection is None:
+            apply_flow = bool(raw_flow)
+            selected_elem_ids = {e["id"] for e in raw_elements if "id" in e}
+            selected_var_ids = {v["id"] for v in raw_variables if "id" in v}
+            apply_environments = bool(raw_environments)
+        else:
+            apply_flow = bool(selection.get("flow", True)) if raw_flow else False
+
+            sel_elem = selection.get("elements")
+            if sel_elem is True or sel_elem is None:
+                selected_elem_ids = {e["id"] for e in raw_elements if "id" in e}
+            elif isinstance(sel_elem, list):
+                selected_elem_ids = {str(eid) for eid in sel_elem}
+            else:
+                selected_elem_ids = set()
+
+            sel_var = selection.get("variables")
+            if sel_var is True or sel_var is None:
+                selected_var_ids = {v["id"] for v in raw_variables if "id" in v}
+            elif isinstance(sel_var, list):
+                selected_var_ids = {str(vid) for vid in sel_var}
+            else:
+                selected_var_ids = set()
+
+            sel_env = selection.get("environments")
+            apply_environments = bool(sel_env) if sel_env is not None else True
+
+        # Existing target elements for mapping check
+        existing_elements_rows = services.database.execute(
+            """
+            SELECT resource_id, data FROM project_resources
+            WHERE project_id = ? AND resource_type = 'elements' AND archived_at IS NULL
+            """,
+            (project_id,),
+        ).fetchall()
+        target_elements_by_id: dict[str, dict[str, Any]] = {}
+        for row in existing_elements_rows:
+            elem_data = parse_json(row[1], {})
+            elem_id = row[0]
+            if isinstance(elem_data, dict):
+                target_elements_by_id[elem_id] = elem_data
+
+        mapped_target_ids: dict[str, str] = {}
+        mapped_target_names: dict[str, str] = {}
+        for tmpl_elem_id, target_id in element_mappings.items():
+            if target_id:
+                if target_id not in target_elements_by_id:
+                    raise PlatformError(400, f"INVALID_ELEMENT_MAPPING: {target_id}")
+                mapped_target_ids[tmpl_elem_id] = target_id
+                target_elem_data = target_elements_by_id[target_id]
+                tmpl_elem = next((e for e in raw_elements if e.get("id") == tmpl_elem_id), None)
+                if tmpl_elem and tmpl_elem.get("name") and target_elem_data.get("name"):
+                    mapped_target_names[tmpl_elem["name"]] = target_elem_data["name"]
+
+        warnings: list[str] = []
+
+        # Dependency Closure (D6):
+        # 1. 元素是「严格强依赖」：步骤缺少 UI 定位器会导致流程不可执行，未映射且模板内未声明时抛 400 (TEMPLATE_DEPENDENCY_MISSING)。
+        # 2. 变量是「宽松容错」：除系统前缀(data/flow/run/env.baseUrl)外，优先自动闭包模板内变量；若模板与目标项目中均缺失，则记录 warning 提示用户补齐。
+        if apply_flow:
+            flow_elem_refs = extract_flow_element_references(raw_flow)
+            for ref in flow_elem_refs:
+                is_mapped = False
+                matched_tmpl_elem = None
+                for elem in raw_elements:
+                    if elem.get("id") == ref or elem.get("name") == ref:
+                        matched_tmpl_elem = elem
+                        if elem.get("id") and elem["id"] in mapped_target_ids:
+                            is_mapped = True
+                        break
+
+                if is_mapped:
+                    continue
+
+                if matched_tmpl_elem:
+                    if matched_tmpl_elem.get("id"):
+                        selected_elem_ids.add(matched_tmpl_elem["id"])
+                else:
+                    target_has_ref = any(
+                        t_id == ref or t_data.get("name") == ref
+                        for t_id, t_data in target_elements_by_id.items()
+                    )
+                    if not target_has_ref:
+                        raise PlatformError(400, "TEMPLATE_DEPENDENCY_MISSING")
+
+            flow_var_refs = extract_flow_variable_references(raw_flow)
+            for var_ref in flow_var_refs:
+                matched_tmpl_var = None
+                for var in raw_variables:
+                    v_name = var.get("name")
+                    v_scope = var.get("scope", "项目")
+                    v_ref1 = f"{'env' if v_scope == '环境' else 'project'}.{v_name}"
+                    if var_ref in (v_name, v_ref1, f"secret.{v_name}"):
+                        matched_tmpl_var = var
+                        break
+                if matched_tmpl_var and matched_tmpl_var.get("id"):
+                    selected_var_ids.add(matched_tmpl_var["id"])
+
+        elements_to_create = [
+            dict(e) for e in raw_elements
+            if e.get("id") in selected_elem_ids and e.get("id") not in mapped_target_ids
+        ]
+        variables_to_create = [
+            dict(v) for v in raw_variables
+            if v.get("id") in selected_var_ids
+        ]
+        environments_to_create = (
+            [dict(env) for env in raw_environments] if apply_environments else []
+        )
+        flow_to_create = dict(raw_flow) if apply_flow else None
+
+        existing_res_rows = services.database.execute(
+            """
+            SELECT resource_type,
+                   json_extract(data, '$.name') AS name,
+                   json_extract(data, '$.scope') AS scope,
+                   json_extract(data, '$.environment') AS environment
+            FROM project_resources
+            WHERE project_id = ? AND archived_at IS NULL
+            """,
+            (project_id,),
+        ).fetchall()
+
+        existing_flow_names: set[str] = set()
+        existing_env_names: set[str] = set()
+        existing_var_keys: set[tuple[str, str]] = set()
+        existing_elem_keys: set[tuple[str, str]] = set()
+
+        for row in existing_res_rows:
+            r_type, r_name, r_scope, r_env = row[0], row[1] or "", row[2] or "", row[3] or ""
+            if r_type == "flows":
+                existing_flow_names.add(r_name)
+            elif r_type == "environments":
+                existing_env_names.add(r_name)
+            elif r_type == "variables":
+                existing_var_keys.add((r_scope, r_name))
+            elif r_type == "elements":
+                existing_elem_keys.add((r_env, r_name))
+
+        if apply_flow:
+            for var_ref in flow_var_refs:
+                in_template = any(
+                    var.get("name") == var_ref
+                    or f"{'env' if var.get('scope') == '环境' else 'project'}.{var.get('name')}" == var_ref
+                    or f"secret.{var.get('name')}" == var_ref
+                    for var in raw_variables
+                )
+                in_target = any(
+                    name == var_ref
+                    or f"{'env' if scope == '环境' else 'project'}.{name}" == var_ref
+                    or f"secret.{name}" == var_ref
+                    for scope, name in existing_var_keys
+                )
+                if not in_template and not in_target:
+                    warnings.append(f"流程引用的变量 '{{{{{var_ref}}}}}' 在模板与目标项目中均未找到定义，请在项目变量中手动配置")
+
+        conflicts: list[dict[str, str]] = []
+        ref_renames: dict[str, str] = {}
+        element_name_renames: dict[str, str] = dict(mapped_target_names)
+
+        def _get_unique_name(base: str, is_taken_fn) -> str:
+            if not is_taken_fn(base):
+                return base
+            idx = 2
+            while True:
+                candidate = f"{base}_{idx}"
+                if not is_taken_fn(candidate):
+                    return candidate
+                idx += 1
+
+        if flow_to_create:
+            orig_flow_name = flow_to_create.get("name", "流程")
+            if orig_flow_name in existing_flow_names:
+                new_flow_name = _get_unique_name(orig_flow_name, lambda n: n in existing_flow_names)
+                flow_to_create["name"] = new_flow_name
+                existing_flow_names.add(new_flow_name)
+                conflicts.append({
+                    "resourceType": "flows",
+                    "originalName": orig_flow_name,
+                    "newName": new_flow_name,
+                })
+
+        for env in environments_to_create:
+            orig_env_name = env.get("name", "")
+            if orig_env_name and orig_env_name in existing_env_names:
+                new_env_name = _get_unique_name(orig_env_name, lambda n: n in existing_env_names)
+                env["name"] = new_env_name
+                existing_env_names.add(new_env_name)
+                conflicts.append({
+                    "resourceType": "environments",
+                    "originalName": orig_env_name,
+                    "newName": new_env_name,
+                })
+
+        for var in variables_to_create:
+            orig_var_name = var.get("name", "")
+            var_scope = var.get("scope", "项目")
+            if orig_var_name and (var_scope, orig_var_name) in existing_var_keys:
+                new_var_name = _get_unique_name(
+                    orig_var_name,
+                    lambda n: (var_scope, n) in existing_var_keys,
+                )
+                var["name"] = new_var_name
+                existing_var_keys.add((var_scope, new_var_name))
+                conflicts.append({
+                    "resourceType": "variables",
+                    "originalName": orig_var_name,
+                    "newName": new_var_name,
+                })
+                scope_prefix = "env" if var_scope == "环境" else "project"
+                ref_renames[f"{scope_prefix}.{orig_var_name}"] = f"{scope_prefix}.{new_var_name}"
+                ref_renames[orig_var_name] = new_var_name
+                ref_renames[f"secret.{orig_var_name}"] = f"secret.{new_var_name}"
+
+        for elem in elements_to_create:
+            orig_elem_name = elem.get("name", "")
+            elem_env = elem.get("environment", "")
+            if orig_elem_name and (elem_env, orig_elem_name) in existing_elem_keys:
+                new_elem_name = _get_unique_name(
+                    orig_elem_name,
+                    lambda n: (elem_env, n) in existing_elem_keys,
+                )
+                elem["name"] = new_elem_name
+                existing_elem_keys.add((elem_env, new_elem_name))
+                conflicts.append({
+                    "resourceType": "elements",
+                    "originalName": orig_elem_name,
+                    "newName": new_elem_name,
+                })
+                element_name_renames[orig_elem_name] = new_elem_name
+
         ids: dict[str, str] = {}
-        for resources in collections.values():
-            for resource in resources:
-                if isinstance(resource.get("id"), str):
-                    ids[resource["id"]] = str(uuid.uuid4())
+        for tmpl_elem_id, target_id in mapped_target_ids.items():
+            ids[tmpl_elem_id] = target_id
+
+        resources_to_insert: dict[str, list[dict[str, Any]]] = {
+            "flows": [flow_to_create] if flow_to_create else [],
+            "elements": elements_to_create,
+            "variables": variables_to_create,
+            "environments": environments_to_create,
+        }
+
+        for r_list in resources_to_insert.values():
+            for res in r_list:
+                old_id = res.get("id")
+                if isinstance(old_id, str):
+                    new_id = str(uuid.uuid4())
+                    ids[old_id] = new_id
+
+        if flow_to_create:
+            flow_to_create = rewrite_flow_placeholders_and_elements(
+                flow_to_create, ref_renames, element_name_renames
+            )
+            resources_to_insert["flows"] = [flow_to_create]
+
         created: dict[str, list[str]] = {}
         services.database.execute("BEGIN IMMEDIATE")
         try:
-            for resource_type, resources in collections.items():
+            for resource_type, resources in resources_to_insert.items():
                 created[resource_type] = []
                 for source in resources:
                     old_id = (
@@ -1139,16 +1665,62 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         except Exception:
             services.database.execute("ROLLBACK")
             raise
+
+        if flow_to_create:
+            secret_names = flow_to_create.get("secretNames")
+            if isinstance(secret_names, list):
+                for secret_name in secret_names:
+                    if isinstance(secret_name, str) and secret_name.strip():
+                        s_name = secret_name.strip()
+                        try:
+                            encrypted = services.encrypt("")
+                            secret_id = str(uuid.uuid4())
+                            services.database.execute(
+                                """
+                                INSERT INTO project_secrets (
+                                  id, project_id, name, key_version, iv, tag, ciphertext,
+                                  created_at, updated_at
+                                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+                                ON CONFLICT(project_id, name) DO NOTHING
+                                """,
+                                (
+                                    secret_id,
+                                    project_id,
+                                    s_name,
+                                    encrypted["iv"],
+                                    encrypted["tag"],
+                                    encrypted["ciphertext"],
+                                    now(),
+                                    now(),
+                                ),
+                            )
+                        except Exception as e:
+                            warnings.append(f"创建密钥占位符 {s_name} 失败: {str(e)}")
+
         services.audit(
             template[1],
             {"type": "user", "id": user.id},
             "template.applied",
             {"type": "template", "id": template_id},
-            {"targetProjectId": project_id, "created": created},
+            {
+                "targetProjectId": project_id,
+                "created": created,
+                "selection": selection,
+                "elementMappings": element_mappings,
+                "conflicts": conflicts,
+            },
             project_id,
         )
         return _send(
-            Response(), 201, {"templateId": template_id, "projectId": project_id, "created": created}
+            Response(),
+            201,
+            {
+                "templateId": template_id,
+                "projectId": project_id,
+                "created": created,
+                "conflicts": conflicts,
+                "warnings": warnings,
+            },
         )
 
     @router.api_route(
@@ -1360,7 +1932,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 ),
             )
             if cursor.rowcount == 0:
-                raise PlatformError(409, "RESOURCE_VERSION_CONFLICT")
+                raise PlatformError(
+                    409,
+                    "RESOURCE_VERSION_CONFLICT",
+                    {"updatedBy": current[4], "updatedAt": current[3]},
+                )
             version = expected_version + 1
             services.audit(
                 project["workspace_id"],
@@ -1409,7 +1985,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             ),
         )
         if cursor.rowcount == 0:
-            raise PlatformError(409, "RESOURCE_VERSION_CONFLICT")
+            raise PlatformError(
+                409,
+                "RESOURCE_VERSION_CONFLICT",
+                {"updatedBy": current[4], "updatedAt": current[3]},
+            )
         services.audit(
             project["workspace_id"],
             {"type": "user", "id": user.id},
@@ -1433,7 +2013,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             result = services.require_project_role(project_id, user.id)
         else:
             result = services.require_project_capability(
-                project_id, user.id, "project.edit"
+                project_id, user.id, "project.manage"
             )
         project = result["project"]
         current = services.database.execute(
@@ -1463,7 +2043,14 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         expected_version = body.get("expectedVersion")
         current_version = current[1] if current else 0
         if not isinstance(expected_version, int) or expected_version != current_version:
-            raise PlatformError(409, "RESOURCE_VERSION_CONFLICT")
+            raise PlatformError(
+                409,
+                "RESOURCE_VERSION_CONFLICT",
+                {
+                    "updatedBy": current[3] if current else None,
+                    "updatedAt": current[2] if current else None,
+                },
+            )
         data = as_record(body.get("data"))
         version = expected_version + 1
         timestamp = now()
@@ -1778,7 +2365,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             services.database.execute("ROLLBACK")
             raise
         services.database.execute(
-            "UPDATE datasets SET updated_at = ? WHERE id = ?", (now(), dataset_id)
+            "UPDATE datasets SET updated_at = ? WHERE id = ? AND project_id = ?",
+            (now(), dataset_id, project_id),
         )
         services.audit(
             project["workspace_id"],
@@ -1806,8 +2394,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         request: Request, project_id: str, version_id: str
     ) -> Response:
         user = services.session_user(dict(request.headers))
-        version = services.dataset_version_for(project_id, version_id)
         services.require_project_role(project_id, user.id)
+        version = services.dataset_version_for(project_id, version_id)
         rows = services.dataset_rows_for(version["id"])
         return _send(
             Response(),
@@ -2082,9 +2670,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             )
             services.database.execute(
                 """
-                UPDATE schedules SET last_run_at = ?, updated_at = ? WHERE id = ?
+                UPDATE schedules
+                SET last_run_at = ?, updated_at = ?
+                WHERE id = ? AND project_id = ?
                 """,
-                (now(), now(), schedule_id),
+                (now(), now(), schedule_id, project_id),
             )
             services.audit(
                 project["workspace_id"],
@@ -2099,9 +2689,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         enabled = 1 if action == "enable" else 0
         services.database.execute(
             """
-            UPDATE schedules SET enabled = ?, updated_at = ? WHERE id = ?
+            UPDATE schedules
+            SET enabled = ?, updated_at = ?
+            WHERE id = ? AND project_id = ?
             """,
-            (enabled, now(), schedule_id),
+            (enabled, now(), schedule_id, project_id),
         )
         services.audit(
             project["workspace_id"],
@@ -2515,9 +3107,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         services.database.execute(
             """
             UPDATE webhook_triggers SET last_triggered_at = ?
-            WHERE id = ?
+            WHERE id = ? AND project_id = ?
             """,
-            (now(), trigger_id),
+            (now(), trigger_id, trigger[1]),
         )
         project = services.project_for(trigger[1])
         services.audit(
@@ -2808,7 +3400,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             workspace_id, user.id, "automation.manage"
         )
         try:
-            result = services.send_test_notification(channel_id)
+            result = services.send_test_notification(channel_id, workspace_id)
+        except PlatformError:
+            raise
         except Exception as exc:
             error = (
                 "NOTIFICATION_TIMEOUT"
@@ -2866,10 +3460,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                        c.name, c.channel_type, c.enabled
                 FROM notification_subscriptions s
                 JOIN notification_channels c ON c.id = s.channel_id
-                WHERE s.project_id = ? AND c.archived_at IS NULL
+                WHERE s.project_id = ? AND c.workspace_id = ?
+                  AND c.archived_at IS NULL
                 ORDER BY c.name
                 """,
-                (project_id,),
+                (project_id, project["workspace_id"]),
             ).fetchall()
             return _send(
                 Response(),
@@ -2975,7 +3570,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             FROM deliveries d
             JOIN platform_runs r ON r.id = d.run_id
             JOIN notification_channels c ON c.id = d.channel_id
-            WHERE {where}
+            JOIN platform_projects p ON p.id = r.project_id
+            WHERE {where} AND c.workspace_id = p.workspace_id
             """,
             tuple(params),
         ).fetchone()[0]
@@ -2986,7 +3582,8 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             FROM deliveries d
             JOIN platform_runs r ON r.id = d.run_id
             JOIN notification_channels c ON c.id = d.channel_id
-            WHERE {where}
+            JOIN platform_projects p ON p.id = r.project_id
+            WHERE {where} AND c.workspace_id = p.workspace_id
             ORDER BY d.created_at DESC LIMIT ? OFFSET ?
             """,
             (*params, page_size, (page - 1) * page_size),
@@ -3134,17 +3731,64 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         )
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/runs/batch-delete",
+        methods=["POST"],
+    )
+    async def platform_runs_batch_delete(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        result = services.require_project_capability(
+            project_id, user.id, "run.execute"
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            raise PlatformError(400, "RUN_DELETE_INPUT_INVALID") from None
+        raw_run_ids = body.get("runIds") if isinstance(body, dict) else None
+        if (
+            not isinstance(raw_run_ids, list)
+            or not raw_run_ids
+            or len(raw_run_ids) > 100
+            or any(not isinstance(run_id, str) or not run_id.strip() for run_id in raw_run_ids)
+        ):
+            raise PlatformError(400, "RUN_DELETE_INPUT_INVALID")
+        run_ids = list(dict.fromkeys(run_id.strip() for run_id in raw_run_ids))
+        deleted = services.delete_runs(project_id, run_ids)
+        services.audit(
+            result["project"]["workspace_id"],
+            {"type": "user", "id": user.id},
+            "run.deleted",
+            {"type": "run_batch", "id": str(uuid.uuid4())},
+            {"runIds": deleted["runIds"], "deletedCount": deleted["deletedCount"]},
+            project_id,
+        )
+        return _send(Response(), 200, deleted)
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/runs/{run_id}",
-        methods=["GET"],
+        methods=["GET", "DELETE"],
     )
     async def platform_run_detail(
         request: Request, project_id: str, run_id: str
     ) -> Response:
         user = services.session_user(dict(request.headers))
+        if request.method == "DELETE":
+            result = services.require_project_capability(
+                project_id, user.id, "run.execute"
+            )
+            deleted = services.delete_run(project_id, run_id)
+            services.audit(
+                result["project"]["workspace_id"],
+                {"type": "user", "id": user.id},
+                "run.deleted",
+                {"type": "run", "id": run_id},
+                {"runIds": [run_id], "deletedCount": 1},
+                project_id,
+            )
+            return _send(Response(), 200, deleted)
         services.require_project_role(project_id, user.id)
-        run = services.run_by_id(run_id)
-        if run["projectId"] != project_id:
-            raise PlatformError(404, "RUN_NOT_FOUND")
+        run = services.run_by_id(run_id, project_id)
         return _send(Response(), 200, {"run": services.run_response(run)})
 
     @router.api_route(
@@ -3159,9 +3803,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             project_id, user.id, "run.execute"
         )
         project = result["project"]
-        run = services.run_by_id(run_id)
-        if run["projectId"] != project_id:
-            raise PlatformError(404, "RUN_NOT_FOUND")
+        run = services.run_by_id(run_id, project_id)
         if run["status"] not in ("queued", "running"):
             return _send(
                 Response(),
@@ -3175,18 +3817,18 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 SET cancellation_requested = 1,
                     status = 'canceled',
                     updated_at = ?
-                WHERE id = ? AND status = 'queued'
+                WHERE id = ? AND project_id = ? AND status = 'queued'
                 """,
-                (now(), run["id"]),
+                (now(), run["id"], project_id),
             )
         else:
             services.database.execute(
                 """
                 UPDATE platform_runs
                 SET cancellation_requested = 1, updated_at = ?
-                WHERE id = ? AND status = 'running'
+                WHERE id = ? AND project_id = ? AND status = 'running'
                 """,
-                (now(), run["id"]),
+                (now(), run["id"], project_id),
             )
         services.cancel_managed_run(run["id"])
         services.append_run_event(
@@ -3195,7 +3837,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         return _send(
             Response(),
             202,
-            {"run": services.run_response(services.run_by_id(run["id"]))},
+            {
+                "run": services.run_response(
+                    services.run_by_id(run["id"], project_id)
+                )
+            },
         )
 
     @router.api_route(
@@ -3207,9 +3853,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     ) -> Response:
         user = services.session_user(dict(request.headers))
         services.require_project_capability(project_id, user.id, "run.execute")
-        run = services.run_by_id(run_id)
-        if run["projectId"] != project_id:
-            raise PlatformError(404, "RUN_NOT_FOUND")
+        run = services.run_by_id(run_id, project_id)
         if run["status"] not in ("failed", "canceled"):
             raise PlatformError(409, "RUN_NOT_RETRYABLE")
         retried = services.retry_run_snapshot(project_id, run_id, user.id)
@@ -3658,9 +4302,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
     ) -> Response:
         user = services.session_user(dict(request.headers))
         services.require_project_role(project_id, user.id)
-        validation = services.element_validation_by_id(validation_id)
-        if validation["projectId"] != project_id:
-            raise PlatformError(404, "ELEMENT_VALIDATION_NOT_FOUND")
+        validation = services.element_validation_by_id(validation_id, project_id)
         return _send(Response(), 200, {"validation": validation})
 
     @router.api_route(
@@ -4032,9 +4674,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     UPDATE flow_revisions
                     SET status = 'published', published_at = ?,
                         reviewed_by = ?, review_note = ?
-                    WHERE id = ?
+                    WHERE id = ? AND project_id = ?
                     """,
-                    (now(), user.id, note or None, revision_id),
+                    (now(), user.id, note or None, revision_id, project_id),
                 )
                 services.database.execute("COMMIT")
             except Exception:

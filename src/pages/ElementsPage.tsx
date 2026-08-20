@@ -40,6 +40,7 @@ export function ElementsPage({ project }: { project: Project }) {
   const [validationEnvironment, setValidationEnvironment] = useState("");
   const [search, setSearch] = useState("");
   const [validationFilter, setValidationFilter] = useState("all");
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const filtered = items.filter((item) =>
     [item.name, item.path, item.value]
       .join(" ")
@@ -246,12 +247,40 @@ export function ElementsPage({ project }: { project: Project }) {
             { value: "multiple", label: "多个匹配" },
           ]}
         />
+        {canManageElement && (
+          <Popconfirm
+            title="批量删除元素"
+            description={`确定删除选中的 ${selectedElementIds.length} 个元素？此操作会同步从项目中移除。`}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={selectedElementIds.length === 0}
+            onConfirm={() => {
+              const count = selectedElementIds.length;
+              updateItems((list) => list.filter((candidate) => !selectedElementIds.includes(candidate.id)));
+              setSelectedElementIds([]);
+              message.success(`已批量删除 ${count} 个元素`);
+            }}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedElementIds.length === 0}
+            >
+              批量删除{selectedElementIds.length > 0 ? `（${selectedElementIds.length}）` : ""}
+            </Button>
+          </Popconfirm>
+        )}
       </div>
       <section className="surface">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={filtered}
+          rowSelection={canManageElement ? {
+            selectedRowKeys: selectedElementIds,
+            onChange: (keys) => setSelectedElementIds(keys.map(String)),
+          } : undefined}
           pagination={{ pageSize: 8, showSizeChanger: false }}
           scroll={{ x: "max-content" }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建元素" /> }}

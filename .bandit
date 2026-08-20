@@ -1,0 +1,7 @@
+# Bandit triage (QA-01 documented exception process).
+# B105: DEFAULT_PLATFORM_SECRET is a documented development-only default; production
+#       startup requires PLATFORM_SECRET_KEY / PLATFORM_SECRET_KEY_FILE.
+# B110: try/except pass is used only for non-critical cleanup (browser/context close).
+# B608: f-string SQL only interpolates '?' placeholder lists, never user input; all
+#       values are bound as parameters.
+skips: ['B105', 'B110', 'B608']

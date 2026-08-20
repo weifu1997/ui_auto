@@ -6,7 +6,7 @@ import { platformProjectContext } from "../platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../run-store";
 import { useSecretStore } from "../secret-store";
-import { PageHeading, canUseCapability, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, uniqueNameValidator, variableReference } from "./shared";
+import { PageHeading, canUseCapability, describePlatformRunError, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, uniqueNameValidator, variableReference } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -117,11 +117,7 @@ export function FlowsPage({ project }: { project: Project }) {
         message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
         navigate(`/project/${project.id}/runs`);
       } catch (error) {
-        if (error instanceof PlatformApiError && error.code === "PUBLISHED_REVISION_REQUIRED") {
-          message.error("该流程还没有已发布版本，请先在编排器中保存流程");
-          return;
-        }
-        message.error("创建平台运行失败，请检查执行服务与运行环境");
+        message.error(describePlatformRunError(error));
       }
       return;
     }
@@ -152,7 +148,9 @@ export function FlowsPage({ project }: { project: Project }) {
     if (code === "REVISION_ENVIRONMENT_MISMATCH") return "版本与环境不匹配";
     if (code === "FLOW_HAS_NO_STEPS") return "流程没有步骤";
     if (code === "RUN_SECRET_NOT_CONFIGURED") return "缺少密钥配置";
-    if (code === "AGENT_BROWSER_UNSUPPORTED") return "环境浏览器不受支持";
+    if (code === "AGENT_BROWSER_UNSUPPORTED") {
+      return "环境浏览器不受支持：执行服务仅支持 Chromium，请切换环境或在部署机上安装 Playwright Chromium。";
+    }
     return code;
   };
   const submitBatchRun = async () => {
@@ -183,7 +181,7 @@ export function FlowsPage({ project }: { project: Project }) {
         message.error(`部分流程无法执行，请修正后重新提交——${details.join("；")}`);
         return;
       }
-      message.error("创建批量运行失败，请检查执行服务与运行环境");
+      message.error(describePlatformRunError(error, "创建批量运行失败，请检查执行服务与运行环境"));
     } finally {
       setBatchSubmitting(false);
     }
@@ -340,20 +338,44 @@ export function FlowsPage({ project }: { project: Project }) {
             批量运行（{selectedFlowIds.length}）
           </Button>
         )}
+        {canEditFlow && (
+          <Popconfirm
+            title="批量删除流程"
+            description={`确定删除选中的 ${selectedFlowIds.length} 个流程？此操作不可恢复。`}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={selectedFlowIds.length === 0}
+            onConfirm={() => {
+              const count = selectedFlowIds.length;
+              updateItems((list) => list.filter((item) => !selectedFlowIds.includes(item.id)));
+              setSelectedFlowIds([]);
+              message.success(`已批量删除 ${count} 个流程`);
+            }}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedFlowIds.length === 0}
+            >
+              批量删除{selectedFlowIds.length > 0 ? `（${selectedFlowIds.length}）` : ""}
+            </Button>
+          </Popconfirm>
+        )}
       </div>
       <section className="surface">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={filtered}
-          rowSelection={platformMode && canRunFlow ? {
+          rowSelection={canEditFlow || (platformMode && canRunFlow) ? {
             selectedRowKeys: selectedFlowIds,
             onChange: (keys) => setSelectedFlowIds(keys.map(String)),
-            getCheckboxProps: (flow) => ({ disabled: !isFlowRunnable(flow.id) }),
+            getCheckboxProps: (flow) => ({ disabled: !canEditFlow && !isFlowRunnable(flow.id) }),
           } : undefined}
           pagination={{ pageSize: 8, showSizeChanger: false }}
           scroll={{ x: "max-content" }}
-          locale={{ emptyText: <Empty description="尚无流程" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无流程" /> }}
         />
       </section>
       <Modal

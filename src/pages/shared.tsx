@@ -3,8 +3,8 @@
 import { message, modal } from "../antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
 import { getPlatformHealth, PlatformApiError } from "../platform-api";
-import type { PlatformRun, PlatformSession } from "../platform-api";
-import { readStoredPlatformSession, storePlatformSession } from "../platform-context";
+import type { PlatformCapability, PlatformRun, PlatformSession } from "../platform-api";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../platform-context";
 import { logoutPlatform } from "../platform-api";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
@@ -15,6 +15,23 @@ import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd"
 import { useEffect, useRef, useState } from "react";
 import "../App.css";
 import "../responsive.css";
+
+function formatConflictActorTime(raw: string | null): string {
+  if (!raw) return "";
+  try {
+    const draft = JSON.parse(raw) as { remoteUpdatedBy?: string; remoteUpdatedAt?: string };
+    const parts: string[] = [];
+    if (draft.remoteUpdatedAt) {
+      parts.push(new Date(draft.remoteUpdatedAt).toLocaleString("zh-CN"));
+    }
+    if (draft.remoteUpdatedBy) {
+      parts.push(`更新者 ${draft.remoteUpdatedBy}`);
+    }
+    return parts.length ? `其他成员已于 ${parts.join("，")} 更新该资源。` : "";
+  } catch {
+    return "";
+  }
+}
 
 export type ProjectSection =
   | "overview"
@@ -76,7 +93,14 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   const location = useLocation();
   const isProjects = location.pathname === "/projects";
   const isTemplates = location.pathname === "/templates";
+  const isAdministration = location.pathname === "/workspace/administration";
   const session = readStoredPlatformSession();
+  const workspaceId = readStoredPlatformWorkspaceId(session);
+  const selectedWorkspace = session?.workspaces.find((workspace) => workspace.id === workspaceId);
+  const canManageWorkspace = Boolean(
+    session?.user.globalRole === "super_admin" ||
+      selectedWorkspace?.capabilities?.includes("member.manage"),
+  );
   return (
     <aside className={`workspace-side ${compact ? "compact" : ""}`}>
       <Link className="brand" to="/projects" aria-label="AutoFlow 工作空间">
@@ -102,6 +126,16 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
             <DatabaseOutlined /> {!compact && <span>公共模板</span>}
           </Link>
         </Tooltip>
+        {canManageWorkspace && (
+          <Tooltip title={compact ? "成员与账户管理" : undefined} placement="right">
+            <Link
+              className={isAdministration ? "workspace-link active" : "workspace-link"}
+              to="/workspace/administration"
+            >
+              <SafetyCertificateOutlined /> {!compact && <span>成员与账户</span>}
+            </Link>
+          </Tooltip>
+        )}
       </nav>
       <div className="side-spacer" />
       <div className="side-profile">
@@ -112,6 +146,21 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
           <div>
             <strong>{session?.user.name ?? "AutoFlow 用户"}</strong>
             <span>{session?.user.email ?? "未登录"}</span>
+            {session && session.workspaces.length > 1 && (
+              <Select
+                aria-label="切换工作区"
+                size="small"
+                value={workspaceId || undefined}
+                options={session.workspaces.map((workspace) => ({
+                  value: workspace.id,
+                  label: workspace.name,
+                }))}
+                onChange={(nextWorkspaceId) => {
+                  storePlatformWorkspaceId(nextWorkspaceId);
+                  window.location.assign("/projects");
+                }}
+              />
+            )}
           </div>
         )}
         {!compact && session && <Tooltip title="退出登录"><Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logoutPlatform().finally(() => { storePlatformSession(); window.location.assign("/"); })} /></Tooltip>}
@@ -120,16 +169,18 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export type Role = "owner" | "admin" | "publisher" | "product" | "tester" | "operations" | "editor" | "viewer";
-export type Capability =
-  | "project.view" | "project.edit" | "flow.edit" | "element.manage"
-  | "variable.manage" | "environment.manage" | "secret.manage"
-  | "release.submit" | "release.publish" | "run.execute"
-  | "dataset.manage" | "automation.manage" | "member.manage";
+export type Capability = PlatformCapability;
 
-// 成员/角色已收敛为「登录即全权限」：能力门禁恒放行，保留签名以兼容调用点。
-export function canUseCapability(_capability: Capability) {
-  return true;
+// UI only presents commands issued in the server session projection. The API
+// remains the authorization authority; browser storage is never trusted by it.
+export function canUseCapability(capability: Capability) {
+  const session = readStoredPlatformSession();
+  const workspaceId = readStoredPlatformWorkspaceId(session);
+  return Boolean(
+    session?.workspaces
+      .find((workspace) => workspace.id === workspaceId)
+      ?.capabilities?.includes(capability),
+  );
 }
 
 export function ProjectLayout({
@@ -278,7 +329,7 @@ export function ProjectLayout({
             type="warning"
             showIcon
             title="检测到其他成员已更新同一资源"
-            description="本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。"
+            description={`${formatConflictActorTime(sessionStorage.getItem(`autoflow-conflict-${project.id}`))}本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。`}
             action={<span className="sync-conflict-actions"><Button size="small" onClick={() => { const draft = sessionStorage.getItem(`autoflow-conflict-${project.id}`) ?? ""; void navigator.clipboard.writeText(draft).then(() => message.success("本地草稿已复制")); }}>复制本地修改</Button><Button size="small" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "refresh" } }))}>刷新远端</Button><Button size="small" type="primary" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "resubmit" } }))}>重新提交</Button></span>}
           />}
           {children}
@@ -308,12 +359,114 @@ export function PageHeading({
   );
 }
 
+export function FilterBar({
+  children,
+  extra,
+  className = "",
+}: {
+  children: React.ReactNode;
+  extra?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`filter-bar ${className}`.trim()}>
+      <div className="filter-bar-inputs">{children}</div>
+      {extra && <div className="filter-bar-extra">{extra}</div>}
+    </div>
+  );
+}
+
+export function FilterItem({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="filter-item">
+      <span className="filter-label">{label}</span>
+      <div className="filter-control">{children}</div>
+    </div>
+  );
+}
+
+export function MetricCard({
+  label,
+  value,
+  detail,
+  tone = "default",
+  icon,
+}: {
+  label: string;
+  value: string | number;
+  detail?: React.ReactNode;
+  tone?: "default" | "success" | "warning" | "info";
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className={`metric-card ${tone}`}>
+      {icon && <div className="metric-icon">{icon}</div>}
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail !== undefined && detail !== null && <small>{detail}</small>}
+    </div>
+  );
+}
+
 export function reportRetryError(error: unknown) {
   if (error instanceof PlatformApiError && error.code === "RUN_SECRETS_REQUIRED") {
     message.info("此运行包含会话密钥，请从流程重新运行并重新注入密钥。");
     return true;
   }
   return false;
+}
+
+function knownPlatformRunErrorCode(code: string, status: number): string | undefined {
+  switch (code) {
+    case "PUBLISHED_REVISION_REQUIRED":
+      return "该流程还没有已发布版本，请先保存流程";
+    case "REVISION_ENVIRONMENT_MISMATCH":
+      return "已发布版本与所选运行环境不匹配，请在目标环境下重新保存并发布流程";
+    case "FLOW_HAS_NO_STEPS":
+      return "流程没有可执行步骤，请在编排器中添加步骤后再保存";
+    case "RUN_SECRET_NOT_CONFIGURED":
+      return "缺少必填的运行密钥配置，请确认密钥变量已在项目或环境中声明";
+    case "AGENT_BROWSER_UNSUPPORTED":
+      // 后端有两条抛出路径，通过 HTTP 状态码区分：
+      // - 400：环境配置的 browser 字段不是 Chromium（require_chromium_environment）
+      // - 409：执行服务 Playwright 未安装或 Chromium 可执行文件缺失（ensure_chromium_available）
+      if (status === 400) {
+        return "所选环境的浏览器类型不受支持：当前执行服务仅支持 Chromium。请在环境设置中将浏览器切换为 Chromium。";
+      }
+      return "执行服务检测不到可用的 Chromium 浏览器，请在部署机上执行 `playwright install chromium` 安装浏览器，并确认 Playwright 依赖完整。";
+    case "EXECUTION_SERVICE_UNAVAILABLE":
+      return "执行服务未启动或不可达，请检查部署机 Agent 状态与网络连通性";
+    case "ENVIRONMENT_NOT_READY":
+      return "所选运行环境未就绪，请检查环境基础 URL 与 Agent 健康状态";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * 统一解释「创建平台运行」相关的错误，避免 catch-all 吞掉后端给出的
+ * 具体失败原因。返回最终要展示给用户的文案；非 PlatformApiError 的异常
+ * 也会尽量提取出可读信息。
+ */
+export function describePlatformRunError(error: unknown, fallback = "创建平台运行失败，请检查执行服务与运行环境") {
+  if (error instanceof PlatformApiError) {
+    const known = knownPlatformRunErrorCode(error.code, error.status);
+    if (known) return known;
+    if (error.message) {
+      return `${fallback}（${error.code}：${error.message}）`;
+    }
+    return `${fallback}（错误码：${error.code}）`;
+  }
+  if (error instanceof Error && error.message) {
+    return `${fallback}（${error.message}）`;
+  }
+  return fallback;
 }
 
 export function isTerminalStatus(status: Run["status"]) {
@@ -407,14 +560,36 @@ export function requestRunSecrets(
     const submitted = { ...sessionValues };
     modal.confirm({
       title: "运行前注入密钥",
+      width: 520,
       content: (
         <div className="secret-run-fields">
+          <Alert
+            type="info"
+            showIcon
+            message="以下密钥仅用于本次运行会话，不会保存至服务器存储。"
+            style={{ marginBottom: 8 }}
+          />
           {missing.map((variable) => (
-            <label key={variable.id}>
-              <span>{variable.name}</span>
+            <label key={variable.id} className="secret-run-field">
+              <div className="secret-run-label">
+                <span className="secret-run-name">
+                  <span className="secret-run-required" aria-hidden="true">*</span>
+                  {variable.name}
+                </span>
+                <Tag
+                  color={variable.scope === "环境" ? "blue" : "purple"}
+                  className="secret-run-scope"
+                >
+                  {variable.scope}
+                </Tag>
+              </div>
+              {variable.description && (
+                <div className="secret-run-description">{variable.description}</div>
+              )}
               <Input.Password
                 aria-label={`运行密钥 ${variable.name}`}
-                autoComplete="off"
+                autoComplete="new-password"
+                placeholder={`请输入 ${variable.name}`}
                 onChange={(event) => {
                   submitted[variable.id] = event.target.value;
                 }}
@@ -460,15 +635,19 @@ export function platformRunAsRun(run: PlatformRun): Run {
   const flow = snapshot.flow && typeof snapshot.flow === "object" ? snapshot.flow as Record<string, unknown> : {};
   const environment = snapshot.environment && typeof snapshot.environment === "object" ? snapshot.environment as Record<string, unknown> : {};
   const steps = Array.isArray(flow.steps) ? flow.steps : [];
-  const completedSteps = run.events.filter((event) => event.kind === "step.completed").length;
+  // 同时兼容 runner.py 现在写入的规范事件名「step.completed」和历史写入的「step.succeeded」。
+  const completedEvents = run.events.filter(
+    (event) => event.kind === "step.completed" || event.kind === "step.succeeded"
+  ).length;
   const status: Run["status"] = run.status === "dispatched" ? "running" : run.status;
+  const completedSteps = status === "success" ? steps.length : completedEvents;
   return {
     id: run.id,
     flowName: typeof flow.name === "string" ? flow.name : "平台运行",
     status,
     environment: typeof environment.name === "string" ? environment.name : run.environmentId,
     progress: steps.length > 0 ? Math.round((completedSteps / steps.length) * 100) : status === "success" ? 100 : 0,
-    completedSteps: status === "success" ? steps.length : completedSteps,
+    completedSteps,
     totalSteps: steps.length,
     startedAt: new Date(run.createdAt).toLocaleString(),
     duration: isTerminalStatus(status) ? "已完成" : "进行中",

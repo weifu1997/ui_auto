@@ -9,21 +9,30 @@ param(
 )
 $ErrorActionPreference = "Stop"
 if (-not $PlatformSecretKey) {
-  $secureSecret = Read-Host -AsSecureString "请输入至少 32 字符的 PLATFORM_SECRET_KEY"
+  $secureSecret = Read-Host -AsSecureString "Enter a PLATFORM_SECRET_KEY with at least 32 characters"
   $PlatformSecretKey = [System.Net.NetworkCredential]::new("", $secureSecret).Password
 }
 if ($PlatformSecretKey.Length -lt 32) { throw "PlatformSecretKey must contain at least 32 characters" }
 $resolvedRoot = [IO.Path]::GetFullPath($Root)
-foreach ($folder in @("app","data","artifacts","logs","backups","browsers","runtime")) { New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot $folder) | Out-Null }
+foreach ($folder in @("app","data","logs","backups","browsers","runtime")) { New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot $folder) | Out-Null }
+New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot "data\artifacts") | Out-Null
 Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $resolvedRoot "runtime\node.exe") -Force
 Copy-Item -LiteralPath $WinSWExe -Destination (Join-Path $resolvedRoot "AutoFlow.exe") -Force
 $serviceConfig = Join-Path $resolvedRoot "AutoFlow.xml"
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\deployment\AutoFlow.xml") -Destination $serviceConfig -Force
-$escapedSecret = [Security.SecurityElement]::Escape($PlatformSecretKey)
+$keyFile = Join-Path $resolvedRoot "runtime\platform-secret.key"
+Set-Content -LiteralPath $keyFile -Value $PlatformSecretKey -Encoding UTF8 -NoNewline
+$acl = Get-Acl -LiteralPath $keyFile
+$acl.SetAccessRuleProtection($true, $false)
+$adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("BUILTIN\Administrators", "FullControl", "Allow")
+$systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")
+$acl.AddAccessRule($adminRule)
+$acl.AddAccessRule($systemRule)
+Set-Acl -LiteralPath $keyFile -AclObject $acl
 $escapedAllowlist = [Security.SecurityElement]::Escape($NotificationHostAllowlist)
 $allowPrivate = if ($NotificationHostAllowlist) { "1" } else { "0" }
 $escapedCors = [Security.SecurityElement]::Escape($CorsOrigins)
-$config = (Get-Content -Raw -LiteralPath $serviceConfig).Replace("__PLATFORM_SECRET_KEY__", $escapedSecret).Replace("__AUTOFLOW_CORS_ORIGINS__", $escapedCors).Replace("__NOTIFICATION_HOST_ALLOWLIST__", $escapedAllowlist).Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", $allowPrivate)
+$config = (Get-Content -Raw -LiteralPath $serviceConfig).Replace("__AUTOFLOW_CORS_ORIGINS__", $escapedCors).Replace("__NOTIFICATION_HOST_ALLOWLIST__", $escapedAllowlist).Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", $allowPrivate)
 Set-Content -LiteralPath $serviceConfig -Value $config -Encoding UTF8
 $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $appRoot = Join-Path $resolvedRoot "app"

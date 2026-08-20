@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/prd.md","reason":"Approved Phase 1 identity, replay, retention-boundary and production-readiness requirements."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/design.md","reason":"Canonical target identity, authorization, audit, migration and rollback design."}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Audit naming, workspace scope and sensitive-data redaction contracts."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Typed server-to-frontend contract rules for session and capability changes."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Identity feature crosses database, API, session, UI and tests."}

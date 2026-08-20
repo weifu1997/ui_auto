@@ -1,6 +1,6 @@
 import pytest
 
-from autoflow.auth import password_hash, password_matches
+from autoflow.auth import password_hash, password_matches, set_session_cookie
 
 
 def test_password_hash_roundtrip():
@@ -22,3 +22,15 @@ def test_password_hash_matches_node_fixture():
 
 def test_password_matches_rejects_bad_encoding():
     assert not password_matches("development-password", "not-a-hash")
+
+
+def test_session_cookie_is_secure_by_default(monkeypatch):
+    monkeypatch.delenv("AUTOFLOW_COOKIE_SECURE", raising=False)
+    cookie = set_session_cookie("token", "2026-08-21T10:00:00Z")
+    assert "; Secure" in cookie
+
+
+def test_session_cookie_secure_can_be_opt_out(monkeypatch):
+    monkeypatch.setenv("AUTOFLOW_COOKIE_SECURE", "0")
+    cookie = set_session_cookie("token", "2026-08-21T10:00:00Z")
+    assert "; Secure" not in cookie

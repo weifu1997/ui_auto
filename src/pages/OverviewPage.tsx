@@ -1,7 +1,7 @@
 import type { Project } from "../mock-data";
 import { Link, useNavigate } from "../router";
 import { useRunStore } from "../run-store";
-import { PageHeading, emptyElements, emptyFlows, emptyRuns, isTerminalStatus, statusTag } from "./shared";
+import { MetricCard, PageHeading, emptyElements, emptyFlows, emptyRuns, isTerminalStatus, statusTag } from "./shared";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, ClockCircleOutlined, CodeOutlined, FileSearchOutlined, PlayCircleFilled, PlusOutlined, StopOutlined, UnorderedListOutlined, WarningFilled } from "@ant-design/icons";
 import { Button, Empty } from "antd";
@@ -47,26 +47,26 @@ export function OverviewPage({ project }: { project: Project }) {
         }
       />
       <section className="metric-grid">
-        <Metric
+        <MetricCard
           label="7 日通过率"
           value={successRate}
           detail={`${completedRuns.length} 次已完成的真实运行`}
           tone="success"
           icon={<CheckCircleFilled />}
         />
-        <Metric
+        <MetricCard
           label="流程总数"
           value={flows.length}
           detail="当前项目的已保存流程"
           icon={<UnorderedListOutlined />}
         />
-        <Metric
+        <MetricCard
           label="元素资产"
           value={elements.length}
           detail="当前项目的可复用元素"
           icon={<FileSearchOutlined />}
         />
-        <Metric
+        <MetricCard
           label="运行中"
           value={runningRuns}
           detail={`${runs.length} 次真实运行任务`}
@@ -173,28 +173,5 @@ export function OverviewPage({ project }: { project: Project }) {
         </div>
       </section>
     </>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  detail,
-  tone = "default",
-  icon,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-  tone?: "default" | "success" | "warning" | "info";
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className={`metric-card ${tone}`}>
-      <div className="metric-icon">{icon}</div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
   );
 }

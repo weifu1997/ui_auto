@@ -1,11 +1,12 @@
 import { expect, test } from "./platform-test";
 import type { Page } from "@playwright/test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   token: "runs-token",
   user: { id: "runs-user", email: "runs@example.test", name: "Runs user" },
-  workspaces: [{ id: "runs-workspace", name: "Runs workspace", role: "owner" }],
-};
+  workspaces: [{ id: "runs-workspace", name: "Runs workspace" }],
+});
 
 function platformRun(id: string, name: string, status: "running" | "success", createdAt: string) {
   return {

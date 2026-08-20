@@ -70,8 +70,15 @@ function platformTaskAsRun(task: PlatformRun, fallback?: Run): Run {
     ? task.snapshot.environment as Record<string, unknown>
     : {};
   const steps = Array.isArray(flow.steps) ? flow.steps : [];
-  const completedSteps = task.events.filter((event) => event.kind === "step.completed").length;
+  // 平台事件流中同时存在「step.completed」（新版本，规范命名）与「step.succeeded」
+  // （旧版本 runner.py 兼容名），两者都表示该步骤已经完成，应该计入已完成步骤。
+  const completedEvents = task.events.filter(
+    (event) => event.kind === "step.completed" || event.kind === "step.succeeded"
+  ).length;
   const status: Run["status"] = task.status === "dispatched" ? "running" : task.status;
+  // 当 run 最终状态为 success 时，即使事件流中因异常（例如 runner 早期版本没写 step.completed）
+  // 缺失完成事件，也应视为全步骤已完成，避免出现 0/9 通过的假象。
+  const completedSteps = status === "success" ? steps.length : completedEvents;
   return {
     id: task.id,
     flowName: typeof flow.name === "string" ? flow.name : fallback?.flowName ?? "Platform run",
@@ -89,14 +96,15 @@ function platformTaskAsRun(task: PlatformRun, fallback?: Run): Run {
 
 function platformEventAsLog(event: PlatformRun["events"][number]): ReportLog {
   const failed = event.kind.includes("failed") || event.kind.includes("error");
-  const completed = event.kind === "step.completed" || event.kind === "run.complete";
+  const isStepCompleted = event.kind === "step.completed" || event.kind === "step.succeeded";
+  const completed = isStepCompleted || event.kind === "run.complete";
   const index = Number(event.data.index);
   const title = typeof event.data.title === "string" ? event.data.title : "Step";
   const message = typeof event.data.message === "string"
     ? event.data.message
     : event.kind === "step.started"
       ? "Step started"
-      : event.kind === "step.completed"
+      : isStepCompleted
         ? "Step completed"
         : event.kind === "run.complete"
           ? `Run ${event.data.status === "success" ? "passed" : "finished"}`
@@ -216,6 +224,26 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   const logs = activeLog === "all" ? reportLogs : reportLogs.filter((log) => log.level === activeLog);
   const artifacts = platformTask?.artifacts ?? [];
   const error = typeof platformTask?.result?.error === "string" ? platformTask.result.error : undefined;
+  const securityDisabledMessage = (platformTask?.events ?? []).find((event) => event.kind === "run.security")
+    ?.data?.message as string | undefined;
+  // 三态显示：
+  // 1) 还有在跑：写 "生成中…"（只有这个状态是真的在等待）
+  // 2) 已结束但 artifacts=0：
+  //    - 有 run.security 事件：这是敏感 run，系统禁用了截图和 Trace，没有任何文件可以下载 → 给出原因
+  //    - 其他：明确说「本次运行未生成产物」（不是生成中，而是结束了就没文件）
+  const runFinished = Boolean(
+    platformTask
+      && platformTask.status !== "queued"
+      && platformTask.status !== "dispatched"
+      && platformTask.status !== "running",
+  );
+  const emptyDescription: string = artifacts.length > 0 ? ""
+    : !runFinished ? "产物生成中…"
+      : securityDisabledMessage
+        ? `因安全策略未生成产物：${securityDisabledMessage}`
+        : platformTask?.status === "success"
+          ? "本次运行未产生可下载的产物"
+          : "运行未成功完成，无可下载产物";
   const retry = async () => {
     const context = platformContextFor(project.id);
     if (!context || !runId) {
@@ -373,7 +401,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
           <div className="surface artifact-card">
             <h2>产物</h2>
             {artifacts.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="产物生成中" />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />
             ) : artifacts.map((artifact) => {
               const isImage = artifact.contentType.startsWith("image/");
               const isTrace = artifact.contentType === "application/zip";

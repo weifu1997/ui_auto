@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend runtime, FastAPI, SQLite and validation conventions for the roadmap's IAM, isolation, runner, retention and operations work."}
+{"file":".trellis/spec/backend/audit-governance.md","reason":"Preserve audit naming, redaction, query and lifecycle contracts while adding identity, policy and cleanup events."}
+{"file":".trellis/spec/backend/production-startup.md","reason":"Preserve the supported production entry, environment, loopback listener and deployment validation contract."}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"Preserve project isolation, idempotency, run deletion, batch and recording behavior while changing authorization and runner concurrency."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend React, TypeScript, Ant Design, API boundary and testing conventions for administration and collaboration UI."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Preserve project-scoped stores, server synchronization, outbox recovery and secret persistence boundaries."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply repository lint, build, unit, Playwright, accessibility and honest failure-state requirements."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Map IAM, audit, retention and runner contracts consistently across database, backend API, frontend and operations."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/current-state-audit.md","reason":"Use the reproduced repository evidence, current verdict and evidence limits as the implementation baseline."}
+{"file":".trellis/tasks/08-19-team-production-readiness-assessment/research/gap-register.md","reason":"Keep each remediation tied to its priority, phase, owner, dependency and observable exit evidence."}

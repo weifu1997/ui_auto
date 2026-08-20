@@ -1,10 +1,11 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   user: { id: "sync-user", email: "sync@example.test", name: "Sync user" },
-  workspaces: [{ id: "workspace-sync", name: "Sync workspace", role: "owner" }],
-};
+  workspaces: [{ id: "workspace-sync", name: "Sync workspace" }],
+});
 
 const environment = {
   id: "env-1",

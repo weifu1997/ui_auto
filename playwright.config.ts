@@ -6,7 +6,6 @@ import { join } from "node:path";
 const testRoot = mkdtempSync(join(tmpdir(), "autoflow-e2e-"));
 const productionEnvironment = {
   PLATFORM_DATA_DIRECTORY: join(testRoot, "data"),
-  PLATFORM_ARTIFACT_DIRECTORY: join(testRoot, "artifacts"),
   PLATFORM_SECRET_KEY: "playwright-production-secret",
 };
 

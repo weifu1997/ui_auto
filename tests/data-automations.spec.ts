@@ -1,10 +1,11 @@
 import { expect, test } from "./platform-test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-const session = {
+const session = platformAdminSession({
   token: "automation-ui-token",
   user: { id: "user-1", email: "automation@example.test", name: "Automation user" },
-  workspaces: [{ id: "workspace-1", name: "Workspace", role: "owner" }],
-};
+  workspaces: [{ id: "workspace-1", name: "Workspace" }],
+});
 
 test("renders versioned data and creates a published-version schedule", async ({ page }) => {
   let scheduleInput: Record<string, unknown> | undefined;

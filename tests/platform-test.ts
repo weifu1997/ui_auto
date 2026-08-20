@@ -1,21 +1,18 @@
 import { test as base, expect } from "@playwright/test";
+import { platformAdminSession } from "./platform-session-fixture";
 
-type StoredSession = {
-  user: { id: string; email: string; name: string };
-  workspaces: Array<{ id: string; name: string; role: string }>;
-};
-
-const fallbackSession: StoredSession = {
+const fallbackSession = platformAdminSession({
+  token: "playwright-fallback-token",
   user: { id: "playwright-user", email: "playwright@example.test", name: "Playwright user" },
   workspaces: [
-    { id: "test-workspace", name: "Playwright workspace", role: "owner" },
-    { id: "workspace-1", name: "Workspace", role: "owner" },
-    { id: "workspace-sync", name: "Sync workspace", role: "owner" },
-    { id: "platform-ui-workspace", name: "Platform UI workspace", role: "owner" },
-    { id: "runs-workspace", name: "Runs workspace", role: "owner" },
-    { id: "template-workspace", name: "Template workspace", role: "owner" },
+    { id: "test-workspace", name: "Playwright workspace" },
+    { id: "workspace-1", name: "Workspace" },
+    { id: "workspace-sync", name: "Sync workspace" },
+    { id: "platform-ui-workspace", name: "Platform UI workspace" },
+    { id: "runs-workspace", name: "Runs workspace" },
+    { id: "template-workspace", name: "Template workspace" },
   ],
-};
+});
 
 export const test = base.extend({
   page: async ({ page }, applyPage) => {
