@@ -61,7 +61,7 @@ if (!selectedVenv) {
 run(
   selectedVenv.python,
   ["-m", "pip", "install", "-r", join(repoRoot, "server-py", "requirements.txt")],
-  "Install Python dependencies",
+  "Install Python dependencies (requirements.txt)",
 );
 
 const browserCache = process.env.PLAYWRIGHT_BROWSERS_PATH
