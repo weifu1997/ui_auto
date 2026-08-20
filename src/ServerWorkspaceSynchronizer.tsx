@@ -44,6 +44,10 @@ type LoadedProject = {
 const resourceTypes: PlatformResourceType[] = ["flows", "elements", "variables", "environments"];
 export const platformConflictActionEvent = "autoflow-platform-conflict-action";
 
+// COL-01：远程变更轮询间隔。工作区数据在此间隔内自动刷新，使其他成员的已提交修改在
+// 文档化时限内可见；本地未提交草稿始终不会被轮询覆盖。
+const REMOTE_CHANGE_POLL_MS = 30_000;
+
 type ConflictDraft = {
   savedAt: string;
   project: { name: string; description: string };
@@ -52,6 +56,8 @@ type ConflictDraft = {
   variables: Variable[];
   environments: Environment[];
   activeEnvironmentId: string;
+  remoteUpdatedBy?: string;
+  remoteUpdatedAt?: string;
 };
 
 function conflictDraft(projectId: string): ConflictDraft {
@@ -149,6 +155,8 @@ export function ServerWorkspaceSynchronizer() {
     queryFn: () => loadWorkspace(session!, workspaceId),
     enabled: Boolean(session && workspaceId),
     staleTime: 15_000,
+    refetchInterval: REMOTE_CHANGE_POLL_MS,
+    refetchIntervalInBackground: true,
   });
 
   const syncApi = useMemo(() => {
@@ -163,7 +171,14 @@ export function ServerWorkspaceSynchronizer() {
 
     function markConflict(projectId: string, error: unknown) {
     upsertProjectDraft(buildProjectDraft(workspaceId, projectId, allSyncDraftPending, true));
-    sessionStorage.setItem(`autoflow-conflict-${projectId}`, JSON.stringify(conflictDraft(projectId)));
+    const draft = conflictDraft(projectId);
+    if (error instanceof PlatformApiError) {
+      const remoteUpdatedBy = typeof error.detail?.updatedBy === "string" ? error.detail.updatedBy : undefined;
+      const remoteUpdatedAt = typeof error.detail?.updatedAt === "string" ? error.detail.updatedAt : undefined;
+      if (remoteUpdatedBy) draft.remoteUpdatedBy = remoteUpdatedBy;
+      if (remoteUpdatedAt) draft.remoteUpdatedAt = remoteUpdatedAt;
+    }
+    sessionStorage.setItem(`autoflow-conflict-${projectId}`, JSON.stringify(draft));
     const code = error instanceof PlatformApiError ? error.code : "RESOURCE_VERSION_CONFLICT";
     useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "conflict");
     useWorkspaceStore.getState().setPlatformSyncError(projectId, code);

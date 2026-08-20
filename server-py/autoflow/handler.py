@@ -1932,7 +1932,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                 ),
             )
             if cursor.rowcount == 0:
-                raise PlatformError(409, "RESOURCE_VERSION_CONFLICT")
+                raise PlatformError(
+                    409,
+                    "RESOURCE_VERSION_CONFLICT",
+                    {"updatedBy": current[4], "updatedAt": current[3]},
+                )
             version = expected_version + 1
             services.audit(
                 project["workspace_id"],
@@ -1981,7 +1985,11 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             ),
         )
         if cursor.rowcount == 0:
-            raise PlatformError(409, "RESOURCE_VERSION_CONFLICT")
+            raise PlatformError(
+                409,
+                "RESOURCE_VERSION_CONFLICT",
+                {"updatedBy": current[4], "updatedAt": current[3]},
+            )
         services.audit(
             project["workspace_id"],
             {"type": "user", "id": user.id},
@@ -2035,7 +2043,14 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
         expected_version = body.get("expectedVersion")
         current_version = current[1] if current else 0
         if not isinstance(expected_version, int) or expected_version != current_version:
-            raise PlatformError(409, "RESOURCE_VERSION_CONFLICT")
+            raise PlatformError(
+                409,
+                "RESOURCE_VERSION_CONFLICT",
+                {
+                    "updatedBy": current[3] if current else None,
+                    "updatedAt": current[2] if current else None,
+                },
+            )
         data = as_record(body.get("data"))
         version = expected_version + 1
         timestamp = now()
