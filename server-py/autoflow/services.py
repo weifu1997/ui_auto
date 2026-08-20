@@ -439,7 +439,15 @@ class PlatformServices:
         run_platform_migrations(self.database, BOOTSTRAP_SCHEMA)
         self.audit = create_audit_writer(self.database)
         self.deployment_audit = create_deployment_audit_writer(self.database)
-        self.managed_runner = ManagedRunner(self.data_directory / "artifacts")
+        self.managed_runner = ManagedRunner(
+            self.data_directory / "artifacts",
+            global_concurrency=int(
+                os.environ.get("AUTOFLOW_RUNNER_GLOBAL_CONCURRENCY", "2")
+            ),
+            workspace_concurrency=int(
+                os.environ.get("AUTOFLOW_RUNNER_WORKSPACE_CONCURRENCY", "1")
+            ),
+        )
         self._recording_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="recording"
         )
@@ -3508,6 +3516,7 @@ class PlatformServices:
                 "completed": completed,
             },
             kind="run",
+            workspace_id=self.project_for(run["projectId"])["workspace_id"],
         )
 
     def enqueue_managed_validation(
@@ -3584,6 +3593,7 @@ class PlatformServices:
                 "completed": completed,
             },
             kind="validation",
+            workspace_id=self.project_for(validation["projectId"])["workspace_id"],
         )
 
     def redact_run_value(self, run: dict[str, Any], value: Any) -> Any:
