@@ -16,7 +16,7 @@
   "base_branch": "phase1/local-accounts-membership-three-role-rbac",
   "worktree_path": "/tmp/ui_auto-phase1-isolation",
   "commit": "aa86a69",
-  "pr_url": null,
+  "pr_url": "https://github.com/weifu1997/ui_auto/pull/8",
   "subtasks": [],
   "children": [],
   "parent": "08-19-team-production-readiness-assessment",
