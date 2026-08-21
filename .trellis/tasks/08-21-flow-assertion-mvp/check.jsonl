@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "Verify assertion changes keep run/retry/batch/revision contracts intact; check regression requirements before reporting done."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Quality gates for the frontend side: lint/build/unit test selection and review checks."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data-flow check: assertion fields must survive flow save -> revision snapshot -> runner -> events/result -> RunDetail without dropping or leaking."}
