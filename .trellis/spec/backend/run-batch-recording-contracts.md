@@ -192,3 +192,66 @@ if session["status"] == "recording":
     session["normalizer"].flush_pending()
     session["status"] = "paused"
 ```
+
+## Scenario: Element Validation Login-State Reuse
+
+### 1. Scope / Trigger
+
+- Trigger: element-locator validation (`POST /element-validations`) targets a page behind a login wall. The recorder captures such pages while logged in; a validation that opens them anonymously can never match the element.
+- The recorder's `storage_state` snapshot lives only in process memory (`RecordingSessionStateStore`), keyed by `(ownerId, projectId, environmentId)`.
+
+### 2. Signatures
+
+- Service owner: `PlatformServices.create_element_validation` looks up `recording_session_state.state_for(created_by, project_id, environment_id)` and passes it to `enqueue_managed_validation(validation, environment, storage_state)`, which puts it under `input["storage_state"]` for `execute_element_validation`.
+- Runner owner: `execute_element_validation` applies the snapshot to the browser context, then classifies a login wall via the pure helper `runner._element_validation_login_error(element, login_detected, storage_state)`.
+
+### 3. Contracts
+
+- The snapshot is scoped to the requesting user (`created_by`); another owner's snapshot for the same project/environment must never be injected.
+- After navigating to the element path, if the page shows a login wall (login-ish `location.pathname` or a password input), validation fails with a stable, actionable code instead of a silent `count=0` "missed":
+  - `ELEMENT_VALIDATION_LOGIN_REQUIRED` — no stored snapshot for this owner/project/environment.
+  - `ELEMENT_VALIDATION_LOGIN_INVALID` — a snapshot was injected but the wall still appears (stale session).
+- Elements whose own `path` is a login page (contains `login`, `log-in`, `signin`, `sign-in`, `auth`, or `account`, case-insensitive) are exempt from the wall check so the login button itself validates normally.
+- The frontend maps these codes to actionable Chinese copy (`src/element-validation.ts`); a failed validation must surface as `error` (never as `missed`), and a batch with login-blocked elements renders a warning alert above the element list.
+- Because the snapshot is process-local and lost on restart, "record then validate immediately" is the supported flow; the cold-start case must surface `*_REQUIRED`/`*_INVALID`, not hang or silently pass.
+- Frontend contract (`src/recording-editor-state.ts`): new-element ids in the import plan must be derived deterministically from the locator key (`recordedElementId(elementKey(...))`), never from a plan timestamp. The plan is recomputed every time the workspace synchronizer re-fetches the element store (30s poll → new array refs), and any id churn orphans in-flight validation results keyed to the previous ids, leaving the UI stuck at "校验中".
+- Frontend polling must outlive the worst-case server-side wait: validations execute serially per workspace and a single task can take ~50s, so the recording-result poller runs 900 × 500ms (7.5 min), matching the Elements page. A shorter cap silently abandons the poll while the server task still completes, and the row shows a terminal status only after the user manually re-triggers.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| No login wall on target page | normal count-based success/ambiguous/missed result |
+| Login wall, no snapshot for requesting owner | `failed` with `ELEMENT_VALIDATION_LOGIN_REQUIRED` |
+| Login wall, snapshot injected but still on wall | `failed` with `ELEMENT_VALIDATION_LOGIN_INVALID` |
+| Element path is a login page | wall check skipped; validate as usual |
+
+### 5. Good / Base / Bad Cases
+
+- Good: record a dashboard flow while logged in, stop, then validate a dashboard element — the recorder snapshot is injected and the element matches.
+- Base: validating an element on `/login` without any snapshot succeeds as before (exempt path).
+- Bad: falling back to `count=0`/"missed" when the page is actually a login wall, or leaking owner B's snapshot into owner A's validation.
+
+### 6. Tests Required
+
+- `server-py/tests/unit/test_element_validation_login.py`: decision matrix of `_element_validation_login_error` (wall present/absent, snapshot present/absent, exempt login paths), snapshot injection into the runner input via `enqueue_managed_validation`, and owner-scoped snapshot isolation.
+- `src/element-validation.test.ts`: mapping of both error codes to user-facing messages.
+- Playwright `tests/recording.spec.ts` stays green: its recorded element sits on the `/login` path, which is exempt from the wall check.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# Anonymous validation of a protected page, then a misleading "missed".
+result = {"status": "success", "count": 0}  # page was actually a login wall
+```
+
+#### Correct
+
+```python
+if login_detected and not element_path_is_login_page:
+    if input.get("storage_state"):
+        raise RuntimeError("ELEMENT_VALIDATION_LOGIN_INVALID")
+    raise RuntimeError("ELEMENT_VALIDATION_LOGIN_REQUIRED")
+```

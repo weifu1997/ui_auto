@@ -70,6 +70,21 @@ function elementKey(element: Pick<ElementAsset, "environment" | "path" | "method
   return `${element.environment}\u0000${element.path}\u0000${element.method}\u0000${element.value}`;
 }
 
+/**
+ * 新元素 id 必须由定位器内容确定性推导（FNV-1a）。
+ * 导入计划会随 workspace 同步轮询反复重算（elements 引用每次刷新都会变化），
+ * 若 id 里带时间戳，元素 id 会随之漂移，正在进行的定位器校验结果和用户的
+ * 编辑就会挂在旧 id 上，界面永远停在「校验中」。
+ */
+function recordedElementId(key: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `rec-el-${(hash >>> 0).toString(36)}`;
+}
+
 function uniqueElementName(base: string, existingNames: Set<string>) {
   const normalized = base.trim() || "录制元素";
   if (!existingNames.has(normalized)) {
@@ -114,7 +129,7 @@ export function planRecordingImport(
   const newElements: ElementAsset[] = [];
   const elementsToValidate: ElementAsset[] = [];
 
-  for (const [index, recorded] of result.elements.entries()) {
+  for (const recorded of result.elements) {
     const key = elementKey({
       environment: environmentId,
       path: recorded.path,
@@ -123,7 +138,7 @@ export function planRecordingImport(
     });
     const existing = elementsByKey.get(key);
     const resolved = existing ?? {
-      id: `rec-el-${now}-${index}`,
+      id: recordedElementId(key),
       name: uniqueElementName(recorded.name, names),
       path: recorded.path,
       method: recorded.method,

@@ -3,6 +3,7 @@ import type { ElementAsset, Environment, Project } from "../mock-data";
 import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements, emptyEnvironments, uniqueNameValidator } from "./shared";
 import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
 import { platformProjectContext } from "../platform-context";
+import { elementValidationLoginMessage } from "../element-validation";
 import { useWorkspaceStore } from "../workspace-store";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Checkbox, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
@@ -70,7 +71,11 @@ export function ElementsPage({ project }: { project: Project }) {
           { environmentId: environment.id, element: target },
         );
         let task = created.validation;
-        for (let attempt = 0; mounted.current && attempt < 80 && (task.status === "queued" || task.status === "running"); attempt += 1) {
+        // 服务端按 workspace 串行执行校验，单个任务实测可达 ~50s；用 7.5 分钟
+        // 墙钟上限覆盖常见批次的排队耗时。
+        const deadline = Date.now() + 7 * 60_000 + 30_000;
+        while (task.status === "queued" || task.status === "running") {
+          if (!mounted.current || Date.now() >= deadline) break;
           await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
           if (!mounted.current) return;
           task = (await getPlatformElementValidation(platformContext.session.token, platformContext.projectId, task.id)).validation;
@@ -90,7 +95,7 @@ export function ElementsPage({ project }: { project: Project }) {
           screenshotUrl: task.result?.screenshotId ? platformValidationArtifactUrl(task.result.screenshotId) : undefined,
           elapsedMs: task.result?.elapsedMs,
           firstMatch: task.result?.firstMatch,
-          reason: task.error,
+          reason: elementValidationLoginMessage(task.error) ?? task.error,
           source: "platform",
         });
         return;

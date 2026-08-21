@@ -424,6 +424,29 @@ def execute_browser_run(
                 pass
 
 
+def _element_validation_login_error(
+    element: dict[str, Any],
+    login_detected: bool,
+    storage_state: dict[str, Any] | None,
+) -> str | None:
+    """Return a stable error code when validation landed on a login wall.
+
+    Validation opens the target page with the recorder's storage snapshot when
+    one is available. If the page still shows a login wall the element lives
+    behind authentication: a stale/absent session should produce a precise,
+    actionable code instead of a silent "missed". Elements whose own path is a
+    login page (e.g. the login button) are excluded to avoid false positives.
+    """
+    if not login_detected:
+        return None
+    element_path = str(element.get("path") or "")
+    if re.search(r"login|log-in|signin|sign-in|auth|account", element_path, re.I):
+        return None
+    if storage_state:
+        return "ELEMENT_VALIDATION_LOGIN_INVALID"
+    return "ELEMENT_VALIDATION_LOGIN_REQUIRED"
+
+
 def execute_element_validation(
     input: dict[str, Any],
     hooks: dict[str, Any],
@@ -455,15 +478,19 @@ def execute_element_validation(
                 wait_until=_NAVIGATE_WAIT_UNTIL,
                 timeout=_navigate_timeout_ms(environment),
             )
-            if input.get("requiresLogin"):
-                login_detected = page.evaluate(
-                    """
-                    () => /(login|signin|sign-in|auth|account)/i.test(location.pathname)
-                        || !!document.querySelector('input[type=password]')
-                    """
-                )
-                if login_detected:
-                    raise RuntimeError("LOGIN_SESSION_INVALID")
+            login_detected = page.evaluate(
+                """
+                () => /(login|signin|sign-in|log-in)/i.test(location.pathname)
+                    || !!document.querySelector('input[type=password]')
+                """
+            )
+            login_error = _element_validation_login_error(
+                element,
+                login_detected,
+                input.get("storage_state"),
+            )
+            if login_error:
+                raise RuntimeError(login_error)
             if hooks.get("signal") and hooks["signal"].is_set():
                 raise RuntimeError("RUN_CANCELED")
             locator = _locator_for(
