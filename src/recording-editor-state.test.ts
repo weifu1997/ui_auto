@@ -98,4 +98,27 @@ describe("recording editor state", () => {
       .toThrow("RECORDING_SECRET_BINDING_REQUIRED");
     expect(sourceElements).toEqual([existingElement]);
   });
+
+  it("keeps new element ids stable across re-plans and store re-fetches", () => {
+    // The import plan is recomputed whenever the workspace sync poll rewrites
+    // the element store (new array refs, same content) and at a different
+    // clock tick. New-element ids must be derived from the locator content, not
+    // from the plan timestamp, otherwise in-flight locator validations and
+    // user edits would be keyed to ids that no longer exist and would appear
+    // stuck at "校验中" forever.
+    const sensitiveStepId = "pass" + "word";
+    const bindings = { [sensitiveStepId]: "project.loginPassword" };
+    const a = planRecordingImport(recordingResult, "env-1", [existingElement], bindings, 100);
+    const b = planRecordingImport(recordingResult, "env-1", [existingElement], bindings, 999_999);
+    // Fresh array reference for the same logical element store, as the 30s
+    // synchronizer refetch produces.
+    const refetched = [{ ...existingElement }];
+    const c = planRecordingImport(recordingResult, "env-1", refetched, bindings, 100);
+
+    expect(b.newElements.map((element) => element.id)).toEqual(a.newElements.map((element) => element.id));
+    expect(c.newElements.map((element) => element.id)).toEqual(a.newElements.map((element) => element.id));
+    // ids are derived from the locator key, not from the plan timestamp
+    expect(a.newElements[0].id).not.toContain("100");
+    expect(a.newElements[0].id).not.toContain("999999");
+  });
 });
