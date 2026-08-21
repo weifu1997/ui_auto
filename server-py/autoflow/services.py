@@ -3349,7 +3349,12 @@ class PlatformServices:
             ),
         )
         validation = self.element_validation_by_id(validation_id)
-        self.enqueue_managed_validation(validation, environment)
+        # 复用发起者最近一次录制会话的登录态快照（进程内存，重启即失），
+        # 使登录后的页面也能通过元素定位器校验。
+        storage_state = self.recording_session_state.state_for(
+            created_by, project_id, environment_id
+        )
+        self.enqueue_managed_validation(validation, environment, storage_state)
         return self.element_validation_by_id(validation_id)
 
     def require_same_origin_element_path(
@@ -3533,6 +3538,7 @@ class PlatformServices:
         self,
         validation: dict[str, Any],
         environment: dict[str, Any],
+        storage_state: dict[str, Any] | None = None,
     ) -> None:
         validation_id = validation["id"]
 
@@ -3595,7 +3601,11 @@ class PlatformServices:
 
         self.managed_runner.enqueue(
             validation_id,
-            {"environment": environment, "element": validation["element"]},
+            {
+                "environment": environment,
+                "element": validation["element"],
+                "storage_state": storage_state,
+            },
             {
                 "started": started,
                 "artifact": artifact,

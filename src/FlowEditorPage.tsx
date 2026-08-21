@@ -32,6 +32,7 @@ import { message, modal } from "./antd-feedback";
 import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
 import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
 import { platformProjectContext } from "./platform-context";
+import { elementValidationLoginMessage } from "./element-validation";
 import { describePlatformRunError, platformRunAsRun, uniqueVariableNameValidator } from "./pages/shared";
 import {
   clearStoredRecordingSession,
@@ -190,10 +191,17 @@ type ElementValidationResult = {
   status: ElementValidationStatus;
   count?: number;
   errorMessage?: string;
+  /** 校验落在登录墙上：元素位于登录后才能访问的页面，需要登录态。 */
+  loginBlocked?: boolean;
 };
 
 const emptyValidationResults: Record<string, ElementValidationResult> = {};
 const emptyElementEdits: Record<string, Partial<ElementAsset>> = {};
+
+// 服务端按 workspace 串行执行校验，单个任务实测可达 ~50s，批量时按队列顺序
+// 依次完成（第 k 个约在 k×~50s）。用 7.5 分钟墙钟上限覆盖常见批次的排队耗时，
+// 避免「前端放弃轮询、服务端仍在跑」导致的假性「校验中」滞留。
+const VALIDATION_DEADLINE_MS = 7 * 60_000 + 30_000;
 
 function mergeElementEdits(
   element: ElementAsset,
@@ -415,6 +423,15 @@ export default function FlowEditorPage() {
     return { totals, canImport };
   }, [effectiveNewElements, validationResults, hasValidated]);
 
+  const loginValidationErrors = useMemo(
+    () =>
+      effectiveNewElements
+        .filter((element) => validationResults[element.id]?.loginBlocked)
+        .map((element) => validationResults[element.id].errorMessage ?? "")
+        .filter(Boolean),
+    [effectiveNewElements, validationResults],
+  );
+
   const platformContext = useMemo(
     () => (project ? platformProjectContext(project.id) : undefined),
     [project],
@@ -449,13 +466,23 @@ export default function FlowEditorPage() {
   const canSave = isDirty || hasPublishedRevision === false;
 
   const pollValidation = useCallback(
-    async (token: string, projectId: string, validationId: string): Promise<{ status: string; count?: number }> => {
+    async (
+      token: string,
+      projectId: string,
+      validationId: string,
+    ): Promise<{ status: string; count?: number; error?: string }> => {
       let validation = (await getPlatformElementValidation(token, projectId, validationId)).validation;
-      for (let attempt = 0; attempt < 60 && (validation.status === "queued" || validation.status === "running"); attempt += 1) {
+      const deadline = Date.now() + VALIDATION_DEADLINE_MS;
+      while (validation.status === "queued" || validation.status === "running") {
+        if (Date.now() >= deadline) break;
         await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
         validation = (await getPlatformElementValidation(token, projectId, validation.id)).validation;
       }
-      return { status: validation.status, count: Number(validation.result?.count ?? 0) };
+      return {
+        status: validation.status,
+        count: Number(validation.result?.count ?? 0),
+        error: validation.error,
+      };
     },
     [],
   );
@@ -473,7 +500,7 @@ export default function FlowEditorPage() {
           platformContext.projectId,
           { environmentId: recordingEnvironment.id, element: asset },
         );
-        const { status, count } = await pollValidation(
+        const { status, count, error } = await pollValidation(
           platformContext.session.token,
           platformContext.projectId,
           created.validation.id,
@@ -486,7 +513,13 @@ export default function FlowEditorPage() {
         } else if (status === "success") {
           onUpdate({ status: "missed", count: finalCount });
         } else {
-          onUpdate({ status: "missed", count: 0 });
+          const loginMessage = elementValidationLoginMessage(error);
+          onUpdate({
+            status: "error",
+            count: 0,
+            loginBlocked: Boolean(loginMessage),
+            errorMessage: loginMessage ?? error ?? "校验异常",
+          });
         }
       } catch (error) {
         onUpdate({
@@ -1417,6 +1450,15 @@ export default function FlowEditorPage() {
                     )}
                   </span>
                 </p>
+                {loginValidationErrors.length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: "var(--space-3)" }}
+                    message={`${loginValidationErrors.length} 个元素需要登录态才能校验`}
+                    description={elementValidationLoginMessage(loginValidationErrors[0]) ?? undefined}
+                  />
+                )}
                 {effectiveNewElements.map((element) => {
                   const result = validationResults[element.id] ?? { status: "pending" as ElementValidationStatus };
                   const expanded = expandedElementId === element.id;
