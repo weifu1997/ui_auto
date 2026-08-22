@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", help="Display name for a newly created account")
     parser.add_argument(
         "--data-directory",
-        default=os.environ.get("PLATFORM_DATA_DIRECTORY", "server/.data"),
+        default=os.environ.get("PLATFORM_DATA_DIRECTORY", "data"),
         help="Platform data directory (defaults to PLATFORM_DATA_DIRECTORY)",
     )
     parser.add_argument(

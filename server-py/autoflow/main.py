@@ -188,7 +188,7 @@ class SecureTransportMiddleware:
 def create_app(services: PlatformServices | None = None) -> FastAPI:
     if services is None:
         data_directory = os.environ.get(
-            "PLATFORM_DATA_DIRECTORY", str(REPO_ROOT / "server" / ".data")
+            "PLATFORM_DATA_DIRECTORY", str(REPO_ROOT / "data")
         )
         services = PlatformServices(data_directory)
     maintenance_health = MaintenanceHealth()

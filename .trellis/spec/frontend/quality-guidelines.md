@@ -110,7 +110,7 @@ Choose regression coverage by risk. Examples:
 
 ## Forbidden Changes
 
-- Do not commit runtime SQLite files or other `server/.data` artifacts as part
+- Do not commit runtime SQLite files or other `data/` runtime artifacts as part
   of frontend work.
 - Do not disable hook rules, weaken TypeScript checks, or add blanket lint
   suppressions. `src/router.tsx` has a narrow documented suppression because it
