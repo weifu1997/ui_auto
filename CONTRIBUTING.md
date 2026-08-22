@@ -2,9 +2,11 @@
 
 ## Pull request policy
 
-- Target the active production branch (`python_3.1`). Each change is a focused,
-  independently reviewable Trellis task with its own branch and PR.
-- `python_3.1` requires a passing `quality-linux` and `deployment-windows` check,
+- Target `master`. Larger efforts land on a working branch (for example
+  `v3.2_flow_assertion`) and reach `master` through a release PR once the batch
+  is verified. Each change is a focused, independently reviewable Trellis task
+  with its own branch and PR.
+- `master` requires a passing `quality-linux` and `deployment-windows` check,
   plus one approving review. Do not bypass branch protection.
 - Keep CI evidence real: do not commit workarounds that only make local checks
   appear green without exercising the relevant gate.
