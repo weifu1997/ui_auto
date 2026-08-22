@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useFlowStore } from './flow-store'
+import { shouldReloadEditorSteps, useFlowStore } from './flow-store'
 
 describe('flow editor draft store', () => {
   beforeEach(() => {
@@ -55,5 +55,30 @@ describe('flow editor draft store', () => {
     useFlowStore.getState().importRecordingSteps([])
 
     expect(useFlowStore.getState()).toMatchObject({ selectedStepId: 'manual', isDirty: false })
+  })
+})
+
+describe('shouldReloadEditorSteps', () => {
+  it('reloads on the first load and when switching to another flow', () => {
+    expect(shouldReloadEditorSteps(null, { flowId: 'a', serialized: '[]' }, false)).toBe(true)
+    expect(
+      shouldReloadEditorSteps({ flowId: 'a', serialized: '[]' }, { flowId: 'b', serialized: '[]' }, false),
+    ).toBe(true)
+  })
+
+  it('never overwrites a dirty draft with the same flow definition', () => {
+    const last = { flowId: 'a', serialized: '[{"id":"saved"}]' }
+    expect(shouldReloadEditorSteps(last, { flowId: 'a', serialized: '[{"id":"saved"}]' }, true)).toBe(false)
+    expect(shouldReloadEditorSteps(last, { flowId: 'a', serialized: '[{"id":"remote"}]' }, true)).toBe(false)
+  })
+
+  it('skips a poll refresh whose content is unchanged so selection is preserved', () => {
+    const last = { flowId: 'a', serialized: '[{"id":"saved"}]' }
+    expect(shouldReloadEditorSteps(last, { flowId: 'a', serialized: '[{"id":"saved"}]' }, false)).toBe(false)
+  })
+
+  it('reloads a clean editor when the remote content actually changes', () => {
+    const last = { flowId: 'a', serialized: '[{"id":"saved"}]' }
+    expect(shouldReloadEditorSteps(last, { flowId: 'a', serialized: '[{"id":"remote"}]' }, false)).toBe(true)
   })
 })

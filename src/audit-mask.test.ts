@@ -7,6 +7,32 @@ describe("maskAuditDetail", () => {
       .toEqual({ url: "******", channelName: "值班群", code: 19024, error: null });
   });
 
+  it("掩码常见凭据类键名变体", () => {
+    expect(
+      maskAuditDetail({
+        apiKey: "ak-1",
+        api_key: "ak-2",
+        accessKey: "ak-3",
+        access_key_id: "ak-4",
+        privateKey: "pk-1",
+        Authorization: "Bearer x",
+        cookie: "sid=1",
+        sessionId: "s-1",
+        displayName: "值班群",
+      }),
+    ).toEqual({
+      apiKey: "******",
+      api_key: "******",
+      accessKey: "******",
+      access_key_id: "******",
+      privateKey: "******",
+      Authorization: "******",
+      cookie: "******",
+      sessionId: "******",
+      displayName: "值班群",
+    });
+  });
+
   it("递归处理嵌套对象与数组", () => {
     expect(maskAuditDetail({ names: ["SECRET_A"], nested: { signingSecret: "abc", ok: 1 }, list: [{ keyword: "股票日报" }] }))
       .toEqual({ names: ["SECRET_A"], nested: { signingSecret: "******", ok: 1 }, list: [{ keyword: "******" }] });

@@ -24,7 +24,7 @@ import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from 
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useFlowStore } from "./flow-store";
+import { shouldReloadEditorSteps, useFlowStore } from "./flow-store";
 import { useRunStore } from "./run-store";
 import { useSecretStore } from "./secret-store";
 import { useWorkspaceStore } from "./workspace-store";
@@ -589,9 +589,14 @@ export default function FlowEditorPage() {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
+  const lastLoadedDefinition = useRef<{ flowId: string; serialized: string } | null>(null);
   useEffect(() => {
-    if (flowId) loadSteps(flowDefinition ?? []);
-  }, [flowDefinition, flowId, loadSteps]);
+    if (!flowId) return;
+    const next = { flowId, serialized: JSON.stringify(flowDefinition ?? []) };
+    if (!shouldReloadEditorSteps(lastLoadedDefinition.current, next, isDirty)) return;
+    lastLoadedDefinition.current = next;
+    loadSteps(flowDefinition ?? []);
+  }, [flowDefinition, flowId, loadSteps, isDirty]);
 
   // 录制结果切换（或关闭）时，清空用户编辑和校验结果，保持无状态
   useEffect(() => {
@@ -934,17 +939,19 @@ export default function FlowEditorPage() {
     );
     markSaved();
     if (platformContext && activeEnvironment) {
+      let revisionPublished = false;
       try {
         await createPlatformRevision(
           platformContext.session.token,
           platformContext.projectId,
           revisionInput(updatedFlow, activeEnvironment, elements, variables),
         );
+        revisionPublished = true;
       } catch {
-        // 同步器兜底
+        // 同步器兜底；置为 false 让 run() 在执行前重新尝试创建版本
       }
+      setHasPublishedRevision(revisionPublished);
     }
-    setHasPublishedRevision(true);
     message.success("流程已保存");
   };
   const run = async (upToStepId?: string) => {

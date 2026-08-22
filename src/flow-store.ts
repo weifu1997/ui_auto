@@ -1,6 +1,21 @@
 import { create } from "zustand";
 import type { FlowStep } from "./mock-data";
 
+export type EditorDefinitionCheckpoint = { flowId: string; serialized: string };
+
+// 同一流程的 definition 引用会随远程轮询刷新而变化；编辑中的草稿优先于服务器快照，
+// 内容未变时也不重载（保留选中步骤与滚动位置）。
+export function shouldReloadEditorSteps(
+  last: EditorDefinitionCheckpoint | null,
+  next: EditorDefinitionCheckpoint,
+  isDirty: boolean,
+): boolean {
+  if (!last) return true;
+  if (last.flowId !== next.flowId) return true;
+  if (isDirty) return false;
+  return last.serialized !== next.serialized;
+}
+
 type FlowStore = {
   steps: FlowStep[];
   selectedStepId: string;
