@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("../antd-feedback", () => ({
+vi.mock("../lib/antd-feedback", () => ({
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   modal: { confirm: vi.fn() },
 }));
@@ -49,7 +49,7 @@ let mockRevisionsList: any[] = [];
 const mockCreatePlatformRevision = vi.fn(async (..._args: any[]) => ({ revision: { id: "rev-created", revisionNumber: 1 } }));
 const mockCreatePlatformRun = vi.fn(async (..._args: any[]) => ({ runs: [{ id: "run-1", status: "queued" }], runIds: ["run-1"] }));
 
-vi.mock("../platform-api", async (importOriginal) => {
+vi.mock("../api/platform-api", async (importOriginal) => {
   const actual = await importOriginal<any>();
   return {
     ...actual,
@@ -70,14 +70,14 @@ vi.mock("../platform-api", async (importOriginal) => {
   };
 });
 
-vi.mock("../platform-context", () => ({
+vi.mock("../api/platform-context", () => ({
   platformProjectContext: (projectId: string) => ({
     session: { token: "token-1", user: { id: "u1" }, workspaces: [] },
     projectId,
   }),
 }));
 
-vi.mock("../workspace-store", () => ({
+vi.mock("../stores/workspace-store", () => ({
   useWorkspaceStore: (selector: any) =>
     selector({
       projects: [mockProject],

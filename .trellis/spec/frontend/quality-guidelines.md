@@ -4,7 +4,7 @@
 
 Frontend source predominantly uses double quotes, semicolons, two-space
 indentation, trailing commas in multiline constructs, and relative imports.
-Match the surrounding file. `src/flow-store.test.ts` retains an older
+Match the surrounding file. `src/stores/flow-store.test.ts` retains an older
 single-quote/no-semicolon style; do not reformat unrelated code while changing
 a focused behavior.
 
@@ -54,7 +54,7 @@ launcher, Platform backend, browser flows, and Windows deployment smoke.
 ## Test Placement and Style
 
 Use Vitest for deterministic store or utility behavior. The representative
-`src/flow-store.test.ts` resets the Zustand store in `beforeEach`, calls actions
+`src/stores/flow-store.test.ts` resets the Zustand store in `beforeEach`, calls actions
 through `getState()`, and asserts externally visible state transitions.
 
 Use Playwright for user workflows. Tests under `tests/`:

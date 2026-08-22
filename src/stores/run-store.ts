@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Run } from "./mock-data";
+import type { Run } from "../lib/mock-data";
 
 export type ApiRun = Run;
 

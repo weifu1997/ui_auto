@@ -29,10 +29,10 @@ Playwright suites rather than on framework defaults.
 - Application composition and lazy routes: `src/main.tsx`, `src/App.tsx`
 - Page and shared-view patterns: `src/pages/ProjectsPage.tsx`,
   `src/pages/ElementsPage.tsx`, `src/pages/shared.tsx`
-- State and persistence: `src/workspace-store.ts`, `src/run-store.ts`,
-  `src/secret-store.ts`
-- HTTP boundary: `src/platform-api.ts` (same-origin `/api`)
-- Tests: `src/flow-store.test.ts`, `tests/workbench.spec.ts`,
+- State and persistence: `src/stores/workspace-store.ts`, `src/stores/run-store.ts`,
+  `src/stores/secret-store.ts`
+- HTTP boundary: `src/api/platform-api.ts` (same-origin `/api`)
+- Tests: `src/stores/flow-store.test.ts`, `tests/workbench.spec.ts`,
   `tests/platform-sync.spec.ts`
 
 All files in this directory are ready for use. Documentation is written in

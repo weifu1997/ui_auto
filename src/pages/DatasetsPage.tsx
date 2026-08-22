@@ -1,8 +1,8 @@
-import { message } from "../antd-feedback";
-import type { Project } from "../mock-data";
-import { archivePlatformDataset, getPlatformDatasetVersion, getPlatformDatasets, importPlatformDataset, importPlatformDatasetVersion } from "../platform-api";
-import type { PlatformDataset, PlatformDatasetVersion, PlatformSession } from "../platform-api";
-import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
+import { message } from "../lib/antd-feedback";
+import type { Project } from "../lib/mock-data";
+import { archivePlatformDataset, getPlatformDatasetVersion, getPlatformDatasets, importPlatformDataset, importPlatformDatasetVersion } from "../api/platform-api";
+import type { PlatformDataset, PlatformDatasetVersion, PlatformSession } from "../api/platform-api";
+import { readPlatformProjectMap, readStoredPlatformSession } from "../api/platform-context";
 import { PageHeading, PlatformProjectRequired, readFileAsBase64 } from "./shared";
 import { DeleteOutlined, FileSearchOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Form, Input, Modal, Popconfirm, Space, Table, Tooltip } from "antd";

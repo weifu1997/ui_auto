@@ -1,11 +1,11 @@
-import { message } from "../antd-feedback";
-import type { Project } from "../mock-data";
+import { message } from "../lib/antd-feedback";
+import type { Project } from "../lib/mock-data";
 import { useNavigate } from "../router";
 import { PageHeading, uniqueNameValidator } from "./shared";
-import { updatePlatformProject } from "../platform-api";
-import { readStoredPlatformSession } from "../platform-context";
+import { updatePlatformProject } from "../api/platform-api";
+import { readStoredPlatformSession } from "../api/platform-context";
 import { useQueryClient } from "@tanstack/react-query";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { useThemeStore } from "../theme-mode";
 import type { ThemeMode } from "../theme-mode";
 import { PauseCircleOutlined } from "@ant-design/icons";

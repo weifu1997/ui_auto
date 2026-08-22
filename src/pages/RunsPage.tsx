@@ -1,12 +1,12 @@
-import { message } from "../antd-feedback";
-import type { Project, Run } from "../mock-data";
-import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, deletePlatformRun, deletePlatformRuns, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../platform-api";
-import type { PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../platform-api";
+import { message } from "../lib/antd-feedback";
+import type { Project, Run } from "../lib/mock-data";
+import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, deletePlatformRun, deletePlatformRuns, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../api/platform-api";
+import type { PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../api/platform-api";
 
-import { readPlatformProjectMap, readStoredPlatformSession } from "../platform-context";
+import { readPlatformProjectMap, readStoredPlatformSession } from "../api/platform-context";
 import { useLocation, useNavigate } from "../router";
-import { useRunStore } from "../run-store";
-import { useWorkspaceStore } from "../workspace-store";
+import { useRunStore } from "../stores/run-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling } from "./shared";
 import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";

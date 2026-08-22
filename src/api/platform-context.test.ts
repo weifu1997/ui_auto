@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { canUseCapability } from "./pages/shared";
+import { canUseCapability } from "../pages/shared";
 import {
   platformSessionStorageKey,
   storePlatformSession,

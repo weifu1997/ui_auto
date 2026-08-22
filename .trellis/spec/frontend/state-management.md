@@ -8,13 +8,13 @@ The frontend uses several state mechanisms with distinct owners:
 | --- | --- | --- |
 | Open drawers, filters, loading, selected rows | Component `useState` | `ProjectsPage.tsx`, `ElementsPage.tsx`, `AutomationsPage.tsx` |
 | Form values and validation | Ant Design Form | `VariablesPage.tsx`, `EnvironmentsPage.tsx` |
-| Cross-page workspace documents | Persisted Zustand | `src/workspace-store.ts` |
-| Run summaries | Persisted Zustand with filtering | `src/run-store.ts` |
-| Current editor draft | Non-persisted Zustand | `src/flow-store.ts` |
-| Secret values for the current browser session | Non-persisted Zustand | `src/secret-store.ts` |
+| Cross-page workspace documents | Persisted Zustand | `src/stores/workspace-store.ts` |
+| Run summaries | Persisted Zustand with filtering | `src/stores/run-store.ts` |
+| Current editor draft | Non-persisted Zustand | `src/stores/flow-store.ts` |
+| Secret values for the current browser session | Non-persisted Zustand | `src/stores/secret-store.ts` |
 | Server workspace hydration/cache | TanStack Query plus Zustand hydration | `src/ServerWorkspaceSynchronizer.tsx` |
 | Route and route parameters | Local router context | `src/router.tsx` |
-| Platform session/mappings/document versions | Browser storage helpers | `src/platform-context.ts` |
+| Platform session/mappings/document versions | Browser storage helpers | `src/api/platform-context.ts` |
 
 Keep UI state local unless another route or background synchronizer needs it.
 For example, `ElementsPage` keeps validation dialogs local but writes the
@@ -32,7 +32,7 @@ setVariables: (projectId, variables) =>
   })),
 ```
 
-See `src/workspace-store.ts`, `src/run-store.ts`, and `src/secret-store.ts`.
+See `src/stores/workspace-store.ts`, `src/stores/run-store.ts`, and `src/stores/secret-store.ts`.
 Store actions own invariants: `setEnvironments` repairs an invalid active
 environment; `archiveProject` removes every project-scoped collection;
 `moveStep` rejects out-of-range moves.
@@ -105,7 +105,7 @@ Use `useNavigate` and `useParams` from `src/router.tsx` for navigable identity.
 Do not keep a project ID or run ID in duplicated component state.
 
 Browser storage access is concentrated in Zustand persistence and
-`src/platform-context.ts`. That module validates legacy mapping shapes and
+`src/api/platform-context.ts`. That module validates legacy mapping shapes and
 emits `platformContextChangedEvent` after session changes. Extend its helpers
 when adding related storage instead of scattering another unvalidated key
 through pages. `AgentsPage.tsx` contains older explicit session writes; treat

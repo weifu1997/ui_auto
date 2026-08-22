@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FlowStep } from "./mock-data";
+import type { FlowStep } from "../lib/mock-data";
 
 export type EditorDefinitionCheckpoint = { flowId: string; serialized: string };
 

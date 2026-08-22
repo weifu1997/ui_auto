@@ -1,10 +1,10 @@
 import { lazy, Suspense } from "react";
 import type { ComponentType } from "react";
-import type { Project } from "../mock-data";
+import type { Project } from "../lib/mock-data";
 import { Navigate, useParams } from "../router";
 import { ProjectLayout, projectById, sectionMeta } from "./shared";
 import type { ProjectSection } from "./shared";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 
 const lazySection = (loader: () => Promise<{ default: ComponentType<{ project: Project }> }>) => lazy(loader);
 

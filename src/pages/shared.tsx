@@ -1,14 +1,14 @@
 // Page components share these rendering and data helpers as a single, lazy-loaded module.
 /* oxlint-disable react/only-export-components */
-import { message, modal } from "../antd-feedback";
-import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../mock-data";
-import { getPlatformHealth, PlatformApiError } from "../platform-api";
-import type { PlatformCapability, PlatformRun, PlatformSession } from "../platform-api";
-import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../platform-context";
-import { logoutPlatform } from "../platform-api";
+import { message, modal } from "../lib/antd-feedback";
+import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../lib/mock-data";
+import { getPlatformHealth, PlatformApiError } from "../api/platform-api";
+import type { PlatformCapability, PlatformRun, PlatformSession } from "../api/platform-api";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../api/platform-context";
+import { logoutPlatform } from "../api/platform-api";
 import { Link, useLocation, useNavigate } from "../router";
-import { useRunStore } from "../run-store";
-import { useWorkspaceStore } from "../workspace-store";
+import { useRunStore } from "../stores/run-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
 import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, MenuOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd";

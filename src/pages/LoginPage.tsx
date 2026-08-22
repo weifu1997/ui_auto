@@ -9,8 +9,8 @@ import {
 } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Typography } from "antd";
 import { useState } from "react";
-import { loginPlatform, PlatformApiError } from "../platform-api";
-import type { PlatformSession } from "../platform-api";
+import { loginPlatform, PlatformApiError } from "../api/platform-api";
+import type { PlatformSession } from "../api/platform-api";
 
 type LoginValues = { email: string; password: string };
 

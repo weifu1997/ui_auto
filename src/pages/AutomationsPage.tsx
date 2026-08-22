@@ -1,11 +1,11 @@
-import { message } from "../antd-feedback";
-import type { Project } from "../mock-data";
-import { archivePlatformNotificationChannel, archivePlatformSchedule, archivePlatformWebhookTrigger, createPlatformNotificationChannel, createPlatformSchedule, createPlatformWebhookTrigger, getPlatformDatasets, getPlatformDeliveries, getPlatformNotificationChannels, getPlatformNotificationSubscriptions, getPlatformRevisions, getPlatformSchedules, getPlatformWebhookTriggers, platformApiOrigin, rotatePlatformWebhookSecret, savePlatformNotificationSubscription, scheduleAction, testPlatformNotificationChannel, updatePlatformNotificationChannel, updatePlatformSchedule, updatePlatformWebhookTrigger, webhookTriggerAction } from "../platform-api";
-import type { PlatformDataset, PlatformDelivery, PlatformNotificationChannel, PlatformNotificationSubscription, PlatformRevision, PlatformSchedule, PlatformSession, PlatformWebhookTrigger } from "../platform-api";
-import { readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
+import { message } from "../lib/antd-feedback";
+import type { Project } from "../lib/mock-data";
+import { archivePlatformNotificationChannel, archivePlatformSchedule, archivePlatformWebhookTrigger, createPlatformNotificationChannel, createPlatformSchedule, createPlatformWebhookTrigger, getPlatformDatasets, getPlatformDeliveries, getPlatformNotificationChannels, getPlatformNotificationSubscriptions, getPlatformRevisions, getPlatformSchedules, getPlatformWebhookTriggers, platformApiOrigin, rotatePlatformWebhookSecret, savePlatformNotificationSubscription, scheduleAction, testPlatformNotificationChannel, updatePlatformNotificationChannel, updatePlatformSchedule, updatePlatformWebhookTrigger, webhookTriggerAction } from "../api/platform-api";
+import type { PlatformDataset, PlatformDelivery, PlatformNotificationChannel, PlatformNotificationSubscription, PlatformRevision, PlatformSchedule, PlatformSession, PlatformWebhookTrigger } from "../api/platform-api";
+import { readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../api/platform-context";
 import { useLocation, useNavigate } from "../router";
 import { FilterBar, FilterItem, PageHeading, PlatformProjectRequired, emptyEnvironments } from "./shared";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { DeleteOutlined, EditOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Empty } from "antd";
 import { useCallback, useEffect, useState } from "react";

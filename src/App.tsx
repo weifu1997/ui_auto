@@ -2,14 +2,14 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "./router";
 import { App as AntdApp, ConfigProvider, Spin, theme as antdTheme } from "antd";
 import { applyTheme, themePalettes, useThemeStore } from "./theme-mode";
-import { restorePlatformSession } from "./platform-api";
-import { storePlatformSession } from "./platform-context";
-import type { PlatformSession } from "./platform-api";
+import { restorePlatformSession } from "./api/platform-api";
+import { storePlatformSession } from "./api/platform-context";
+import type { PlatformSession } from "./api/platform-api";
 import { LoginPage } from "./pages/LoginPage";
 import { ServerWorkspaceSynchronizer } from "./ServerWorkspaceSynchronizer";
 import "./App.css";
 import "./responsive.css";
-import { AntdFeedbackBridge } from "./antd-feedback";
+import { AntdFeedbackBridge } from "./lib/antd-feedback";
 import {
   PageHeading,
   ProjectLayout,

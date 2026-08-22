@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
-import type { ElementAsset, Environment, Flow, Variable } from "./mock-data";
+import type { ElementAsset, Environment, Flow, Variable } from "./lib/mock-data";
 import {
   PlatformApiError,
   archivePlatformResource,
@@ -12,13 +12,13 @@ import {
   updatePlatformProject,
   updatePlatformResource,
   updatePlatformSettings,
-} from "./platform-api";
-import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformSession } from "./platform-api";
-import type { PlatformWorkspaceProject } from "./workspace-store";
-import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformProjectMap } from "./platform-context";
-import { revisionInput } from "./revision-snapshot";
-import { normalizeFlow } from "./flow-normalize";
-import { useWorkspaceStore } from "./workspace-store";
+} from "./api/platform-api";
+import type { PlatformProject, PlatformResource, PlatformResourceType, PlatformSession } from "./api/platform-api";
+import type { PlatformWorkspaceProject } from "./stores/workspace-store";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformProjectMap } from "./api/platform-context";
+import { revisionInput } from "./lib/revision-snapshot";
+import { normalizeFlow } from "./lib/flow-normalize";
+import { useWorkspaceStore } from "./stores/workspace-store";
 import {
   allSyncDraftPending,
   applyProjectDraft,
@@ -28,9 +28,9 @@ import {
   removeProjectDraft,
   updateProjectDraft,
   upsertProjectDraft,
-} from "./sync-outbox";
-import type { SyncDraftPending } from "./sync-outbox";
-import { message } from "./antd-feedback";
+} from "./lib/sync-outbox";
+import type { SyncDraftPending } from "./lib/sync-outbox";
+import { message } from "./lib/antd-feedback";
 
 type ResourceData = Flow | ElementAsset | Variable | Environment;
 type LoadedProject = {

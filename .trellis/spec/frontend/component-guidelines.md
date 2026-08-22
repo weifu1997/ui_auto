@@ -44,7 +44,7 @@ a stable `rowKey`, and define an explicit empty state. Forms use
 `Form.useForm()`, named `Form.Item` fields, and reset or seed fields when a
 drawer/modal opens.
 
-Use `message` and `modal` from `src/antd-feedback.tsx`, not a new global feedback
+Use `message` and `modal` from `src/lib/antd-feedback.tsx`, not a new global feedback
 singleton. `AntdFeedbackBridge` in `src/App.tsx` connects those helpers to the
 active Ant Design app context.
 
