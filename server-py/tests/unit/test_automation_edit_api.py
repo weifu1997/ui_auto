@@ -269,7 +269,7 @@ def test_automation_edit_endpoints(tmp_path, monkeypatch):
         assert updated_channel["enabled"] is False
 
         monkeypatch.setattr(
-            "autoflow.services._post_notification",
+            "autoflow.services.notifications._post_notification",
             lambda *args, **kwargs: {"status": 200, "body": ""},
         )
         test_response = asyncio.run(
