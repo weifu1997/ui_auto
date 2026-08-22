@@ -61,7 +61,7 @@ Persistence is intentional, not the default:
   reload and must not enter run snapshots, events, or browser storage.
 
 When adding persisted state, update the existing migration/normalization path
-and cover restore behavior. `tests/workbench.spec.ts` exercises workspace
+and cover restore behavior. `e2e/workbench.spec.ts` exercises workspace
 migration; secret values must remain absent from every persisted shape.
 
 ## Server and Synchronization State
@@ -91,8 +91,8 @@ Run and delivery list pagination/filter state is reflected in URL search
 parameters, so a page reload restores the same server-side page and filters.
 
 Do not let a page overwrite remote workspace data directly or bypass optimistic
-version handling. `tests/platform-sync.spec.ts` covers hydration, local-cache
-loss, versioned writes, and retry behavior; `tests/templates-and-conflicts.spec.ts`
+version handling. `e2e/platform-sync.spec.ts` covers hydration, local-cache
+loss, versioned writes, and retry behavior; `e2e/templates-and-conflicts.spec.ts`
 covers conflict recovery.
 
 TanStack Query is not a second global domain store. Its current role is loading

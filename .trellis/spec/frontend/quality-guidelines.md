@@ -43,8 +43,8 @@ cross-page changes, run the relevant Playwright spec and then the full suite
 when practical:
 
 ```bash
-npx playwright test --project=chromium tests/platform-run.spec.ts
-npx playwright test --project=chromium tests/platform-sync.spec.ts
+npx playwright test --project=chromium e2e/platform-run.spec.ts
+npx playwright test --project=chromium e2e/platform-sync.spec.ts
 npm run test:e2e
 ```
 
@@ -57,7 +57,7 @@ Use Vitest for deterministic store or utility behavior. The representative
 `src/stores/flow-store.test.ts` resets the Zustand store in `beforeEach`, calls actions
 through `getState()`, and asserts externally visible state transitions.
 
-Use Playwright for user workflows. Tests under `tests/`:
+Use Playwright for user workflows. Tests under `e2e/`:
 
 - start from user-visible navigation and controls;
 - locate controls by role or label where possible;
@@ -66,18 +66,18 @@ Use Playwright for user workflows. Tests under `tests/`:
 - isolate service data through the temporary directories in
   `playwright.config.ts`.
 
-`tests/platform-ui-fixtures.ts` is the shared fixture for Platform run UI
+`e2e/platform-ui-fixtures.ts` is the shared fixture for Platform run UI
 composition. Extend it instead of duplicating a large route mock when the same
 contract is involved.
 
 Choose regression coverage by risk. Examples:
 
-- Workspace migration/persistence: `tests/workbench.spec.ts`.
-- Server synchronization/version conflicts: `tests/platform-sync.spec.ts` and
-  `tests/templates-and-conflicts.spec.ts`.
+- Workspace migration/persistence: `e2e/workbench.spec.ts`.
+- Server synchronization/version conflicts: `e2e/platform-sync.spec.ts` and
+  `e2e/templates-and-conflicts.spec.ts`.
 - Production launcher prerequisites: `scripts/start-production.test.mjs`.
-- Platform run request composition: `tests/platform-run.spec.ts`.
-- Recording and server session state: `tests/recording.spec.ts` and
+- Platform run request composition: `e2e/platform-run.spec.ts`.
+- Recording and server session state: `e2e/recording.spec.ts` and
   `server-py/tests/unit/test_recording_state.py`.
 
 ## Accessibility and Interaction Review

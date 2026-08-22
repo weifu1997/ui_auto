@@ -10,7 +10,7 @@ const productionEnvironment = {
 };
 
 export default defineConfig({
-  testDir: "./tests",
+  testDir: "./e2e",
   timeout: 20_000,
   workers: 1,
   outputDir: join(testRoot, "test-results"),

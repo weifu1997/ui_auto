@@ -78,7 +78,7 @@ page. Inline style objects are not the normal component styling mechanism.
 
 - Prefer Ant Design's labeled `Form.Item` and semantic controls. Playwright
   flows intentionally locate inputs by label and commands by role in
-  `tests/workbench.spec.ts` and `tests/platform-run.spec.ts`.
+  `e2e/workbench.spec.ts` and `e2e/platform-run.spec.ts`.
 - Give icon-only buttons an `aria-label` that includes the affected item when
   applicable. See the project menu in `src/pages/ProjectsPage.tsx` and element
   actions in `src/pages/ElementsPage.tsx`.

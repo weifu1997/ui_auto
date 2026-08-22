@@ -23,7 +23,7 @@ src/
 |-- assets/                      # Imported static assets
 `-- *.test.ts                    # Colocated Vitest tests (beside their source)
 
-tests/
+e2e/
 |-- *.spec.ts                    # Playwright user journeys and regressions
 `-- platform-ui-fixtures.ts      # Shared network fixtures for UI-only tests
 ```
@@ -84,7 +84,7 @@ existing structural classes such as `surface`, `panel-heading`, and
   (`platform-api.ts`, `recording-editor-state.ts`).
 - Hooks: `use` prefix; existing shared hook API lives in `src/router.tsx`.
 - Vitest: `*.test.ts` or `*.test.tsx` beside source.
-- Playwright: behavior-focused `*.spec.ts` under `tests/`.
+- Playwright: behavior-focused `*.spec.ts` under `e2e/`.
 
 Do not add new generic directories (`components/`, `hooks/`, `utils/`) for a
 single file. The repository groups by role at the second level — `pages/`,

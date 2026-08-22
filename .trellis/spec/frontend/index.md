@@ -32,8 +32,8 @@ Playwright suites rather than on framework defaults.
 - State and persistence: `src/stores/workspace-store.ts`, `src/stores/run-store.ts`,
   `src/stores/secret-store.ts`
 - HTTP boundary: `src/api/platform-api.ts` (same-origin `/api`)
-- Tests: `src/stores/flow-store.test.ts`, `tests/workbench.spec.ts`,
-  `tests/platform-sync.spec.ts`
+- Tests: `src/stores/flow-store.test.ts`, `e2e/workbench.spec.ts`,
+  `e2e/platform-sync.spec.ts`
 
 All files in this directory are ready for use. Documentation is written in
 English; product copy remains in the language used by the surrounding UI.
