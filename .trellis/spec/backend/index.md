@@ -5,7 +5,7 @@ Server-side conventions and executable contracts for the Platform API layer unde
 ## Runtime and Tooling
 
 - Python 3.12+, FastAPI, uvicorn, sqlite3, playwright sync API, cryptography, openpyxl, pytest.
-- SQLite database (`server/.data/platform.sqlite` by default), WAL mode, FK constraints ON after migrations.
+- SQLite database (`server/.data/platform.sqlite` by default), WAL mode, FK constraints ON after migrations. `PlatformServices.database` is a per-thread connection property (WAL + 30 s busy timeout): the event loop, the maintenance thread (`asyncio.to_thread`), and ManagedRunner worker threads must never share one sqlite3 connection — a shared connection interleaves `BEGIN IMMEDIATE` transactions and silently merges autocommit writes into open transactions. Multi-statement writes use explicit `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`; `with conn:` is not atomic under `isolation_level = None`.
 - Route handler: `server-py/autoflow/handler.py` (auth/workspace/project/automation endpoints) + `server-py/autoflow/services.py` (services, notifications, analytics, audit writer); application root is `server-py/autoflow/main.py`.
 - Revision checksum uses canonical execution snapshots from `server-py/autoflow/revision_snapshot.py`; display/transient fields such as `updatedAt`, `validation`, and step `status` do not create new revisions.
 - Automation routes support schedule/webhook/channel updates, webhook secret rotation, and channel test delivery without exposing stored secrets.

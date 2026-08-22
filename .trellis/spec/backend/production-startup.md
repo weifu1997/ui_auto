@@ -15,7 +15,11 @@
 - `npm run start` -> runs `scripts/start-production.mjs`, then the Python
   Platform service.
 - `npm run server` -> compatibility alias to `npm run start`.
-- `PLATFORM_SECRET_KEY`: required, non-blank.
+- `PLATFORM_SECRET_KEY`: required, non-blank. Alternatively
+  `PLATFORM_SECRET_KEY_FILE` may point to a readable, non-blank key file
+  (absolute, or relative to the repository root); the Node gate validates the
+  file and the Python service reads it, mirroring `services.py`. A direct
+  `PLATFORM_SECRET_KEY` always wins when both are set.
 - `AUTOFLOW_STATIC_DIRECTORY`: optional static directory, default `dist`.
 - `AUTOFLOW_LISTEN_HOST`: optional listener override, default `127.0.0.1`.
 - `PORT`: optional port override, default `8787`.

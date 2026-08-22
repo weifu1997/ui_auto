@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend architecture, runtime contracts, and validation commands."}
+{"file": ".trellis/spec/backend/route-workspace-project-isolation.md", "reason": "Baseline for authorization and workspace/project isolation review."}
+{"file": ".trellis/spec/backend/identity-membership-rbac.md", "reason": "Baseline for account, invitation, session, and RBAC review."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend architecture and representative source/test references."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Review API boundary and domain type safety."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review frontend/backend contract and data-flow consistency."}
