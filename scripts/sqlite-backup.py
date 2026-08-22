@@ -30,9 +30,11 @@ def _source_stats(database: sqlite3.Connection) -> dict[str, tuple[int, str | No
     return stats
 
 
-def backup(source: str, destination: str) -> None:
+def backup(source: str, destination: str, required: bool = False) -> None:
     source_path = Path(source)
     if not source_path.exists():
+        if required:
+            raise SystemExit(f"Required database missing: {source_path}")
         return
     database = sqlite3.connect(source_path)
     try:
@@ -53,25 +55,33 @@ def backup(source: str, destination: str) -> None:
         stats = _source_stats(database)
     finally:
         database.close()
-    shutil.copyfile(source_path, destination)
-    copy = sqlite3.connect(f"file:{destination}?mode=ro", uri=True)
+    temp_path = Path(f"{destination}.tmp")
     try:
-        if not _integrity_ok(copy):
-            raise RuntimeError("Backup verification failed")
-        for table, expected in stats.items():
-            actual = copy.execute(
-                f"SELECT COUNT(*), MAX(created_at) FROM {table}"
-            ).fetchone()
-            actual_value = (int(actual[0]), actual[1])
-            if actual_value != expected:
-                raise RuntimeError(
-                    f"Backup row-count mismatch on {table}: source {expected} vs copy {actual_value}"
-                )
+        shutil.copyfile(source_path, temp_path)
+        copy = sqlite3.connect(f"file:{temp_path}?mode=ro", uri=True)
+        try:
+            if not _integrity_ok(copy):
+                raise RuntimeError("Backup verification failed")
+            for table, expected in stats.items():
+                actual = copy.execute(
+                    f"SELECT COUNT(*), MAX(created_at) FROM {table}"
+                ).fetchone()
+                actual_value = (int(actual[0]), actual[1])
+                if actual_value != expected:
+                    raise RuntimeError(
+                        f"Backup row-count mismatch on {table}: source {expected} vs copy {actual_value}"
+                    )
+        finally:
+            copy.close()
+        temp_path.replace(destination)
     finally:
-        copy.close()
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: sqlite-backup.py <source.sqlite> <destination.sqlite>")
-    backup(sys.argv[1], sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit(
+            "usage: sqlite-backup.py <source.sqlite> <destination.sqlite> [required]"
+        )
+    backup(sys.argv[1], sys.argv[2], required=len(sys.argv) == 4)

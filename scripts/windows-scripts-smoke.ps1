@@ -13,7 +13,9 @@ foreach ($script in Get-ChildItem -LiteralPath $scriptRoot -Filter "*.ps1" -File
 }
 if ($errors.Count -gt 0) { throw ($errors -join [Environment]::NewLine) }
 $serviceTemplate = Get-Content -Raw -LiteralPath (Join-Path $scriptRoot "..\deployment\AutoFlow.xml")
-$renderedService = $serviceTemplate.Replace("__PLATFORM_SECRET_KEY__", [Security.SecurityElement]::Escape("smoke&secret-with-at-least-32-characters")).Replace("__NOTIFICATION_HOST_ALLOWLIST__", "hooks.corp.test").Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", "1")
+$renderedService = $serviceTemplate.Replace("__AUTOFLOW_CORS_ORIGINS__", "https://smoke.corp.test").Replace("__NOTIFICATION_HOST_ALLOWLIST__", "hooks.corp.test").Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", "1")
+$leftoverPlaceholders = [regex]::Matches($renderedService, "__[A-Z0-9_]+__") | ForEach-Object { $_.Value } | Select-Object -Unique
+if ($leftoverPlaceholders) { throw "WinSW service template contains placeholders no renderer consumes: $($leftoverPlaceholders -join ', ')" }
 try { [xml]$renderedService | Out-Null } catch { throw "Rendered WinSW service configuration is invalid: $($_.Exception.Message)" }
 
 $node = if ($NodeExe) { (Resolve-Path -LiteralPath $NodeExe).Path } else { (Get-Command node -ErrorAction Stop).Source }
@@ -25,7 +27,7 @@ try {
   foreach ($path in @($smokeRoot, $restoreRoot)) {
     foreach ($folder in @("data", "data\artifacts", "backups", "runtime")) { New-Item -ItemType Directory -Force -Path (Join-Path $path $folder) | Out-Null }
   }
-  & $node -e "const {DatabaseSync}=require('node:sqlite'); for (const p of process.argv.slice(1)) { const db=new DatabaseSync(p); db.exec('CREATE TABLE smoke(id INTEGER PRIMARY KEY); INSERT INTO smoke DEFAULT VALUES'); db.close(); }" (Join-Path $smokeRoot "data\platform.sqlite") (Join-Path $smokeRoot "data\autoflow.sqlite")
+  & $node -e "const {DatabaseSync}=require('node:sqlite'); for (const p of process.argv.slice(1)) { const db=new DatabaseSync(p); db.exec('CREATE TABLE smoke(id INTEGER PRIMARY KEY); INSERT INTO smoke DEFAULT VALUES'); db.close(); }" (Join-Path $smokeRoot "data\platform.sqlite")
   if ($LASTEXITCODE -ne 0) { throw "Unable to create smoke databases" }
   $artifactFixture = Join-Path $smokeRoot "data\artifacts\smoke.txt"
   Set-Content -LiteralPath $artifactFixture -Value "artifact" -Encoding ASCII
@@ -34,7 +36,7 @@ try {
   & (Join-Path $scriptRoot "backup.ps1") -Root $smokeRoot -Destination $backupPath -PythonExe $python | Out-Null
   if (-not (Test-Path -LiteralPath (Join-Path $backupPath "artifacts\smoke.txt"))) { throw "Backup smoke missing data\\artifacts fixture" }
   & (Join-Path $scriptRoot "restore.ps1") -Backup $backupPath -Root $restoreRoot -PythonExe $python
-  foreach ($required in @("data\platform.sqlite", "data\autoflow.sqlite", "data\artifacts\smoke.txt")) {
+  foreach ($required in @("data\platform.sqlite", "data\artifacts\smoke.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $restoreRoot $required))) { throw "Restore smoke missing $required" }
   }
   Remove-Item -LiteralPath $artifactFixture -Force

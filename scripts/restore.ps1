@@ -10,6 +10,7 @@ if ($LASTEXITCODE -ne 0) { throw "Backup manifest verification failed" }
 $service = Join-Path $Root "AutoFlow.exe"
 if (Test-Path -LiteralPath $service) { & $service stop }
 $data = Join-Path $Root "data"; New-Item -ItemType Directory -Force -Path $data | Out-Null
+if (-not (Test-Path -LiteralPath (Join-Path $backupPath "platform.sqlite"))) { throw "Backup missing platform.sqlite" }
 foreach ($name in @("platform.sqlite", "autoflow.sqlite")) {
   Remove-Item -LiteralPath (Join-Path $data ("$name-wal")) -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $data ("$name-shm")) -Force -ErrorAction SilentlyContinue
