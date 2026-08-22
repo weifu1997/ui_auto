@@ -37,7 +37,7 @@ Set-Content -LiteralPath $serviceConfig -Value $config -Encoding UTF8
 $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $appRoot = Join-Path $resolvedRoot "app"
 $python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { "python" }
-& robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "server\.data") (Join-Path $sourceRoot "server\.artifacts") (Join-Path $sourceRoot "server\.platform-artifacts") (Join-Path $sourceRoot "server\.tmp-platform-debug") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null
+& robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "server\.data") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Application file copy failed with robocopy exit code $LASTEXITCODE" }
 $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $resolvedRoot "browsers"
