@@ -43,9 +43,9 @@ Keep a component used by only one page in that page file. The drawers in
 `src/pages/shared.tsx` only when multiple pages use the same layout, conversion,
 or run helper.
 
-`src/FlowEditorPage.tsx`, `src/RunDetailPage.tsx`, and `src/LoginPage.tsx` are
-older root-level page modules. Extend them in place, but use `src/pages/` for a
-new route screen rather than adding another root-level page.
+All route-level screens live in `src/pages/` and are named `PascalCasePage.tsx`,
+including the flow editor, login, password reset, run detail, and invitation
+accept pages (migrated from the former root-level placement).
 
 ## Data and Service Modules
 

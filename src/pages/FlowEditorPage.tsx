@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "./router";
+import { Navigate, useNavigate, useParams } from "../router";
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
@@ -24,16 +24,16 @@ import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from 
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { shouldReloadEditorSteps, useFlowStore } from "./flow-store";
-import { useRunStore } from "./run-store";
-import { useSecretStore } from "./secret-store";
-import { useWorkspaceStore } from "./workspace-store";
-import { message, modal } from "./antd-feedback";
-import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "./platform-api";
-import type { RecordingEvent, RecordingResult, RecordingSession } from "./platform-api";
-import { platformProjectContext } from "./platform-context";
-import { elementValidationLoginMessage } from "./element-validation";
-import { describePlatformRunError, platformRunAsRun, uniqueVariableNameValidator } from "./pages/shared";
+import { shouldReloadEditorSteps, useFlowStore } from "../flow-store";
+import { useRunStore } from "../run-store";
+import { useSecretStore } from "../secret-store";
+import { useWorkspaceStore } from "../workspace-store";
+import { message, modal } from "../antd-feedback";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "../platform-api";
+import type { RecordingEvent, RecordingResult, RecordingSession } from "../platform-api";
+import { platformProjectContext } from "../platform-context";
+import { elementValidationLoginMessage } from "../element-validation";
+import { describePlatformRunError, platformRunAsRun, uniqueVariableNameValidator } from "./shared";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,
@@ -45,10 +45,10 @@ import {
   recordingSessionStorageKey,
   storeRecordingSessionId,
   type RecordingImportPlan,
-} from "./recording-editor-state";
-import { actionOptions } from "./mock-data";
-import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "./mock-data";
-import { requiredSecretVariables, revisionInput, variableReference } from "./revision-snapshot";
+} from "../recording-editor-state";
+import { actionOptions } from "../mock-data";
+import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "../mock-data";
+import { requiredSecretVariables, revisionInput, variableReference } from "../revision-snapshot";
 
 const emptyFlows: Flow[] = [];
 const emptyElements: ElementAsset[] = [];

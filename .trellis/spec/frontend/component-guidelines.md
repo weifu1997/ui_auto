@@ -15,7 +15,7 @@ export function OverviewPage({ project }: { project: Project }) {
 This shape is repeated in `src/pages/OverviewPage.tsx`,
 `src/pages/ElementsPage.tsx`, and `src/pages/AutomationsPage.tsx`. Use a named
 props type when the contract is larger or reused, as `RunDetailPageProps` does
-in `src/RunDetailPage.tsx`; otherwise the inline object type is normal here.
+in `src/pages/RunDetailPage.tsx`; otherwise the inline object type is normal here.
 
 Lazy route modules are adapted in `src/App.tsx`. Existing root pages use default
 exports while `src/pages/*Page.tsx` uses named exports. Match the module being

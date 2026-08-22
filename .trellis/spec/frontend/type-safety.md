@@ -26,7 +26,7 @@ object types over TypeScript constructs that emit runtime code.
   type only when another module consumes it (`PlatformSyncStatus`, `ApiRun`).
 - Component-only form or props types stay in the component file, such as
   `TemplateForm` in `src/pages/TemplatesPage.tsx` and `RunDetailPageProps` in
-  `src/RunDetailPage.tsx`.
+  `src/pages/RunDetailPage.tsx`.
 
 Use `import type` for type-only dependencies. This is required by the project's
 `verbatimModuleSyntax` configuration and is consistently demonstrated by the

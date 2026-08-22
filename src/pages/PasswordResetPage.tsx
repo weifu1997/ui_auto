@@ -1,8 +1,8 @@
 import { LockOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Typography } from "antd";
 import { useMemo, useState } from "react";
-import { acceptPlatformPasswordReset, PlatformApiError } from "./platform-api";
-import { useLocation, useNavigate } from "./router";
+import { acceptPlatformPasswordReset, PlatformApiError } from "../platform-api";
+import { useLocation, useNavigate } from "../router";
 import { AuthShowcase } from "./LoginPage";
 
 type ResetValues = { password: string; confirmation: string };

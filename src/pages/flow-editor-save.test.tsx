@@ -90,7 +90,7 @@ vi.mock("../workspace-store", () => ({
     }),
 }));
 
-import FlowEditorPage from "../FlowEditorPage";
+import FlowEditorPage from "./FlowEditorPage";
 
 describe("FlowEditorPage Save & Run with no published revision", () => {
   beforeEach(() => {
