@@ -122,7 +122,7 @@ npm run start
 ### 2. Signatures
 
 - `npm run test:windows` -> `powershell.exe -NoProfile -ExecutionPolicy Bypass
-  -File scripts/windows-scripts-smoke.ps1`.
+  -File scripts/ops/windows-scripts-smoke.ps1`.
 - Every tracked `scripts/*.ps1` deployment source file contains only ASCII
   bytes (`0x00` through `0x7F`).
 
@@ -157,7 +157,7 @@ npm run start
 
 ### 6. Tests Required
 
-- `scripts/windows-scripts-smoke.ps1`: assert byte-level ASCII compatibility
+- `scripts/ops/windows-scripts-smoke.ps1`: assert byte-level ASCII compatibility
   and parse every deployment PowerShell source before executing the backup /
   restore smoke.
 - `deployment-windows` in `.github/workflows/phase0-ci.yml`: run
@@ -218,7 +218,7 @@ Read-Host -AsSecureString "Enter a PLATFORM_SECRET_KEY with at least 32 characte
 ### 6. Tests Required
 
 - `server-py/tests/unit/test_operational_readiness.py`: data-root ManagedRunner path, authorized download after restore fixture, normal/degraded/SQLite-failure readiness, redacted log event, lifespan startup, and failed retention cleanup retry behavior.
-- `scripts/windows-scripts-smoke.ps1`: backup and restore a real `data/artifacts` fixture, then verify an empty artifact backup clears a stale restored artifact.
+- `scripts/ops/windows-scripts-smoke.ps1`: backup and restore a real `data/artifacts` fixture, then verify an empty artifact backup clears a stale restored artifact.
 - Relevant startup and Playwright checks continue to prove the production service can start with the registered lifespan.
 
 ### 7. Wrong vs Correct

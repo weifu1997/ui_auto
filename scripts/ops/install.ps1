@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $resolvedRoot "data\artifac
 Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $resolvedRoot "runtime\node.exe") -Force
 Copy-Item -LiteralPath $WinSWExe -Destination (Join-Path $resolvedRoot "AutoFlow.exe") -Force
 $serviceConfig = Join-Path $resolvedRoot "AutoFlow.xml"
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\deployment\AutoFlow.xml") -Destination $serviceConfig -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\..\deployment\AutoFlow.xml") -Destination $serviceConfig -Force
 $keyFile = Join-Path $resolvedRoot "runtime\platform-secret.key"
 Set-Content -LiteralPath $keyFile -Value $PlatformSecretKey -Encoding UTF8 -NoNewline
 $acl = Get-Acl -LiteralPath $keyFile
@@ -34,7 +34,7 @@ $allowPrivate = if ($NotificationHostAllowlist) { "1" } else { "0" }
 $escapedCors = [Security.SecurityElement]::Escape($CorsOrigins)
 $config = (Get-Content -Raw -LiteralPath $serviceConfig).Replace("__AUTOFLOW_CORS_ORIGINS__", $escapedCors).Replace("__NOTIFICATION_HOST_ALLOWLIST__", $escapedAllowlist).Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", $allowPrivate)
 Set-Content -LiteralPath $serviceConfig -Value $config -Encoding UTF8
-$sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+$sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $appRoot = Join-Path $resolvedRoot "app"
 $python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { "python" }
 & robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "data") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null

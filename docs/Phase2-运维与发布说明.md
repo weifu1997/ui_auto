@@ -31,12 +31,12 @@
 
 ## 备份与恢复（BKP-02）
 
-`scripts/backup.ps1` 会调用 `sqlite-backup.py` 复制并校验两个 SQLite 库、复制
-产物目录，然后调用 `scripts/backup-manifest.py write` 生成 `manifest.json`
-（每个文件 SHA-256 + 大小）。`scripts/restore.ps1` 在恢复前执行
+`scripts/ops/backup.ps1` 会调用 `sqlite-backup.py` 复制并校验两个 SQLite 库、复制
+产物目录，然后调用 `scripts/ops/backup-manifest.py write` 生成 `manifest.json`
+（每个文件 SHA-256 + 大小）。`scripts/ops/restore.ps1` 在恢复前执行
 `backup-manifest.py verify`，任何缺失/篡改都会中止。
 
-- 手动校验：`python scripts/backup-manifest.py verify <备份目录>`。
+- 手动校验：`python scripts/ops/backup-manifest.py verify <备份目录>`。
 - 字节级加密辅助：`server-py/autoflow/backup.py` 提供 `encrypt_bytes`/
   `decrypt_bytes` 与 `encrypt_directory`/`decrypt_directory`（AES-256-GCM）。
 - 边界：离线异地拷贝的调度、失败告警、定时恢复的 RPO/RTO 演练尚未在真实环境完成，
@@ -63,10 +63,10 @@
 ## 升级与回滚
 
 1. 记录目标提交 SHA、`/ready`、`/metrics` 基线。
-2. 先运行 `scripts/backup.ps1`，确认 `manifest.json` 校验通过。
+2. 先运行 `scripts/ops/backup.ps1`，确认 `manifest.json` 校验通过。
 3. 替换应用包后运行 `npm run setup:py`（使用锁文件）并启动。
 4. 验证 `/ready`、`/metrics` 与一次受控 run/流程录制。
-5. 回滚：停止服务，用 `scripts/restore.ps1` 恢复匹配的旧数据库与旧应用包；数据库
+5. 回滚：停止服务，用 `scripts/ops/restore.ps1` 恢复匹配的旧数据库与旧应用包；数据库
    迁移不向后兼容时以恢复旧包 + 旧库为准。
 
 ## 事故响应（最小版）
