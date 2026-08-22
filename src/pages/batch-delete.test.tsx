@@ -2,7 +2,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("../antd-feedback", () => ({
+vi.mock("../lib/antd-feedback", () => ({
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   modal: { confirm: vi.fn() },
 }));
@@ -70,7 +70,7 @@ const mockSetFlows = vi.fn();
 const mockSetElements = vi.fn();
 const mockSetVariables = vi.fn();
 
-vi.mock("../workspace-store", () => ({
+vi.mock("../stores/workspace-store", () => ({
   useWorkspaceStore: (selector: any) =>
     selector({
       projects: [mockProject],
@@ -89,7 +89,7 @@ vi.mock("../workspace-store", () => ({
 const mockDeletePlatformRun = vi.fn(async () => ({ runId: "run-1", deleted: true }));
 const mockDeletePlatformRuns = vi.fn(async () => ({ runIds: ["run-1", "run-2"], deletedCount: 2 }));
 
-vi.mock("../platform-api", async (importOriginal) => {
+vi.mock("../api/platform-api", async (importOriginal) => {
   const actual = await importOriginal<any>();
   return {
     ...actual,
@@ -101,7 +101,7 @@ vi.mock("../platform-api", async (importOriginal) => {
   };
 });
 
-vi.mock("../platform-context", () => ({
+vi.mock("../api/platform-context", () => ({
   platformProjectContext: () => undefined,
   readStoredPlatformSession: () => ({
     token: "t1",

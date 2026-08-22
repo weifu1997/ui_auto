@@ -1,6 +1,6 @@
 /* oxlint-disable react/only-export-components */
 import { Tabs } from "antd";
-import type { Project } from "../mock-data";
+import type { Project } from "../lib/mock-data";
 import { AgentsPage } from "./AgentsPage";
 
 export type PlatformTabItem = { key: string; label: string; children: React.ReactNode };

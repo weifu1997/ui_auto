@@ -1,6 +1,6 @@
-import autoflow.services as services_module
 from autoflow.core import json, now
 from autoflow.services import AuthUser, PlatformServices
+from autoflow.services import notifications as notifications_module
 
 
 def test_deliver_pending_notification_marks_delivered_and_audits(tmp_path):
@@ -135,9 +135,9 @@ def test_deliver_pending_notification_marks_delivered_and_audits(tmp_path):
             ),
         )
 
-        original_post = services_module._post_notification
+        original_post = notifications_module._post_notification
         original_target = services.notification_target
-        services_module._post_notification = lambda _target, _headers, _body: {
+        notifications_module._post_notification = lambda _target, _headers, _body: {
             "status": 200,
             "body": "{}",
         }
@@ -148,7 +148,7 @@ def test_deliver_pending_notification_marks_delivered_and_audits(tmp_path):
         try:
             services.deliver_pending_notifications()
         finally:
-            services_module._post_notification = original_post
+            notifications_module._post_notification = original_post
             services.notification_target = original_target
 
         delivery = services.database.execute(

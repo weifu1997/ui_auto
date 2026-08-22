@@ -1,8 +1,8 @@
-import type { Project } from "../mock-data";
+import type { Project } from "../lib/mock-data";
 import { Link, useNavigate } from "../router";
-import { useRunStore } from "../run-store";
+import { useRunStore } from "../stores/run-store";
 import { MetricCard, PageHeading, emptyElements, emptyFlows, emptyRuns, isTerminalStatus, statusTag } from "./shared";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { CheckCircleFilled, ClockCircleOutlined, CodeOutlined, FileSearchOutlined, PlayCircleFilled, PlusOutlined, StopOutlined, UnorderedListOutlined, WarningFilled } from "@ant-design/icons";
 import { Button, Empty } from "antd";
 

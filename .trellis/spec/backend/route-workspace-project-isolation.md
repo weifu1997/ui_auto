@@ -15,6 +15,12 @@ truth for route coverage. It expands one typed policy row per runtime
 authentication, scope, minimum capability, and the parent resolver. Adding a
 route without adding its row fails the test.
 
+Route implementations live in the `server-py/autoflow/handler/` package,
+split by URL domain: one `register(router, services)` module per domain,
+shared helpers in `handler/_shared.py`, composition in `handler/__init__.py`.
+Add a new route to the domain module matching its URL prefix and register its
+policy row in the same change.
+
 Intentional public exceptions are health, terminal registration, login,
 logout, session projection, invitation/password-reset acceptance, and the
 signed public Webhook. The Webhook resolves its own trigger project only after

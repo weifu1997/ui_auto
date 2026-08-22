@@ -35,7 +35,7 @@ import {
   Typography,
 } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { message } from "../antd-feedback";
+import { message } from "../lib/antd-feedback";
 import {
   applyPlatformTemplate,
   createPlatformTemplate,
@@ -47,16 +47,16 @@ import {
   getTemplateApplyCandidates,
   rePublishPlatformTemplate,
   updatePlatformTemplate,
-} from "../platform-api";
+} from "../api/platform-api";
 import type {
   PlatformRevision,
   PlatformTemplate,
   TemplateApplyCandidate,
   TemplateApplyResult,
-} from "../platform-api";
-import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
+} from "../api/platform-api";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../api/platform-context";
 import { useNavigate } from "../router";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { WorkspaceSide } from "./shared";
 
 const { Text, Paragraph } = Typography;

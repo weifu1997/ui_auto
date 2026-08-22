@@ -1,11 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ElementAsset, Project } from "../mock-data";
-import { storePlatformSession, storePlatformWorkspaceId } from "../platform-context";
-import { useWorkspaceStore } from "../workspace-store";
+import type { ElementAsset, Project } from "../lib/mock-data";
+import { storePlatformSession, storePlatformWorkspaceId } from "../api/platform-context";
+import { useWorkspaceStore } from "../stores/workspace-store";
 
-vi.mock("../antd-feedback", () => ({
+vi.mock("../lib/antd-feedback", () => ({
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   modal: { confirm: vi.fn() },
 }));

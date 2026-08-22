@@ -173,7 +173,7 @@ delete_project_runs(project_id, deletable_ids)
 - `test_recording_sessions.py`: the real Chromium coordinator case must trigger input/click after `create_session` returns without issuing another page command, then assert seq, preview steps, and same-thread teardown.
 - `test_recorder_poc.py`: nested text and SVG-path clicks must produce steps that reference their button/link parent locators, then replay successfully.
 - `test_recording_api.py`: capability/project scoping, malformed JSON, and terminal audit idempotence.
-- Playwright `tests/recording.spec.ts`: session recovery, pause/resume controls, review, locator validation, and atomic draft import.
+- Playwright `e2e/recording.spec.ts`: session recovery, pause/resume controls, review, locator validation, and atomic draft import.
 - Assert every sensitive test value is absent from captured payloads and serialized outputs.
 
 ### 7. Wrong vs Correct
@@ -236,7 +236,7 @@ if session["status"] == "recording":
 
 - `server-py/tests/unit/test_element_validation_login.py`: decision matrix of `_element_validation_login_error` (wall present/absent, snapshot present/absent, exempt login paths), snapshot injection into the runner input via `enqueue_managed_validation`, and owner-scoped snapshot isolation.
 - `src/element-validation.test.ts`: mapping of both error codes to user-facing messages.
-- Playwright `tests/recording.spec.ts` stays green: its recorded element sits on the `/login` path, which is exempt from the wall check.
+- Playwright `e2e/recording.spec.ts` stays green: its recorded element sits on the `/login` path, which is exempt from the wall check.
 
 ### 7. Wrong vs Correct
 

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify review conclusions against project quality gates and test selection rules."}
+{"file": ".trellis/spec/backend/production-startup.md", "reason": "Verify deployment/startup findings against supported production contract."}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "Verify automation lifecycle and regression requirements."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Apply AI cross-review false-positive verification checklist."}
+{"file": ".trellis/tasks/08-22-code-review/review-report.md", "reason": "Final graded review report: 3 verified CRITICAL (shared SQLite connection, editor draft wiped by 30s poll, Windows service secret-file gate), 21 WARNING, INFO list, false-positive exclusions; gates lint/build/test:unit(61)/test:py(168) all green."}
+{"file": "server-py/autoflow/services.py", "reason": "C-1 fix: per-thread sqlite connections via database property + audit writer lazy provider; verified by new concurrency test and full suite."}
+{"file": "src/FlowEditorPage.tsx", "reason": "C-2/F-W1 fix: draft-safe editor reload + revision flag only on success; verified by shouldReloadEditorSteps tests."}
+{"file": "scripts/start-production.mjs", "reason": "C-3 fix: PLATFORM_SECRET_KEY_FILE accepted by production gate; 3 new startup tests."}
+{"file": "scripts/sqlite-backup.py", "reason": "S-W4/S-W5 fix: required-flag + atomic tmp/rename copy; verified by windows smoke end-to-end."}

@@ -16,17 +16,17 @@ object types over TypeScript constructs that emit runtime code.
 
 ## Type Placement
 
-- Shared UI domain models live in `src/mock-data.ts` (`Project`, `Flow`,
+- Shared UI domain models live in `src/lib/mock-data.ts` (`Project`, `Flow`,
   `FlowStep`, `Run`, `Environment`, `Variable`, `ElementAsset`).
 - Platform request/response models live beside their functions in
-  `src/platform-api.ts`.
-- Platform request/response models stay in `src/platform-api.ts`; no local
+  `src/api/platform-api.ts`.
+- Platform request/response models stay in `src/api/platform-api.ts`; no local
   Worker API model or client is supported.
 - Store-only state/action types remain private in their store module; export a
   type only when another module consumes it (`PlatformSyncStatus`, `ApiRun`).
 - Component-only form or props types stay in the component file, such as
   `TemplateForm` in `src/pages/TemplatesPage.tsx` and `RunDetailPageProps` in
-  `src/RunDetailPage.tsx`.
+  `src/pages/RunDetailPage.tsx`.
 
 Use `import type` for type-only dependencies. This is required by the project's
 `verbatimModuleSyntax` configuration and is consistently demonstrated by the
@@ -52,13 +52,13 @@ instead of copying shapes. Examples include `NewProjectInput`, `ApiRun`, and
 Use `satisfies` when an object should be checked without widening its inferred
 shape. `workspaceDocumentFor` in `src/App.tsx` checks the synchronized document
 against `Record<string, unknown>`, and login/session helpers in
-`src/platform-api.ts` check `PlatformSession`.
+`src/api/platform-api.ts` check `PlatformSession`.
 
 ## Unknown Data and Narrowing
 
 There is no runtime schema library. JSON boundaries use `unknown` or
 `Record<string, unknown>` and narrow values before use. Follow the defensive
-patterns in `src/platform-context.ts`:
+patterns in `src/api/platform-context.ts`:
 
 - Wrap browser-storage JSON parsing in `try/catch`.
 - Check arrays with `Array.isArray`.

@@ -57,6 +57,64 @@ test("production start rejects a missing or blank platform secret", () => {
   });
 });
 
+test("production start accepts a readable non-blank PLATFORM_SECRET_KEY_FILE", () => {
+  withTemporaryProject((root) => {
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist", "index.html"), "<!doctype html>");
+    mkdirSync(join(root, "runtime"));
+    writeFileSync(join(root, "runtime", "platform-secret.key"), "file-managed-secret\n");
+    assert.equal(
+      validateProductionPrerequisites(
+        { PLATFORM_SECRET_KEY_FILE: join(root, "runtime", "platform-secret.key") },
+        root,
+      ),
+      join(root, "dist"),
+    );
+  });
+});
+
+test("production start rejects an unreadable or blank PLATFORM_SECRET_KEY_FILE", () => {
+  withTemporaryProject((root) => {
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist", "index.html"), "<!doctype html>");
+    assert.throws(
+      () =>
+        validateProductionPrerequisites(
+          { PLATFORM_SECRET_KEY_FILE: join(root, "runtime", "missing.key") },
+          root,
+        ),
+      /PLATFORM_SECRET_KEY_FILE is not readable/,
+    );
+    mkdirSync(join(root, "runtime"));
+    writeFileSync(join(root, "runtime", "platform-secret.key"), "   \n");
+    assert.throws(
+      () =>
+        validateProductionPrerequisites(
+          { PLATFORM_SECRET_KEY_FILE: join(root, "runtime", "platform-secret.key") },
+          root,
+        ),
+      /PLATFORM_SECRET_KEY_FILE is blank/,
+    );
+  });
+});
+
+test("production start prefers PLATFORM_SECRET_KEY over PLATFORM_SECRET_KEY_FILE", () => {
+  withTemporaryProject((root) => {
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist", "index.html"), "<!doctype html>");
+    assert.equal(
+      validateProductionPrerequisites(
+        {
+          PLATFORM_SECRET_KEY: "direct-secret",
+          PLATFORM_SECRET_KEY_FILE: join(root, "runtime", "missing.key"),
+        },
+        root,
+      ),
+      join(root, "dist"),
+    );
+  });
+});
+
 test("production start uses the configured build directory and forces production mode", () => {
   withTemporaryProject((root) => {
     mkdirSync(join(root, "release"));

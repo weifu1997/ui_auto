@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("../antd-feedback", () => ({
+vi.mock("../lib/antd-feedback", () => ({
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   modal: { confirm: vi.fn() },
 }));
@@ -41,7 +41,7 @@ const mockTemplates = [
   },
 ];
 
-vi.mock("../platform-api", () => ({
+vi.mock("../api/platform-api", () => ({
   getPlatformTemplates: vi.fn(async () => ({ templates: mockTemplates })),
   getPlatformTemplate: vi.fn(async (_token, id) => ({
     template: mockTemplates.find((t) => t.id === id) || mockTemplates[0],
@@ -72,7 +72,7 @@ vi.mock("../platform-api", () => ({
   rePublishPlatformTemplate: vi.fn(),
 }));
 
-vi.mock("../platform-context", () => ({
+vi.mock("../api/platform-context", () => ({
   readStoredPlatformSession: () => ({
     token: "mock-token",
     user: { id: "user-1", email: "user@test.com", name: "User", globalRole: null },
@@ -86,7 +86,7 @@ vi.mock("../platform-context", () => ({
   readStoredPlatformWorkspaceId: () => "ws-1",
 }));
 
-vi.mock("../workspace-store", () => ({
+vi.mock("../stores/workspace-store", () => ({
   useWorkspaceStore: (selector: any) =>
     selector({
       projects: [{ id: "proj-1", name: "目标测试项目" }],

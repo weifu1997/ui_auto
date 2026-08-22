@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as util from "node:util";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -153,6 +153,24 @@ export function getStaticDirectory(environment = process.env, root = repoRoot) {
   return resolve(root, configured);
 }
 
+export function readPlatformSecretKeyFile(keyFile, root = repoRoot) {
+  const keyPath = isAbsolute(keyFile) ? keyFile : resolve(root, keyFile);
+  let contents;
+  try {
+    contents = fs.readFileSync(keyPath, "utf8");
+  } catch {
+    throw new Error(
+      `PLATFORM_SECRET_KEY_FILE is not readable at ${keyPath}. Restore the key file, then run \`npm run start\`.`,
+    );
+  }
+  if (!contents.trim()) {
+    throw new Error(
+      `PLATFORM_SECRET_KEY_FILE is blank at ${keyPath}. Write the platform secret into the file, then run \`npm run start\`.`,
+    );
+  }
+  return contents;
+}
+
 export function validateProductionPrerequisites(
   environment = process.env,
   root = repoRoot,
@@ -163,10 +181,21 @@ export function validateProductionPrerequisites(
       `Production build not found at ${resolve(staticDirectory, "index.html")}. Run \`npm run build\` first.`,
     );
   }
-  if (typeof environment.PLATFORM_SECRET_KEY !== "string" || !environment.PLATFORM_SECRET_KEY.trim()) {
+  const secret =
+    typeof environment.PLATFORM_SECRET_KEY === "string"
+      ? environment.PLATFORM_SECRET_KEY.trim()
+      : "";
+  const keyFile =
+    typeof environment.PLATFORM_SECRET_KEY_FILE === "string"
+      ? environment.PLATFORM_SECRET_KEY_FILE.trim()
+      : "";
+  if (!secret && !keyFile) {
     throw new Error(
-      "PLATFORM_SECRET_KEY is required for production. Set it, then run `npm run start`.",
+      "PLATFORM_SECRET_KEY is required for production. Set PLATFORM_SECRET_KEY or PLATFORM_SECRET_KEY_FILE, then run `npm run start`.",
     );
+  }
+  if (!secret && keyFile) {
+    readPlatformSecretKeyFile(keyFile, root);
   }
   return staticDirectory;
 }

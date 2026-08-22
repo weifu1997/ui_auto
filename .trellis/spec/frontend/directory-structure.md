@@ -6,20 +6,24 @@
 src/
 |-- main.tsx                     # React root and top-level providers
 |-- App.tsx                      # Theme, authentication gate, lazy routes
-|-- pages/
+|-- ServerWorkspaceSynchronizer.tsx  # Background workspace sync (mounted by App)
+|-- pages/                       # All route-level screens (PascalCasePage.tsx)
 |   |-- ProjectShell.tsx         # Resolves the project and active section
 |   |-- *Page.tsx                # Route-level product screens
 |   `-- shared.tsx               # Shared page layout and workflow helpers
-|-- *-store.ts                   # Zustand stores
-|-- platform-api.ts              # Platform HTTP contracts and functions
-|-- platform-context.ts          # Platform browser-persistence helpers
+|-- stores/                      # Zustand stores (*-store.ts + colocated tests)
+|-- api/                         # platform-api.ts (HTTP boundary) and
+|                                # platform-context.ts (browser persistence)
+|-- lib/                         # Pure utilities and domain shapes: mock-data,
+|                                # audit-mask, flow-normalize, revision-snapshot,
+|                                # sync-outbox, element-validation, antd-feedback
 |-- App.css                      # Shared application component styles
 |-- responsive.css               # Responsive overrides
 |-- index.css                    # Document-level reset
 |-- assets/                      # Imported static assets
-`-- *.test.ts                    # Colocated Vitest tests
+`-- *.test.ts                    # Colocated Vitest tests (beside their source)
 
-tests/
+e2e/
 |-- *.spec.ts                    # Playwright user journeys and regressions
 `-- platform-ui-fixtures.ts      # Shared network fixtures for UI-only tests
 ```
@@ -43,21 +47,21 @@ Keep a component used by only one page in that page file. The drawers in
 `src/pages/shared.tsx` only when multiple pages use the same layout, conversion,
 or run helper.
 
-`src/FlowEditorPage.tsx`, `src/RunDetailPage.tsx`, and `src/LoginPage.tsx` are
-older root-level page modules. Extend them in place, but use `src/pages/` for a
-new route screen rather than adding another root-level page.
+All route-level screens live in `src/pages/` and are named `PascalCasePage.tsx`,
+including the flow editor, login, password reset, run detail, and invitation
+accept pages (migrated from the former root-level placement).
 
 ## Data and Service Modules
 
-- Put shared UI domain shapes in `src/mock-data.ts`. Despite its historical
+- Put shared UI domain shapes in `src/lib/mock-data.ts`. Despite its historical
   name, `Project`, `Flow`, `Environment`, and related types are used throughout
   the live UI.
-- Put Platform HTTP calls and response types in `src/platform-api.ts`.
-- Put cross-page mutable state in a focused `*-store.ts` Zustand module, as in
-  `workspace-store.ts`, `run-store.ts`, and `secret-store.ts`.
+- Put Platform HTTP calls and response types in `src/api/platform-api.ts`.
+- Put cross-page mutable state in a focused `src/stores/*-store.ts` Zustand
+  module, as in `workspace-store.ts`, `run-store.ts`, and `secret-store.ts`.
 - Keep localStorage compatibility and project/session mapping in
-  `platform-context.ts` or the existing persisted store rather than in a new
-  utility layer.
+  `src/api/platform-context.ts` or the existing persisted store rather than in
+  a new utility layer.
 
 Imports use relative paths; the project has no path-alias configuration. Page
 modules import root modules with `../` and neighboring page utilities with
@@ -80,8 +84,9 @@ existing structural classes such as `surface`, `panel-heading`, and
   (`platform-api.ts`, `recording-editor-state.ts`).
 - Hooks: `use` prefix; existing shared hook API lives in `src/router.tsx`.
 - Vitest: `*.test.ts` or `*.test.tsx` beside source.
-- Playwright: behavior-focused `*.spec.ts` under `tests/`.
+- Playwright: behavior-focused `*.spec.ts` under `e2e/`.
 
-Avoid creating generic `components/`, `hooks/`, or `utils/` directories for a
-single use. The current repository favors page colocation and narrowly named
-root modules.
+Do not add new generic directories (`components/`, `hooks/`, `utils/`) for a
+single file. The repository groups by role at the second level — `pages/`,
+`stores/`, `api/`, `lib/` — and keeps narrowly named modules inside them; a new
+top-level group needs a real cohort of files, not one stray module.

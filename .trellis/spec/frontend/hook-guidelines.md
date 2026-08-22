@@ -53,7 +53,7 @@ to make an effect run conditionally; put the condition inside the hook.
 
 ## Server Data
 
-HTTP calls live in `src/platform-api.ts` and use same-origin `/api`. Most pages
+HTTP calls live in `src/api/platform-api.ts` and use same-origin `/api`. Most pages
 use local loading/data state and an explicit loader. TanStack Query is currently
 reserved for the server workspace synchronizer (`useQuery` in
 `src/ServerWorkspaceSynchronizer.tsx`) and related invalidation

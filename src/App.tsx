@@ -2,14 +2,14 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "./router";
 import { App as AntdApp, ConfigProvider, Spin, theme as antdTheme } from "antd";
 import { applyTheme, themePalettes, useThemeStore } from "./theme-mode";
-import { restorePlatformSession } from "./platform-api";
-import { storePlatformSession } from "./platform-context";
-import type { PlatformSession } from "./platform-api";
-import { LoginPage } from "./LoginPage";
+import { restorePlatformSession } from "./api/platform-api";
+import { storePlatformSession } from "./api/platform-context";
+import type { PlatformSession } from "./api/platform-api";
+import { LoginPage } from "./pages/LoginPage";
 import { ServerWorkspaceSynchronizer } from "./ServerWorkspaceSynchronizer";
 import "./App.css";
 import "./responsive.css";
-import { AntdFeedbackBridge } from "./antd-feedback";
+import { AntdFeedbackBridge } from "./lib/antd-feedback";
 import {
   PageHeading,
   ProjectLayout,
@@ -17,8 +17,8 @@ import {
   statusTag,
 } from "./pages/shared";
 
-const LazyFlowEditor = lazy(() => import("./FlowEditorPage"));
-const LazyRunDetail = lazy(() => import("./RunDetailPage"));
+const LazyFlowEditor = lazy(() => import("./pages/FlowEditorPage"));
+const LazyRunDetail = lazy(() => import("./pages/RunDetailPage"));
 const LazyProjectsPage = lazy(() =>
   import("./pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })),
 );
@@ -32,10 +32,10 @@ const LazyWorkspaceAdministrationPage = lazy(() =>
   import("./pages/WorkspaceAdministrationPage").then((m) => ({ default: m.WorkspaceAdministrationPage })),
 );
 const LazyInvitationAcceptPage = lazy(() =>
-  import("./InvitationAcceptPage").then((m) => ({ default: m.InvitationAcceptPage })),
+  import("./pages/InvitationAcceptPage").then((m) => ({ default: m.InvitationAcceptPage })),
 );
 const LazyPasswordResetPage = lazy(() =>
-  import("./PasswordResetPage").then((m) => ({ default: m.PasswordResetPage })),
+  import("./pages/PasswordResetPage").then((m) => ({ default: m.PasswordResetPage })),
 );
 
 const routeFallback = (

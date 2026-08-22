@@ -5,10 +5,19 @@ from __future__ import annotations
 import json as _json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from typing import Any
 
+DatabaseSource = sqlite3.Connection | Callable[[], sqlite3.Connection]
 
-def create_audit_writer(database: sqlite3.Connection):
+
+def _resolve(database: DatabaseSource) -> sqlite3.Connection:
+    # 连接按调用线程惰性获取：审计会从事件循环、维护线程和 ManagedRunner
+    # 工作线程写入，不能在服务初始化时绑定单一连接。
+    return database() if callable(database) else database
+
+
+def create_audit_writer(database: DatabaseSource):
     def audit(
         workspace_id: str,
         actor: dict[str, str],
@@ -17,7 +26,7 @@ def create_audit_writer(database: sqlite3.Connection):
         detail: dict[str, Any] | None = None,
         project_id: str | None = None,
     ) -> None:
-        database.execute(
+        _resolve(database).execute(
             """
             INSERT INTO audit_events (
               id, workspace_id, project_id, actor_type, actor_id, action,
@@ -41,7 +50,7 @@ def create_audit_writer(database: sqlite3.Connection):
     return audit
 
 
-def create_deployment_audit_writer(database: sqlite3.Connection):
+def create_deployment_audit_writer(database: DatabaseSource):
     """Write security events that exist before any workspace is created.
 
     Workspace-scoped audit events retain their workspace foreign key because
@@ -56,7 +65,7 @@ def create_deployment_audit_writer(database: sqlite3.Connection):
         target: dict[str, str],
         detail: dict[str, Any] | None = None,
     ) -> None:
-        database.execute(
+        _resolve(database).execute(
             """
             INSERT INTO deployment_audit_events (
               id, actor_type, actor_id, action, target_type, target_id,

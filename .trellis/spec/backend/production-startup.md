@@ -15,7 +15,11 @@
 - `npm run start` -> runs `scripts/start-production.mjs`, then the Python
   Platform service.
 - `npm run server` -> compatibility alias to `npm run start`.
-- `PLATFORM_SECRET_KEY`: required, non-blank.
+- `PLATFORM_SECRET_KEY`: required, non-blank. Alternatively
+  `PLATFORM_SECRET_KEY_FILE` may point to a readable, non-blank key file
+  (absolute, or relative to the repository root); the Node gate validates the
+  file and the Python service reads it, mirroring `services.py`. A direct
+  `PLATFORM_SECRET_KEY` always wins when both are set.
 - `AUTOFLOW_STATIC_DIRECTORY`: optional static directory, default `dist`.
 - `AUTOFLOW_LISTEN_HOST`: optional listener override, default `127.0.0.1`.
 - `PORT`: optional port override, default `8787`.
@@ -118,7 +122,7 @@ npm run start
 ### 2. Signatures
 
 - `npm run test:windows` -> `powershell.exe -NoProfile -ExecutionPolicy Bypass
-  -File scripts/windows-scripts-smoke.ps1`.
+  -File scripts/ops/windows-scripts-smoke.ps1`.
 - Every tracked `scripts/*.ps1` deployment source file contains only ASCII
   bytes (`0x00` through `0x7F`).
 
@@ -153,7 +157,7 @@ npm run start
 
 ### 6. Tests Required
 
-- `scripts/windows-scripts-smoke.ps1`: assert byte-level ASCII compatibility
+- `scripts/ops/windows-scripts-smoke.ps1`: assert byte-level ASCII compatibility
   and parse every deployment PowerShell source before executing the backup /
   restore smoke.
 - `deployment-windows` in `.github/workflows/phase0-ci.yml`: run
@@ -214,7 +218,7 @@ Read-Host -AsSecureString "Enter a PLATFORM_SECRET_KEY with at least 32 characte
 ### 6. Tests Required
 
 - `server-py/tests/unit/test_operational_readiness.py`: data-root ManagedRunner path, authorized download after restore fixture, normal/degraded/SQLite-failure readiness, redacted log event, lifespan startup, and failed retention cleanup retry behavior.
-- `scripts/windows-scripts-smoke.ps1`: backup and restore a real `data/artifacts` fixture, then verify an empty artifact backup clears a stale restored artifact.
+- `scripts/ops/windows-scripts-smoke.ps1`: backup and restore a real `data/artifacts` fixture, then verify an empty artifact backup clears a stale restored artifact.
 - Relevant startup and Playwright checks continue to prove the production service can start with the registered lifespan.
 
 ### 7. Wrong vs Correct

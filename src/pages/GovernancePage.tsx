@@ -1,9 +1,9 @@
-import { message } from "../antd-feedback";
-import { maskAuditDetail } from "../audit-mask";
-import type { Project } from "../mock-data";
-import { getPlatformAnalytics, getPlatformAuditEvents } from "../platform-api";
-import type { PlatformAnalytics, PlatformAnalyticsQuery, PlatformAuditEvent, PlatformAuditQuery, PlatformSession } from "../platform-api";
-import { readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
+import { message } from "../lib/antd-feedback";
+import { maskAuditDetail } from "../lib/audit-mask";
+import type { Project } from "../lib/mock-data";
+import { getPlatformAnalytics, getPlatformAuditEvents } from "../api/platform-api";
+import type { PlatformAnalytics, PlatformAnalyticsQuery, PlatformAuditEvent, PlatformAuditQuery, PlatformSession } from "../api/platform-api";
+import { readPlatformProjectMap, readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../api/platform-context";
 import { FilterBar, FilterItem, MetricCard, PageHeading, PlatformProjectRequired } from "./shared";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Button, DatePicker, Empty, Input, Select, Table, Tag, Tooltip } from "antd";
