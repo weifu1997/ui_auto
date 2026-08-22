@@ -12,7 +12,7 @@ foreach ($script in Get-ChildItem -LiteralPath $scriptRoot -Filter "*.ps1" -File
   if ($parseErrors.Count -gt 0) { $errors += $parseErrors | ForEach-Object { "$($script.Name): $($_.Message)" } }
 }
 if ($errors.Count -gt 0) { throw ($errors -join [Environment]::NewLine) }
-$serviceTemplate = Get-Content -Raw -LiteralPath (Join-Path $scriptRoot "..\deployment\AutoFlow.xml")
+$serviceTemplate = Get-Content -Raw -LiteralPath (Join-Path $scriptRoot "..\..\deployment\AutoFlow.xml")
 $renderedService = $serviceTemplate.Replace("__AUTOFLOW_CORS_ORIGINS__", "https://smoke.corp.test").Replace("__NOTIFICATION_HOST_ALLOWLIST__", "hooks.corp.test").Replace("__ALLOW_PRIVATE_NOTIFICATION_URLS__", "1")
 $leftoverPlaceholders = [regex]::Matches($renderedService, "__[A-Z0-9_]+__") | ForEach-Object { $_.Value } | Select-Object -Unique
 if ($leftoverPlaceholders) { throw "WinSW service template contains placeholders no renderer consumes: $($leftoverPlaceholders -join ', ')" }

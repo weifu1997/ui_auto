@@ -4,7 +4,7 @@ import type {
   RecordingEventPage,
   RecordingResult,
   RecordingSessionStatus,
-} from "./platform-api";
+} from "../api/platform-api";
 
 const terminalStatuses = new Set<RecordingSessionStatus>([
   "stopped",

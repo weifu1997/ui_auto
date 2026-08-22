@@ -1,9 +1,9 @@
 import { LockOutlined, MailOutlined, ThunderboltOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Typography } from "antd";
 import { useMemo, useState } from "react";
-import { acceptWorkspaceInvitation, PlatformApiError, restorePlatformSession } from "./platform-api";
-import { storePlatformSession, readStoredPlatformSession } from "./platform-context";
-import { useLocation, useNavigate } from "./router";
+import { acceptWorkspaceInvitation, PlatformApiError, restorePlatformSession } from "../api/platform-api";
+import { storePlatformSession, readStoredPlatformSession } from "../api/platform-context";
+import { useLocation, useNavigate } from "../router";
 import { AuthShowcase } from "./LoginPage";
 
 type InvitationValues = { email: string; name?: string; password: string };

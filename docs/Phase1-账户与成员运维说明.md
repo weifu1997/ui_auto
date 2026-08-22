@@ -5,7 +5,7 @@
 ## 升级前
 
 1. 记录候选提交 SHA、目标 `PLATFORM_DATA_DIRECTORY`、当前 `/health` 和 `/ready` 响应。
-2. 在替换应用前运行 Phase 0 备份流程，并确认备份位置可访问。Windows 使用 `scripts/backup.ps1`；不要只复制正在使用的 SQLite 主文件。
+2. 在替换应用前运行 Phase 0 备份流程，并确认备份位置可访问。Windows 使用 `scripts/ops/backup.ps1`；不要只复制正在使用的 SQLite 主文件。
 3. 保留上一版应用包和对应的升级前数据库备份。此版本没有安全的 down migration；回退的正确方式是恢复匹配的旧包和旧数据库备份。
 4. 预先指定首位部署级超级管理员的企业邮箱与受控密码传递方式。密码、邀请 token 和密码重置 token 不得出现在工单、shell 历史、截图或日志中。
 
@@ -53,7 +53,7 @@ npm run bootstrap:super-admin -- --email admin@example.test --name "Deployment a
 ## 故障与回退
 
 - 迁移或启动失败时，停止服务扩大影响，保留日志和数据库文件，不要手工编辑 `schema_migrations`、角色列或 token 表。
-- 应用回归使用 `scripts/rollback.ps1`；数据回退只使用升级前验证过的备份和匹配的旧应用包。恢复后重新检查 `/health`、`/ready`、登录和受影响的工作区授权路径。
+- 应用回归使用 `scripts/ops/rollback.ps1`；数据回退只使用升级前验证过的备份和匹配的旧应用包。恢复后重新检查 `/health`、`/ready`、登录和受影响的工作区授权路径。
 - 若首位超级管理员配置错误，先按受控变更流程使用另一位已配置超级管理员修正；若没有可用超级管理员，按已验证备份恢复，而不是手工写入数据库角色。
 
 ## 仍需外部/后续阶段证据

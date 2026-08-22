@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
-import { Navigate, useNavigate, useParams } from "./router";
+import { Navigate, useNavigate, useParams } from "../router";
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
@@ -14,20 +14,20 @@ import {
   WarningFilled,
 } from "@ant-design/icons";
 import { Alert, Button, Empty, Select, Statistic } from "antd";
-import { useRunStore } from "./run-store";
-import { useWorkspaceStore } from "./workspace-store";
+import { useRunStore } from "../stores/run-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import {
   cancelPlatformRun,
   createPlatformRun,
   fetchPlatformArtifact,
   getPlatformRun,
   retryPlatformRun,
-} from "./platform-api";
-import type { PlatformRun } from "./platform-api";
-import { platformProjectContext } from "./platform-context";
-import { message } from "./antd-feedback";
-import type { Project, Run } from "./mock-data";
-import { canUseCapability } from "./pages/shared";
+} from "../api/platform-api";
+import type { PlatformRun } from "../api/platform-api";
+import { platformProjectContext } from "../api/platform-context";
+import { message } from "../lib/antd-feedback";
+import type { Project, Run } from "../lib/mock-data";
+import { canUseCapability } from "./shared";
 
 type ProjectLayoutProps = {
   project: Project;

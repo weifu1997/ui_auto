@@ -1,5 +1,5 @@
 import type { ElementAsset, Environment, Flow, Variable } from "./mock-data";
-import { useWorkspaceStore } from "./workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 
 export const syncOutboxStorageKey = "autoflow-sync-outbox-v1";
 

@@ -1,9 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { Environment } from "../mock-data";
+import type { Environment } from "../lib/mock-data";
 
-vi.mock("../antd-feedback", () => ({
+vi.mock("../lib/antd-feedback", () => ({
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   modal: { confirm: vi.fn() },
 }));

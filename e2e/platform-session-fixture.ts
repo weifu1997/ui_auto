@@ -1,5 +1,5 @@
-import { platformCapabilities } from "../src/platform-api";
-import type { PlatformSession } from "../src/platform-api";
+import { platformCapabilities } from "../src/api/platform-api";
+import type { PlatformSession } from "../src/api/platform-api";
 
 type PlatformAdminSessionInput = {
   token?: string;

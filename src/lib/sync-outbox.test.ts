@@ -9,7 +9,7 @@ import {
   syncOutboxStorageKey,
   upsertProjectDraft,
 } from "./sync-outbox";
-import { useWorkspaceStore } from "./workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 
 function seedStore() {
   useWorkspaceStore.setState({

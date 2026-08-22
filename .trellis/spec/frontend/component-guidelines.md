@@ -15,7 +15,7 @@ export function OverviewPage({ project }: { project: Project }) {
 This shape is repeated in `src/pages/OverviewPage.tsx`,
 `src/pages/ElementsPage.tsx`, and `src/pages/AutomationsPage.tsx`. Use a named
 props type when the contract is larger or reused, as `RunDetailPageProps` does
-in `src/RunDetailPage.tsx`; otherwise the inline object type is normal here.
+in `src/pages/RunDetailPage.tsx`; otherwise the inline object type is normal here.
 
 Lazy route modules are adapted in `src/App.tsx`. Existing root pages use default
 exports while `src/pages/*Page.tsx` uses named exports. Match the module being
@@ -44,7 +44,7 @@ a stable `rowKey`, and define an explicit empty state. Forms use
 `Form.useForm()`, named `Form.Item` fields, and reset or seed fields when a
 drawer/modal opens.
 
-Use `message` and `modal` from `src/antd-feedback.tsx`, not a new global feedback
+Use `message` and `modal` from `src/lib/antd-feedback.tsx`, not a new global feedback
 singleton. `AntdFeedbackBridge` in `src/App.tsx` connects those helpers to the
 active Ant Design app context.
 
@@ -78,7 +78,7 @@ page. Inline style objects are not the normal component styling mechanism.
 
 - Prefer Ant Design's labeled `Form.Item` and semantic controls. Playwright
   flows intentionally locate inputs by label and commands by role in
-  `tests/workbench.spec.ts` and `tests/platform-run.spec.ts`.
+  `e2e/workbench.spec.ts` and `e2e/platform-run.spec.ts`.
 - Give icon-only buttons an `aria-label` that includes the affected item when
   applicable. See the project menu in `src/pages/ProjectsPage.tsx` and element
   actions in `src/pages/ElementsPage.tsx`.

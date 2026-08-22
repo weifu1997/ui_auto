@@ -28,7 +28,7 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { message } from "../antd-feedback";
+import { message } from "../lib/antd-feedback";
 import {
   createWorkspaceInvitation,
   createPlatformWorkspace,
@@ -42,18 +42,18 @@ import {
   updatePlatformAccount,
   updateWorkspaceMemberRole,
   restorePlatformSession,
-} from "../platform-api";
+} from "../api/platform-api";
 import type {
   PlatformAccount,
   PlatformWorkspaceInvitation,
   PlatformWorkspaceMember,
-} from "../platform-api";
+} from "../api/platform-api";
 import {
   readStoredPlatformSession,
   readStoredPlatformWorkspaceId,
   storePlatformSession,
   storePlatformWorkspaceId,
-} from "../platform-context";
+} from "../api/platform-context";
 import { Navigate, useNavigate } from "../router";
 import { PageHeading, WorkspaceSide } from "./shared";
 

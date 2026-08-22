@@ -6,7 +6,7 @@ import {
   readStoredPlatformSession,
   storePlatformSession,
   storePlatformWorkspaceId,
-} from "../platform-context";
+} from "../api/platform-context";
 
 const mocks = vi.hoisted(() => ({
   createWorkspaceInvitation: vi.fn(),
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
 }));
 
-vi.mock("../antd-feedback", () => ({
+vi.mock("../lib/antd-feedback", () => ({
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   modal: { confirm: vi.fn() },
 }));
@@ -35,8 +35,8 @@ vi.mock("../router", () => ({
   useNavigate: () => mocks.navigate,
 }));
 
-vi.mock("../platform-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../platform-api")>()),
+vi.mock("../api/platform-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/platform-api")>()),
   ...mocks,
 }));
 

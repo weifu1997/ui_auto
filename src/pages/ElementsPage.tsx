@@ -1,10 +1,10 @@
-import { message } from "../antd-feedback";
-import type { ElementAsset, Environment, Project } from "../mock-data";
+import { message } from "../lib/antd-feedback";
+import type { ElementAsset, Environment, Project } from "../lib/mock-data";
 import { PageHeading, canUseCapability, durationFromMilliseconds, emptyElements, emptyEnvironments, uniqueNameValidator } from "./shared";
-import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../platform-api";
-import { platformProjectContext } from "../platform-context";
-import { elementValidationLoginMessage } from "../element-validation";
-import { useWorkspaceStore } from "../workspace-store";
+import { createPlatformElementValidation, getPlatformElementValidation, platformValidationArtifactUrl } from "../api/platform-api";
+import { platformProjectContext } from "../api/platform-context";
+import { elementValidationLoginMessage } from "../lib/element-validation";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { CheckCircleFilled, DeleteOutlined, EditOutlined, ExperimentOutlined, FileSearchOutlined, PlusOutlined, SearchOutlined, WarningFilled } from "@ant-design/icons";
 import { Alert, Button, Checkbox, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";

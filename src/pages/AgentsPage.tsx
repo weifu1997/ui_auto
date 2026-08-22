@@ -1,15 +1,15 @@
-import { message } from "../antd-feedback";
-import type { Project } from "../mock-data";
+import { message } from "../lib/antd-feedback";
+import type { Project } from "../lib/mock-data";
 import {
   createPlatformRun,
   getPlatformRevisions,
   rollbackPlatformRevision,
   savePlatformSecret,
-} from "../platform-api";
-import type { PlatformRevision } from "../platform-api";
-import { platformProjectContext } from "../platform-context";
+} from "../api/platform-api";
+import type { PlatformRevision } from "../api/platform-api";
+import { platformProjectContext } from "../api/platform-context";
 import { useNavigate } from "../router";
-import { useRunStore } from "../run-store";
+import { useRunStore } from "../stores/run-store";
 import {
   PageHeading,
   emptyEnvironments,
@@ -20,8 +20,8 @@ import {
   requiredSecretVariables,
   variableReference,
 } from "./shared";
-import { useSecretStore } from "../secret-store";
-import { useWorkspaceStore } from "../workspace-store";
+import { useSecretStore } from "../stores/secret-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { HistoryOutlined, PlayCircleFilled, ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Popconfirm, Space, Table, Tag, Tooltip } from "antd";
 import { useCallback, useEffect, useState } from "react";

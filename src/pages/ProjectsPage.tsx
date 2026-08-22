@@ -1,17 +1,17 @@
-import { message, modal } from "../antd-feedback";
+import { message, modal } from "../lib/antd-feedback";
 import { useNavigate } from "../router";
-import { useRunStore } from "../run-store";
+import { useRunStore } from "../stores/run-store";
 import { WorkspaceSide, emptyRuns, isTerminalStatus } from "./shared";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { InboxOutlined, MoreOutlined, PlusOutlined, SearchOutlined, UndoOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Empty, Form, Input, List, Modal, Progress, Space, Table, theme } from "antd";
 import type { TableColumnsType } from "antd";
 import { useState } from "react";
-import type { Project } from "../mock-data";
+import type { Project } from "../lib/mock-data";
 import { useQueryClient } from "@tanstack/react-query";
-import { createWorkspaceProject, getWorkspaceProjects, updatePlatformProject } from "../platform-api";
-import type { PlatformProject } from "../platform-api";
-import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../platform-context";
+import { createWorkspaceProject, getWorkspaceProjects, updatePlatformProject } from "../api/platform-api";
+import type { PlatformProject } from "../api/platform-api";
+import { readStoredPlatformSession, readStoredPlatformWorkspaceId } from "../api/platform-context";
 
 type ProjectListRow = Project & {
   environmentCount: number;

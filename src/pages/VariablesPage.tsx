@@ -1,8 +1,8 @@
-import { message } from "../antd-feedback";
-import type { Project, Variable } from "../mock-data";
+import { message } from "../lib/antd-feedback";
+import type { Project, Variable } from "../lib/mock-data";
 import { PageHeading, emptyVariables, uniqueVariableNameValidator } from "./shared";
-import { useSecretStore } from "../secret-store";
-import { useWorkspaceStore } from "../workspace-store";
+import { useSecretStore } from "../stores/secret-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { CheckCircleFilled, DeleteOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Drawer, Empty, Form, Input, Popconfirm, Select, Switch, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";

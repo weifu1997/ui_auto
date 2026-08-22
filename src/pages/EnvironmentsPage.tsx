@@ -1,7 +1,7 @@
-import { message } from "../antd-feedback";
-import type { Environment, Project } from "../mock-data";
+import { message } from "../lib/antd-feedback";
+import type { Environment, Project } from "../lib/mock-data";
 import { PageHeading, emptyEnvironments, uniqueNameValidator } from "./shared";
-import { useWorkspaceStore } from "../workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { GlobalOutlined, MoreOutlined, PlusOutlined } from "@ant-design/icons";
 import { AutoComplete, Button, Drawer, Dropdown, Empty, Form, Input, Select } from "antd";
 import { environmentNameOptions, testIdAttributeOptions } from "./environment-form-options";

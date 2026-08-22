@@ -1,8 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlatformSession } from "./platform-api";
-import { storePlatformSession } from "./platform-context";
+import type { PlatformSession } from "../api/platform-api";
+import { storePlatformSession } from "../api/platform-context";
 
 const mocks = vi.hoisted(() => ({
   acceptWorkspaceInvitation: vi.fn(),
@@ -11,13 +11,13 @@ const mocks = vi.hoisted(() => ({
   location: { search: "?token=invite-token" },
 }));
 
-vi.mock("./platform-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./platform-api")>()),
+vi.mock("../api/platform-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/platform-api")>()),
   acceptWorkspaceInvitation: mocks.acceptWorkspaceInvitation,
   restorePlatformSession: mocks.restorePlatformSession,
 }));
 
-vi.mock("./router", () => ({
+vi.mock("../router", () => ({
   useLocation: () => mocks.location,
   useNavigate: () => mocks.navigate,
 }));

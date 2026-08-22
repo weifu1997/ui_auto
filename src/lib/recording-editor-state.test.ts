@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ElementAsset } from "./mock-data";
-import type { RecordingEvent, RecordingResult } from "./platform-api";
+import type { RecordingEvent, RecordingResult } from "../api/platform-api";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,

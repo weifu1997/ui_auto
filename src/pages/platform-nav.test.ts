@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Project } from "../mock-data";
+import type { Project } from "../lib/mock-data";
 import { sectionMeta } from "./shared";
 import { platformTabItems } from "./PlatformPage";
 

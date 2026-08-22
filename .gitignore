@@ -16,8 +16,8 @@ node_modules
 server-py/.venv-linux/
 server-py/.browsers/
 server-py/.browser-libs/
-# 本地开发默认数据目录（main.py 默认指向 server/.data），保留整目录忽略
-server/.data
+# 本地开发默认数据目录（main.py 默认指向 data/），整目录忽略
+/data/
 test-results
 playwright-report
 blob-report

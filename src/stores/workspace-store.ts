@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ElementAsset, Environment, Flow, Project, Variable } from "./mock-data";
+import type { ElementAsset, Environment, Flow, Project, Variable } from "../lib/mock-data";
 
 export type PlatformWorkspaceProject = {
   platformProjectId: string;
