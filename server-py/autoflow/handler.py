@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import sqlite3
 import time
 import uuid
 from pathlib import Path
@@ -585,7 +586,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     project["created_at"],
                 ),
             )
-        except Exception:
+        except sqlite3.IntegrityError:
             raise PlatformError(409, "PROJECT_SLUG_EXISTS")
         services.put_document(project["id"], {})
         services.audit(
@@ -1805,7 +1806,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     user.id,
                 ),
             )
-        except Exception:
+        except sqlite3.IntegrityError:
             raise PlatformError(409, "RESOURCE_ALREADY_EXISTS")
         services.audit(
             project["workspace_id"],
@@ -2209,7 +2210,9 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
             services.database.execute("ROLLBACK")
             if isinstance(exc, PlatformError):
                 raise
-            raise PlatformError(409, "DATASET_NAME_EXISTS") from exc
+            if isinstance(exc, sqlite3.IntegrityError):
+                raise PlatformError(409, "DATASET_NAME_EXISTS") from exc
+            raise
         services.audit(
             project["workspace_id"],
             {"type": "user", "id": user.id},
@@ -3222,7 +3225,7 @@ def create_platform_router(services: PlatformServices) -> APIRouter:
                     created_at,
                 ),
             )
-        except Exception:
+        except sqlite3.IntegrityError:
             raise PlatformError(409, "NOTIFICATION_CHANNEL_NAME_EXISTS") from None
         services.audit(
             workspace_id,

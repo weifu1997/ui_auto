@@ -16,6 +16,7 @@ import re
 import socket
 import shutil
 import ssl
+import threading
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -433,13 +434,11 @@ class PlatformServices:
     def __init__(self, data_directory: str):
         self.data_directory = Path(data_directory)
         self.data_directory.mkdir(parents=True, exist_ok=True)
-        self.database = sqlite3.connect(
-            self.data_directory / "platform.sqlite", check_same_thread=False
-        )
-        self.database.isolation_level = None
+        self._thread_local = threading.local()
+        self._thread_local.database = self._open_database_connection()
         run_platform_migrations(self.database, BOOTSTRAP_SCHEMA)
-        self.audit = create_audit_writer(self.database)
-        self.deployment_audit = create_deployment_audit_writer(self.database)
+        self.audit = create_audit_writer(self._current_database)
+        self.deployment_audit = create_deployment_audit_writer(self._current_database)
         self.managed_runner = ManagedRunner(
             self.data_directory / "artifacts",
             global_concurrency=int(
@@ -503,6 +502,34 @@ class PlatformServices:
                 self.append_run_event(
                     row[0], "run.interrupted", {"reason": "RUN_ENQUEUE_FAILED"}
                 )
+
+    @property
+    def database(self) -> sqlite3.Connection:
+        # 每线程一个连接：事件循环、维护线程（asyncio.to_thread）与 ManagedRunner
+        # 工作线程此前共用一个连接，导致 BEGIN IMMEDIATE 互相冲突、自动提交写入
+        # 混入他人事务。WAL 模式允许连接间并发，写竞争由 busy timeout（30s）兜底。
+        connection = getattr(self._thread_local, "database", None)
+        if connection is None:
+            connection = self._open_database_connection()
+            self._thread_local.database = connection
+        return connection
+
+    @database.setter
+    def database(self, connection: sqlite3.Connection) -> None:
+        self._thread_local.database = connection
+
+    def _open_database_connection(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            self.data_directory / "platform.sqlite",
+            check_same_thread=False,
+            timeout=30.0,
+        )
+        connection.isolation_level = None
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def _current_database(self) -> sqlite3.Connection:
+        return self.database
 
     def close(self) -> None:
         try:
@@ -3148,12 +3175,17 @@ class PlatformServices:
             raise PlatformError(404, "RUN_NOT_FOUND")
         if run[2] not in _TERMINAL_RUN_STATUSES:
             raise PlatformError(409, "RUN_NOT_DELETABLE")
-        with self.database:
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
             self.database.execute("DELETE FROM deliveries WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM flow_outputs WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM platform_artifacts WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM platform_run_events WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM platform_runs WHERE id = ? AND project_id = ?", (run_id, project_id))
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
         return {"runId": run_id, "deleted": True}
 
     def delete_runs(self, project_id: str, run_ids: list[str]) -> dict[str, Any]:
@@ -3174,7 +3206,8 @@ class PlatformServices:
         if not deletable_run_ids:
             return {"runIds": [], "deletedCount": 0}
         deletable_placeholders = ",".join("?" for _ in deletable_run_ids)
-        with self.database:
+        self.database.execute("BEGIN IMMEDIATE")
+        try:
             self.database.execute(
                 f"DELETE FROM deliveries WHERE run_id IN ({deletable_placeholders})",
                 deletable_run_ids,
@@ -3196,6 +3229,10 @@ class PlatformServices:
                 [*deletable_run_ids, project_id],
             )
             deleted_count = cursor.rowcount
+            self.database.execute("COMMIT")
+        except Exception:
+            self.database.execute("ROLLBACK")
+            raise
         return {"runIds": deletable_run_ids, "deletedCount": deleted_count}
 
     def run_response(self, run: dict[str, Any]) -> dict[str, Any]:
