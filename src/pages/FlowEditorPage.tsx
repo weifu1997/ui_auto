@@ -19,7 +19,7 @@ import {
   SearchOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Checkbox, Dropdown, Drawer, Empty, Form, Input, Modal, Popover, Select, Switch, Tag, Tooltip } from "antd";
+import { Alert, AutoComplete, Button, Checkbox, Dropdown, Drawer, Empty, Form, Input, Modal, Popover, Select, Switch, Tag, Tooltip } from "antd";
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -1702,6 +1702,58 @@ function SortableStep({
   );
 }
 
+// 断言字段互斥：每个字段只属于一种断言类型。切换动作时清掉不属于新动作的字段，
+// 避免跨类型字段残留（后端跨类型误值回落默认，但编辑器不应让用户配置出这种状态）。
+const ASSERTION_FIELDS = [
+  "assertMatch",
+  "assertVisibility",
+  "assertOperator",
+  "assertAttribute",
+] as const;
+
+function staleAssertionFields(action: string): Partial<FlowStep> {
+  const clear = (name: (typeof ASSERTION_FIELDS)[number]): Partial<FlowStep> => ({
+    [name]: undefined,
+  });
+  if (action === "文本断言") {
+    // 文本断言仅保留 assertMatch。
+    return { ...clear("assertVisibility"), ...clear("assertOperator"), ...clear("assertAttribute") };
+  }
+  if (action === "属性断言") {
+    // 属性断言保留 assertMatch + assertAttribute。
+    return { ...clear("assertVisibility"), ...clear("assertOperator") };
+  }
+  if (action === "数量断言") {
+    return { ...clear("assertMatch"), ...clear("assertVisibility"), ...clear("assertAttribute") };
+  }
+  if (action === "可见性断言") {
+    return { ...clear("assertMatch"), ...clear("assertOperator"), ...clear("assertAttribute") };
+  }
+  // 非断言动作：全部清除。
+  return {
+    assertMatch: undefined,
+    assertVisibility: undefined,
+    assertOperator: undefined,
+    assertAttribute: undefined,
+  };
+}
+
+const ASSERTION_ATTRIBUTE_SUGGESTIONS = [
+  "value",
+  "id",
+  "name",
+  "class",
+  "href",
+  "src",
+  "placeholder",
+  "type",
+  "disabled",
+  "checked",
+  "title",
+  "data-testid",
+  "aria-label",
+];
+
 function StepForm({
   step,
   elements,
@@ -1715,20 +1767,27 @@ function StepForm({
   runInFlight: boolean;
   onRunToHere: () => void;
 }) {
+  const isAssertion = step.action.includes("断言");
   return (
     <div className="step-form">
       <label>
         <span>动作</span>
         <Select
+          aria-label="步骤动作"
+          showSearch
+          optionFilterProp="label"
           value={step.action}
           options={actionOptions.map((value) => ({ value }))}
-          onChange={(action) => onChange({ action, title: action })}
+          onChange={(action) =>
+            onChange({ action, title: action, ...staleAssertionFields(action) })
+          }
         />
       </label>
       {!["打开页面", "等待", "截图"].includes(step.action) && (
         <label>
           <span>元素</span>
           <Select
+            aria-label="步骤元素"
             value={step.element}
             showSearch
             optionFilterProp="label"
@@ -1741,22 +1800,82 @@ function StepForm({
           />
         </label>
       )}
-      <label>
-        <span>
-          {step.action === "打开页面"
-            ? "页面路径"
-            : step.action.includes("断言")
-              ? "期望值"
-              : step.action === "等待"
-                ? "等待时长"
-                : "参数"}
-        </span>
-        <Input
-          value={step.value}
-          onChange={(event) => onChange({ value: event.target.value })}
-          placeholder="支持 {{env.baseUrl}}、{{project.username}} 等变量引用"
-        />
-      </label>
+      {isAssertion && (
+        <div className="assert-config">
+          {step.action === "可见性断言" && (
+            <label>
+              <span>期望状态</span>
+              <Select
+                aria-label="期望状态"
+                value={step.assertVisibility ?? "visible"}
+                options={[
+                  { value: "visible", label: "可见" },
+                  { value: "hidden", label: "不可见" },
+                ]}
+                onChange={(assertVisibility) => onChange({ assertVisibility })}
+              />
+            </label>
+          )}
+          {(step.action === "文本断言" || step.action === "属性断言") && (
+            <label>
+              <span>匹配方式</span>
+              <Select
+                aria-label="匹配方式"
+                value={step.assertMatch ?? "contains"}
+                options={[
+                  { value: "contains", label: "包含" },
+                  { value: "exact", label: "完全匹配" },
+                ]}
+                onChange={(assertMatch) => onChange({ assertMatch })}
+              />
+            </label>
+          )}
+          {step.action === "数量断言" && (
+            <label>
+              <span>比较符</span>
+              <Select
+                aria-label="比较符"
+                value={step.assertOperator ?? "="}
+                options={["=", ">", "<", ">=", "<="].map((value) => ({ value }))}
+                onChange={(assertOperator) => onChange({ assertOperator })}
+              />
+            </label>
+          )}
+          {step.action === "属性断言" && (
+            <label>
+              <span>属性名</span>
+              <AutoComplete
+                aria-label="属性名"
+                value={step.assertAttribute ?? "value"}
+                options={ASSERTION_ATTRIBUTE_SUGGESTIONS.map((value) => ({
+                  value,
+                }))}
+                onChange={(assertAttribute) => onChange({ assertAttribute })}
+              />
+            </label>
+          )}
+        </div>
+      )}
+      {step.action !== "可见性断言" && (
+        <label>
+          <span>
+            {step.action === "打开页面"
+              ? "页面路径"
+              : step.action === "数量断言"
+                ? "期望数量"
+                : isAssertion
+                  ? "期望值"
+                  : step.action === "等待"
+                    ? "等待时长"
+                    : "参数"}
+          </span>
+          <Input
+            value={step.value}
+            onChange={(event) => onChange({ value: event.target.value })}
+            placeholder="支持 {{env.baseUrl}}、{{project.username}} 等变量引用"
+          />
+        </label>
+      )}
       <div className="form-row">
         <label>
           <span>超时（秒）</span>
@@ -1771,6 +1890,7 @@ function StepForm({
         <label>
           <span>失败策略</span>
           <Select
+            aria-label="失败策略"
             value={step.failurePolicy}
             options={["立即失败", "继续执行", "重试 1 次"].map((value) => ({
               value,
