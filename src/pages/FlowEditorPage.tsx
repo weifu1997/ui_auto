@@ -29,11 +29,11 @@ import { useRunStore } from "../stores/run-store";
 import { useSecretStore } from "../stores/secret-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { message, modal } from "../lib/antd-feedback";
-import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, savePlatformSecret, stopRecordingSession } from "../api/platform-api";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
 import type { RecordingEvent, RecordingResult, RecordingSession } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { elementValidationLoginMessage } from "../lib/element-validation";
-import { describePlatformRunError, platformRunAsRun, uniqueVariableNameValidator } from "./shared";
+import { describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, uniqueVariableNameValidator } from "./shared";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,
@@ -48,13 +48,12 @@ import {
 } from "../lib/recording-editor-state";
 import { actionOptions } from "../lib/mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "../lib/mock-data";
-import { requiredSecretVariables, revisionInput, variableReference } from "../lib/revision-snapshot";
+import { revisionInput, variableReference } from "../lib/revision-snapshot";
 
 const emptyFlows: Flow[] = [];
 const emptyElements: ElementAsset[] = [];
 const emptyVariables: Variable[] = [];
 const emptyEnvironments: Environment[] = [];
-const emptySecretValues: Record<string, string> = {};
 
 function projectById(projects: Project[], id?: string) {
   return projects.find((project) => project.id === id);
@@ -230,74 +229,6 @@ function elementValidationLabel(result: ElementValidationResult, validated: bool
   }
 }
 
-function requestRunSecrets(
-  projectId: string,
-  variables: Variable[],
-  steps: FlowStep[],
-  sessionValues: Record<string, string>,
-  setValues: (projectId: string, values: Record<string, string>) => void,
-) {
-  const required = requiredSecretVariables(variables, steps);
-  const missing = required.filter((variable) => !sessionValues[variable.id]);
-  if (missing.length === 0) return Promise.resolve(sessionValues);
-  return new Promise<Record<string, string> | null>((resolve) => {
-    const submitted = { ...sessionValues };
-    modal.confirm({
-      title: "运行前注入密钥",
-      width: 520,
-      content: (
-        <div className="secret-run-fields">
-          <Alert
-            type="info"
-            showIcon
-            message="以下密钥仅用于本次运行会话，不会保存至服务器存储。"
-            style={{ marginBottom: 8 }}
-          />
-          {missing.map((variable) => (
-            <label key={variable.id} className="secret-run-field">
-              <div className="secret-run-label">
-                <span className="secret-run-name">
-                  <span className="secret-run-required" aria-hidden="true">*</span>
-                  {variable.name}
-                </span>
-                <Tag
-                  color={variable.scope === "环境" ? "blue" : "purple"}
-                  className="secret-run-scope"
-                >
-                  {variable.scope}
-                </Tag>
-              </div>
-              {variable.description && (
-                <div className="secret-run-description">{variable.description}</div>
-              )}
-              <Input.Password
-                aria-label={`运行密钥 ${variable.name}`}
-                autoComplete="new-password"
-                placeholder={`请输入 ${variable.name}`}
-                onChange={(event) => {
-                  submitted[variable.id] = event.target.value;
-                }}
-              />
-            </label>
-          ))}
-        </div>
-      ),
-      okText: "注入并运行",
-      cancelText: "取消",
-      onOk: () => {
-        const unresolved = missing.find((variable) => !submitted[variable.id]);
-        if (unresolved) {
-          message.error(`请填写密钥变量“${unresolved.name}”`);
-          return Promise.reject(new Error("SECRET_VALUE_REQUIRED"));
-        }
-        setValues(projectId, submitted);
-        resolve(submitted);
-      },
-      onCancel: () => resolve(null),
-    });
-  });
-}
-
 export default function FlowEditorPage() {
   const { projectId, flowId } = useParams();
   const navigate = useNavigate();
@@ -339,6 +270,7 @@ export default function FlowEditorPage() {
     markSaved,
   } = useFlowStore();
   const [runToStep, setRunToStep] = useState(false);
+  const runDispatchKeysRef = useRef(new Map<string, string>());
   const [recordingOpen, setRecordingOpen] = useState(false);
   const [recordingSession, setRecordingSession] = useState<RecordingSession | null>(null);
   const [recordingResult, setRecordingResult] = useState<RecordingResult | null>(null);
@@ -582,10 +514,6 @@ export default function FlowEditorPage() {
   );
 
   const upsertRun = useRunStore((state) => state.upsertRun);
-  const sessionSecretValues = useSecretStore((state) =>
-    project ? state.valuesByProject[project.id] ?? emptySecretValues : emptySecretValues,
-  );
-  const setSecretValues = useSecretStore((state) => state.setValues);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
@@ -963,55 +891,45 @@ export default function FlowEditorPage() {
       message.warning("请先保存流程草稿，再发布并执行。");
       return;
     }
-    setRunToStep(true);
     const environment = activeEnvironment;
     if (!environment) {
-      setRunToStep(false);
       message.error("当前项目没有可用运行环境");
       return;
     }
+    const platformContext = platformProjectContext(project.id);
+    if (!platformContext) {
+      message.error("当前项目尚未连接 Platform，请先完成项目同步");
+      return;
+    }
+    setRunToStep(true);
     const stepsToRun = upToStepId
       ? steps.slice(0, steps.findIndex((step) => step.id === upToStepId) + 1)
       : steps;
-    const secretValues = await requestRunSecrets(
-      project.id,
-      variables,
-      stepsToRun,
-      sessionSecretValues,
-      setSecretValues,
-    );
-    if (!secretValues) {
-      setRunToStep(false);
-      return;
-    }
-    const platformContext = platformProjectContext(project.id);
-    if (platformContext) {
-      try {
-        if (hasPublishedRevision === false) {
-          await createPlatformRevision(
-            platformContext.session.token,
-            platformContext.projectId,
-            revisionInput(flow, environment, elements, variables),
-          );
-          setHasPublishedRevision(true);
-        }
-        for (const variable of requiredSecretVariables(variables, stepsToRun)) {
-          const value = secretValues[variable.id];
-          if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
-        }
-        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: environment.id, upToStepId });
-        result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
-        message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
-        if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
-      } catch (error) {
-        message.error(describePlatformRunError(error));
-      } finally {
-        setRunToStep(false);
+    const intent = runIntentKey({ projectId: platformContext.projectId, flowId: flow.id, upToStepId });
+    try {
+      if (!(await ensurePlatformRunSecrets(platformContext.session.token, platformContext.projectId, variables, stepsToRun))) {
+        return;
       }
-      return;
+      if (hasPublishedRevision === false) {
+        await createPlatformRevision(
+          platformContext.session.token,
+          platformContext.projectId,
+          revisionInput(flow, environment, elements, variables),
+        );
+        setHasPublishedRevision(true);
+      }
+      const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
+      const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: environment.id, upToStepId, dispatchKey });
+      releaseRunDispatchKey(runDispatchKeysRef.current, intent);
+      result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+      message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
+      if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
+    } catch (error) {
+      releaseRunDispatchKey(runDispatchKeysRef.current, intent, error);
+      message.error(describePlatformRunError(error));
+    } finally {
+      setRunToStep(false);
     }
-    message.error("当前项目尚未连接 Platform，请先完成项目同步");
-    setRunToStep(false);
   };
   return (
     <div className="editor-page">
@@ -1183,6 +1101,7 @@ export default function FlowEditorPage() {
               step={selectedStep}
               elements={elements}
               onChange={updateStep}
+              runInFlight={runToStep}
               onRunToHere={() => run(selectedStep.id)}
             />
           ) : (
@@ -1787,11 +1706,13 @@ function StepForm({
   step,
   elements,
   onChange,
+  runInFlight,
   onRunToHere,
 }: {
   step: FlowStep;
   elements: ElementAsset[];
   onChange: (patch: Partial<FlowStep>) => void;
+  runInFlight: boolean;
   onRunToHere: () => void;
 }) {
   return (
@@ -1899,7 +1820,7 @@ function StepForm({
         )}
       </div>
       <div className="step-form-footer">
-        <Button icon={<PlayCircleFilled />} onClick={onRunToHere}>
+        <Button icon={<PlayCircleFilled />} disabled={runInFlight} onClick={onRunToHere}>
           运行至此步骤
         </Button>
         <span>会从第一步开始执行，完成当前步骤后停止。</span>

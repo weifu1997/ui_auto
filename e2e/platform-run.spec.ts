@@ -5,112 +5,113 @@ test("assembles a Platform fixture run and renders the mocked completed report",
   await page.goto("/projects");
   await page.evaluate(() => {
     localStorage.clear();
-    localStorage.setItem(
-      "autoflow-workspace-projects",
-      JSON.stringify({
-        state: {
-          projects: [
+    // 工作区持久化按用户分区：匿名期（reload 后还没设会话）读 _anonymous 分区，
+    // configurePlatformRunUiMocks 设会话后读 platform-ui-user 分区，两个都要种。
+    const seed = JSON.stringify({
+      state: {
+        projects: [
+          {
+            id: "runtime",
+            name: "Platform UI 回归",
+            description: "Platform 执行链路",
+            environmentCount: 1,
+            flowCount: 1,
+            lastRun: "尚未运行",
+            health: 100,
+          },
+        ],
+        flowsByProject: {
+          runtime: [
             {
-              id: "runtime",
-              name: "Platform UI 回归",
-              description: "Platform 执行链路",
-              environmentCount: 1,
-              flowCount: 1,
-              lastRun: "尚未运行",
-              health: 100,
+              id: "fixture-login",
+              name: "Fixture 登录流程",
+              description: "登录并验证欢迎信息",
+              tags: ["回归"],
+              steps: 3,
+              lastStatus: "queued",
+              updatedAt: "刚刚",
+              definition: [
+                {
+                  id: "open",
+                  title: "打开登录页",
+                  action: "打开页面",
+                  value: "/__fixture/login",
+                  timeout: 10,
+                  failurePolicy: "立即失败",
+                  status: "pending",
+                },
+                {
+                  id: "submit",
+                  title: "提交登录",
+                  action: "点击",
+                  element: "登录按钮",
+                  value: "",
+                  timeout: 10,
+                  failurePolicy: "立即失败",
+                  status: "pending",
+                },
+                {
+                  id: "welcome",
+                  title: "验证欢迎信息",
+                  action: "可见性断言",
+                  element: "欢迎信息",
+                  value: "",
+                  timeout: 10,
+                  failurePolicy: "立即失败",
+                  status: "pending",
+                },
+              ],
             },
           ],
-          flowsByProject: {
-            runtime: [
-              {
-                id: "fixture-login",
-                name: "Fixture 登录流程",
-                description: "登录并验证欢迎信息",
-                tags: ["回归"],
-                steps: 3,
-                lastStatus: "queued",
-                updatedAt: "刚刚",
-                definition: [
-                  {
-                    id: "open",
-                    title: "打开登录页",
-                    action: "打开页面",
-                    value: "/__fixture/login",
-                    timeout: 10,
-                    failurePolicy: "立即失败",
-                    status: "pending",
-                  },
-                  {
-                    id: "submit",
-                    title: "提交登录",
-                    action: "点击",
-                    element: "登录按钮",
-                    value: "",
-                    timeout: 10,
-                    failurePolicy: "立即失败",
-                    status: "pending",
-                  },
-                  {
-                    id: "welcome",
-                    title: "验证欢迎信息",
-                    action: "可见性断言",
-                    element: "欢迎信息",
-                    value: "",
-                    timeout: 10,
-                    failurePolicy: "立即失败",
-                    status: "pending",
-                  },
-                ],
-              },
-            ],
-          },
-          elementsByProject: {
-            runtime: [
-              {
-                id: "submit",
-                name: "登录按钮",
-                description: "Fixture 登录提交按钮",
-                path: "/__fixture/login",
-                method: "testid",
-                value: "login-submit",
-                environment: "fixture",
-                validation: "unverified",
-                updatedAt: "刚刚",
-              },
-              {
-                id: "welcome",
-                name: "欢迎信息",
-                description: "Fixture 登录成功提示",
-                path: "/__fixture/login",
-                method: "testid",
-                value: "welcome",
-                environment: "fixture",
-                validation: "unverified",
-                updatedAt: "刚刚",
-              },
-            ],
-          },
-          variablesByProject: { runtime: [] },
-          environmentsByProject: {
-            runtime: [
-              {
-                id: "fixture",
-                name: "Platform Fixture",
-                description: "Platform 测试站点",
-                baseUrl: "http://127.0.0.1:8787",
-                browser: "Chromium",
-                auth: "无认证",
-                timeout: 10,
-                color: "teal",
-                updatedAt: "刚刚",
-              },
-            ],
-          },
-          activeEnvironmentByProject: { runtime: "fixture" },
         },
-        version: 4,
-      }),
-    );
+        elementsByProject: {
+          runtime: [
+            {
+              id: "submit",
+              name: "登录按钮",
+              description: "Fixture 登录提交按钮",
+              path: "/__fixture/login",
+              method: "testid",
+              value: "login-submit",
+              environment: "fixture",
+              validation: "unverified",
+              updatedAt: "刚刚",
+            },
+            {
+              id: "welcome",
+              name: "欢迎信息",
+              description: "Fixture 登录成功提示",
+              path: "/__fixture/login",
+              method: "testid",
+              value: "welcome",
+              environment: "fixture",
+              validation: "unverified",
+              updatedAt: "刚刚",
+            },
+          ],
+        },
+        variablesByProject: { runtime: [] },
+        environmentsByProject: {
+          runtime: [
+            {
+              id: "fixture",
+              name: "Platform Fixture",
+              description: "Platform 测试站点",
+              baseUrl: "http://127.0.0.1:8787",
+              browser: "Chromium",
+              auth: "无认证",
+              timeout: 10,
+              color: "teal",
+              updatedAt: "刚刚",
+            },
+          ],
+        },
+        activeEnvironmentByProject: { runtime: "fixture" },
+      },
+      version: 4,
+    });
+    localStorage.setItem("autoflow-workspace-projects:u:_anonymous", seed);
+    localStorage.setItem("autoflow-workspace-projects:u:platform-ui-user", seed);
   });
   await page.reload();
   await page.goto("/project/runtime/flows");

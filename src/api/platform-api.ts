@@ -777,10 +777,26 @@ export function rollbackPlatformRevision(token: string, projectId: string, revis
   );
 }
 
-export function createPlatformRun(token: string, projectId: string, input: { revisionId?: string; flowId?: string; environmentId: string; datasetVersionId?: string; upToStepId?: string }) {
+export function createPlatformRun(token: string, projectId: string, input: { revisionId?: string; flowId?: string; environmentId: string; datasetVersionId?: string; upToStepId?: string; dispatchKey?: string }) {
   return request<{ run?: PlatformRun; runs: PlatformRun[]; runIds: string[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs`,
     { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export type PlatformSecret = {
+  id: string;
+  name: string;
+  keyVersion: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export function getPlatformSecrets(token: string, projectId: string) {
+  return request<{ secrets: PlatformSecret[] }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/secrets`,
+    {},
     token,
   );
 }
@@ -912,10 +928,10 @@ export function cancelPlatformRun(token: string, projectId: string, runId: strin
   return request<{ run: PlatformRun }>(`/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }, token);
 }
 
-export function retryPlatformRun(token: string, projectId: string, runId: string) {
+export function retryPlatformRun(token: string, projectId: string, runId: string, dispatchKey?: string) {
   return request<{ runIds: string[]; runs: PlatformRun[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/retry`,
-    { method: "POST" },
+    { method: "POST", body: dispatchKey ? JSON.stringify({ dispatchKey }) : undefined },
     token,
   );
 }

@@ -7,6 +7,9 @@ const session = platformAdminSession({
   workspaces: [{ id: "workspace-sync", name: "Sync workspace" }],
 });
 
+// outbox 按登录用户分区（见 src/lib/user-scoped-storage.ts）
+const scopedOutboxKey = `autoflow-sync-outbox-v1:u:${session.user.id}`;
+
 const environment = {
   id: "env-1",
   name: "Production environment",
@@ -141,7 +144,7 @@ test("restores and retries a saved edit after reload", async ({ page }) => {
   await page.locator(".project-nav-item").filter({ hasText: "元素库" }).click();
   await createElement(page, "production-saved-element");
 
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("autoflow-sync-outbox-v1") ?? "")).toContain("production-saved-element");
+  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key) ?? "", scopedOutboxKey)).toContain("production-saved-element");
   await page.reload();
 
   await expect.poll(() => putAttempts, { timeout: 10_000 }).toBeGreaterThan(1);
@@ -195,12 +198,12 @@ test("keeps the draft on conflict and resubmits against the latest version", asy
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("检测到其他成员已更新同一资源", { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem("autoflow-sync-outbox-v1") ?? "")).toContain("local-element");
+  expect(await page.evaluate((key) => localStorage.getItem(key) ?? "", scopedOutboxKey)).toContain("local-element");
 
   await page.getByRole("button", { name: "重新提交" }).click();
   await expect.poll(() => putAttempts, { timeout: 10_000 }).toBe(2);
   expect(savedElement).toMatchObject({ name: "local-element" });
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("autoflow-sync-outbox-v1") ?? "[]")).toBe("[]");
+  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key) ?? "[]", scopedOutboxKey)).toBe("[]");
 });
 
 test("refreshing after conflict drops the local draft and restores the server element", async ({ page }) => {
@@ -237,6 +240,6 @@ test("refreshing after conflict drops the local draft and restores the server el
 
   await expect(page.getByText("server-element", { exact: true })).toBeVisible();
   await expect(page.getByText("local-element", { exact: true })).not.toBeVisible();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("autoflow-sync-outbox-v1") ?? "[]")).toBe("[]");
+  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key) ?? "[]", scopedOutboxKey)).toBe("[]");
   expect(putAttempts).toBe(1);
 });

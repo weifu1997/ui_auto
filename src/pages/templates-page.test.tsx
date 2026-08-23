@@ -73,6 +73,7 @@ vi.mock("../api/platform-api", () => ({
 }));
 
 vi.mock("../api/platform-context", () => ({
+  currentPlatformUserId: () => "user-1",
   readStoredPlatformSession: () => ({
     token: "mock-token",
     user: { id: "user-1", email: "user@test.com", name: "User", globalRole: null },

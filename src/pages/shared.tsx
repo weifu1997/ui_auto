@@ -5,7 +5,8 @@ import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable 
 import { getPlatformHealth, PlatformApiError } from "../api/platform-api";
 import type { PlatformCapability, PlatformRun, PlatformSession } from "../api/platform-api";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../api/platform-context";
-import { logoutPlatform } from "../api/platform-api";
+import { getPlatformSecrets, logoutPlatform, savePlatformSecret } from "../api/platform-api";
+import { readConflictSnapshotRaw } from "../lib/sync-outbox";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
@@ -329,8 +330,8 @@ export function ProjectLayout({
             type="warning"
             showIcon
             title="检测到其他成员已更新同一资源"
-            description={`${formatConflictActorTime(sessionStorage.getItem(`autoflow-conflict-${project.id}`))}本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。`}
-            action={<span className="sync-conflict-actions"><Button size="small" onClick={() => { const draft = sessionStorage.getItem(`autoflow-conflict-${project.id}`) ?? ""; void navigator.clipboard.writeText(draft).then(() => message.success("本地草稿已复制")); }}>复制本地修改</Button><Button size="small" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "refresh" } }))}>刷新远端</Button><Button size="small" type="primary" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "resubmit" } }))}>重新提交</Button></span>}
+            description={`${formatConflictActorTime(readConflictSnapshotRaw(project.id))}本地修改已保存为冲突草稿。可先复制留档，刷新远端，或基于最新版本重新提交。`}
+            action={<span className="sync-conflict-actions"><Button size="small" onClick={() => { const draft = readConflictSnapshotRaw(project.id) ?? ""; void navigator.clipboard.writeText(draft).then(() => message.success("本地草稿已复制")); }}>复制本地修改</Button><Button size="small" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "refresh" } }))}>刷新远端</Button><Button size="small" type="primary" onClick={() => window.dispatchEvent(new CustomEvent(platformConflictActionEvent, { detail: { projectId: project.id, action: "resubmit" } }))}>重新提交</Button></span>}
           />}
           {children}
         </div>
@@ -546,70 +547,106 @@ export function requiredSecretVariables(variables: Variable[], steps: FlowStep[]
   });
 }
 
-export function requestRunSecrets(
+// 运行密钥分界：服务器已配置的密钥直接供部署机执行使用；未配置项才需要补充。
+export function splitSecretRequirements(
+  variables: Variable[],
+  steps: FlowStep[],
+  configuredNames: Iterable<string>,
+) {
+  const configured = new Set(configuredNames);
+  const required = requiredSecretVariables(variables, steps);
+  return {
+    required,
+    missing: required.filter((variable) => !configured.has(variableReference(variable))),
+  };
+}
+
+// 运行前确认密钥可用：member 只读服务器已配置的密钥；具备 secret.manage 的用户可录入，
+// 录入值会加密持久化到服务器供部署机执行（弹窗文案必须如实说明这一点）。
+export async function ensurePlatformRunSecrets(
+  token: string,
   projectId: string,
   variables: Variable[],
   steps: FlowStep[],
-  sessionValues: Record<string, string>,
-  setValues: (projectId: string, values: Record<string, string>) => void,
-) {
-  const required = requiredSecretVariables(variables, steps);
-  const missing = required.filter((variable) => !sessionValues[variable.id]);
-  if (missing.length === 0) return Promise.resolve(sessionValues);
-  return new Promise<Record<string, string> | null>((resolve) => {
-    const submitted = { ...sessionValues };
+): Promise<boolean> {
+  const { secrets } = await getPlatformSecrets(token, projectId);
+  const { required, missing } = splitSecretRequirements(
+    variables,
+    steps,
+    secrets.map((secret) => secret.name),
+  );
+  if (missing.length === 0) return true;
+  if (!canUseCapability("secret.manage")) {
+    message.error(`密钥变量 ${missing.map((variable) => variable.name).join("、")} 尚未在服务器配置，请联系项目管理员配置后再运行`);
+    return false;
+  }
+  const configured = new Set(secrets.map((secret) => secret.name));
+  const submitted: Record<string, string> = {};
+  return new Promise<boolean>((resolve) => {
     modal.confirm({
-      title: "运行前注入密钥",
+      title: "运行前配置密钥",
       width: 520,
       content: (
         <div className="secret-run-fields">
           <Alert
             type="info"
             showIcon
-            message="以下密钥仅用于本次运行会话，不会保存至服务器存储。"
+            message="密钥将加密保存至服务器，供部署机执行本次及后续运行；已配置项留空则沿用已保存值。"
             style={{ marginBottom: 8 }}
           />
-          {missing.map((variable) => (
-            <label key={variable.id} className="secret-run-field">
-              <div className="secret-run-label">
-                <span className="secret-run-name">
-                  <span className="secret-run-required" aria-hidden="true">*</span>
-                  {variable.name}
-                </span>
-                <Tag
-                  color={variable.scope === "环境" ? "blue" : "purple"}
-                  className="secret-run-scope"
-                >
-                  {variable.scope}
-                </Tag>
-              </div>
-              {variable.description && (
-                <div className="secret-run-description">{variable.description}</div>
-              )}
-              <Input.Password
-                aria-label={`运行密钥 ${variable.name}`}
-                autoComplete="new-password"
-                placeholder={`请输入 ${variable.name}`}
-                onChange={(event) => {
-                  submitted[variable.id] = event.target.value;
-                }}
-              />
-            </label>
-          ))}
+          {required.map((variable) => {
+            const isConfigured = configured.has(variableReference(variable));
+            return (
+              <label key={variable.id} className="secret-run-field">
+                <div className="secret-run-label">
+                  <span className="secret-run-name">
+                    {!isConfigured && <span className="secret-run-required" aria-hidden="true">*</span>}
+                    {variable.name}
+                    {isConfigured && <Tag className="secret-run-scope">已配置</Tag>}
+                  </span>
+                  <Tag
+                    color={variable.scope === "环境" ? "blue" : "purple"}
+                    className="secret-run-scope"
+                  >
+                    {variable.scope}
+                  </Tag>
+                </div>
+                {variable.description && (
+                  <div className="secret-run-description">{variable.description}</div>
+                )}
+                <Input.Password
+                  aria-label={`运行密钥 ${variable.name}`}
+                  autoComplete="new-password"
+                  placeholder={isConfigured ? "留空沿用服务器已保存值" : `请输入 ${variable.name}`}
+                  onChange={(event) => {
+                    submitted[variable.id] = event.target.value;
+                  }}
+                />
+              </label>
+            );
+          })}
         </div>
       ),
-      okText: "注入并运行",
+      okText: "保存并运行",
       cancelText: "取消",
-      onOk: () => {
+      onOk: async () => {
         const unresolved = missing.find((variable) => !submitted[variable.id]);
         if (unresolved) {
           message.error(`请填写密钥变量“${unresolved.name}”`);
-          return Promise.reject(new Error("SECRET_VALUE_REQUIRED"));
+          throw new Error("SECRET_VALUE_REQUIRED");
         }
-        setValues(projectId, submitted);
-        resolve(submitted);
+        try {
+          for (const variable of required) {
+            const value = submitted[variable.id];
+            if (value) await savePlatformSecret(token, projectId, { name: variableReference(variable), value });
+          }
+          resolve(true);
+        } catch (error) {
+          message.error(describePlatformRunError(error));
+          throw error;
+        }
       },
-      onCancel: () => resolve(null),
+      onCancel: () => resolve(false),
     });
   });
 }
@@ -620,6 +657,46 @@ export function platformVariables(variables: Variable[]) {
       .filter((variable) => !variable.secret && (variable.scope === "项目" || variable.scope === "环境"))
       .map((variable) => [variableReference(variable), variable.value]),
   );
+}
+
+// 单次运行派发幂等：dispatchKey 在网络超时/5xx 后保留复用，服务端按 key 去重，
+// 避免重复创建浏览器自动化；仅在明确成功或 4xx 拒绝后释放，下次点击生成新 key。
+export function newRunDispatchKey() {
+  return `web-${crypto.randomUUID()}`;
+}
+
+export function shouldReleaseRunDispatchKey(error: unknown) {
+  if (error instanceof PlatformApiError) return error.status >= 400 && error.status < 500;
+  return false;
+}
+
+export type RunIntentInput = {
+  projectId: string;
+  revisionId?: string;
+  flowId?: string;
+  upToStepId?: string;
+  runId?: string;
+};
+
+// 单次运行派发幂等键按“派发意图”分键：同一意图（projectId/revisionId/flowId/upToStepId
+// 相同）在超时/5xx 后保留同一 key，避免重复创建浏览器自动化；切换意图则生成新 key，
+// 防止服务端按 key 去重时误吞不同目标的运行。runId 用于“按原快照重试”，将同一目标
+// 运行的重试与其它派发隔离开。
+export function runIntentKey(input: RunIntentInput) {
+  return `${input.projectId}:${input.revisionId ?? input.flowId ?? input.runId ?? ""}:${input.upToStepId ?? ""}`;
+}
+
+export function nextRunDispatchKey(map: Map<string, string>, intent: string) {
+  let key = map.get(intent);
+  if (!key) {
+    key = newRunDispatchKey();
+    map.set(intent, key);
+  }
+  return key;
+}
+
+export function releaseRunDispatchKey(map: Map<string, string>, intent: string, error?: unknown) {
+  if (!error || shouldReleaseRunDispatchKey(error)) map.delete(intent);
 }
 
 export function durationFromMilliseconds(value: unknown) {

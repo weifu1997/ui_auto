@@ -45,6 +45,6 @@ test("discards retired local demo data instead of restoring a product mode", asy
   await page.reload();
   await expect(page.getByText("尚未创建测试项目", { exact: true })).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("autoflow-workspace-projects") ?? ""))
+    .poll(() => page.evaluate(() => localStorage.getItem("autoflow-workspace-projects:u:_anonymous") ?? ""))
     .not.toContain("commerce");
 });

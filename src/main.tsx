@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "./router";
+import { installAccountStateReset } from "./lib/account-state-reset";
 import "antd/dist/reset.css";
 import "./theme.css";
 import "./index.css";
@@ -9,6 +10,10 @@ import App from "./App.tsx";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+});
+
+installAccountStateReset({
+  onAccountStateChanged: () => queryClient.clear(),
 });
 
 createRoot(document.getElementById("root")!).render(

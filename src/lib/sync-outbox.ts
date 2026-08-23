@@ -1,7 +1,10 @@
 import type { ElementAsset, Environment, Flow, Variable } from "./mock-data";
 import { useWorkspaceStore } from "../stores/workspace-store";
+import { currentPlatformUserId } from "../api/platform-context";
+import { migrateUnscopedStorageKey, userScopedStorageKey } from "./user-scoped-storage";
 
 export const syncOutboxStorageKey = "autoflow-sync-outbox-v1";
+migrateUnscopedStorageKey(syncOutboxStorageKey);
 
 export type SyncDraftPending =
   | "flows"
@@ -54,9 +57,18 @@ function isSyncDraft(value: unknown): value is SyncDraft {
   );
 }
 
+function outboxStorageKey() {
+  return userScopedStorageKey(syncOutboxStorageKey);
+}
+
+// 测试与升级路径显式触发旧 key 迁移；模块加载时已自动执行一次。
+export function migrateLegacyOutbox() {
+  migrateUnscopedStorageKey(syncOutboxStorageKey);
+}
+
 export function readSyncOutbox() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(syncOutboxStorageKey) ?? "[]") as unknown;
+    const parsed = JSON.parse(localStorage.getItem(outboxStorageKey()) ?? "[]") as unknown;
     return Array.isArray(parsed) ? parsed.filter(isSyncDraft) : [];
   } catch {
     return [];
@@ -65,7 +77,7 @@ export function readSyncOutbox() {
 
 function writeSyncOutbox(drafts: SyncDraft[]) {
   try {
-    localStorage.setItem(syncOutboxStorageKey, JSON.stringify(drafts));
+    localStorage.setItem(outboxStorageKey(), JSON.stringify(drafts));
   } catch {
     // 内存同步仍然继续；持久化失败会让用户看到同步失败，避免静默丢数据。
   }
@@ -157,4 +169,43 @@ export function sanitizeResourceData<T extends Record<string, unknown>>(data: T)
     return { ...data, value: "" };
   }
   return data;
+}
+
+// 冲突快照与 outbox 一样按用户分区，避免后登录者读到前一账号的冲突草稿。
+export function conflictSnapshotKey(projectId: string, userId = currentPlatformUserId()) {
+  return `autoflow-conflict:${userId || "_anonymous"}:${projectId}`;
+}
+
+export function readConflictSnapshotRaw(projectId: string) {
+  try {
+    return sessionStorage.getItem(conflictSnapshotKey(projectId));
+  } catch {
+    return null;
+  }
+}
+
+export function writeConflictSnapshot(projectId: string, draft: unknown) {
+  try {
+    sessionStorage.setItem(conflictSnapshotKey(projectId), JSON.stringify(draft));
+  } catch {
+    // 快照仅用于冲突恢复提示；写入失败不阻断同步流程。
+  }
+}
+
+export function clearConflictSnapshot(projectId: string) {
+  try {
+    sessionStorage.removeItem(conflictSnapshotKey(projectId));
+  } catch {
+    // 忽略：快照不存在时 removeItem 也是无害的。
+  }
+}
+
+export function clearAllConflictSnapshots() {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith("autoflow-conflict")) sessionStorage.removeItem(key);
+    }
+  } catch {
+    // 忽略：清理失败不影响账号切换主流程。
+  }
 }

@@ -291,8 +291,24 @@ def add_automation_governance(database: sqlite3.Connection) -> None:
     ensure_column(database, "notification_channels", "archived_at", "TEXT")
     database.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS platform_runs_dispatch_key
-          ON platform_runs (dispatch_key) WHERE dispatch_key IS NOT NULL
+        CREATE UNIQUE INDEX IF NOT EXISTS platform_runs_dispatch_key_project
+          ON platform_runs (project_id, dispatch_key) WHERE dispatch_key IS NOT NULL
+        """
+    )
+
+
+def scope_run_dispatch_key_uniqueness(database: sqlite3.Connection) -> None:
+    """Dispatch-key 唯一性按项目限定。
+
+    v5 创建的是全局唯一索引 `platform_runs_dispatch_key`，同一 key 跨项目会相互
+    吞并（F1）。把唯一性收窄到 (project_id, dispatch_key)：同一项目内仍保证
+    幂等去重，不同项目可安全复用各自意图的 key。
+    """
+    database.execute("DROP INDEX IF EXISTS platform_runs_dispatch_key")
+    database.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS platform_runs_dispatch_key_project
+          ON platform_runs (project_id, dispatch_key) WHERE dispatch_key IS NOT NULL
         """
     )
 
@@ -738,6 +754,11 @@ def run_platform_migrations(
                 "version": 13,
                 "name": "deployment-security-audit",
                 "up": add_deployment_audit_events,
+            },
+            {
+                "version": 14,
+                "name": "scope-run-dispatch-key-uniqueness",
+                "up": scope_run_dispatch_key_uniqueness,
             },
         ],
     )

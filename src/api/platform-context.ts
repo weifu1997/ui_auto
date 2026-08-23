@@ -59,6 +59,11 @@ export function storePlatformSession(session?: PlatformSession) {
   notifyPlatformContextChanged();
 }
 
+// 稳定账号标识：用于浏览器持久化状态按用户分区，会话令牌轮换不影响分区归属。
+export function currentPlatformUserId(session = readStoredPlatformSession()) {
+  return session?.user.id ?? "";
+}
+
 export function readStoredPlatformWorkspaceId(session = readStoredPlatformSession()) {
   const stored = localStorage.getItem(platformWorkspaceStorageKey) ?? "";
   if (session?.workspaces.some((workspace) => workspace.id === stored)) return stored;

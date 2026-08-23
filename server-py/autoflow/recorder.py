@@ -378,15 +378,16 @@ class RecorderNormalizer:
         target = sanitize_url(url)
         if not target:
             return
+        target_path = url_path(target)
         if self._first_navigation:
             self._first_navigation = False
             if not self._steps:
-                self._append_step("打开页面", None, value=url_path(target))
+                self._append_step("打开页面", None, value=target_path)
             return
         if self._last_click_at is not None and 0 <= at - self._last_click_at <= NAVIGATION_CAUSALITY_MS:
             return
         self._flush_pending()
-        self._append_step("打开页面", None, value=url_path(target))
+        self._append_step("打开页面", None, value=target_path)
 
     def _handle_click(self, element: dict[str, Any], key: str, at: int) -> None:
         tag = str(element.get("tag") or "")

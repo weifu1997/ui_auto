@@ -224,6 +224,23 @@ def test_validate_recorder_event_normalizes_and_drops():
     assert any("drag" in warning for warning in warnings)
 
 
+def test_initial_navigation_same_path_does_not_duplicate_start_step():
+    normalizer = RecorderNormalizer("https://app.test/")
+    normalizer.append({
+        "kind": "navigate",
+        "url": "https://app.test/?utm_source=recording#home",
+        "at": 100,
+    })
+
+    result = normalizer.result()
+    assert [(step["action"], step.get("value")) for step in result["steps"]] == [
+        ("打开页面", "/")
+    ]
+
+    normalizer.note_navigation("https://app.test/home", at=200)
+    assert normalizer.result()["steps"][-1]["value"] == "/home"
+
+
 def test_coordinator_lifecycle_pause_stop_cancel_and_expiry():
     launched = []
 

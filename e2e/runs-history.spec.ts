@@ -43,7 +43,7 @@ async function seedRunsPage(page: Page, getRuns: () => Array<Record<string, unkn
       }),
     );
     localStorage.setItem(
-      "autoflow-workspace-projects",
+      "autoflow-workspace-projects:u:runs-user",
       JSON.stringify({
         state: {
           projects: [{ id: "run-project", name: "Run project", description: "" }],

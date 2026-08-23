@@ -133,3 +133,102 @@ useEffect(() => {
 | S-W1 | Windows smoke 渲染真实占位符集合，并断言模板无未消费占位符（防再次漂移） | `windows-scripts-smoke.ps1` |
 
 「规划」档未动，需设计决策后另行排期：B-W1（通知投递异步化）、B-W2（默认密钥需显式 dev opt-in）、B-W3（异常文本映射错误码）、B-W6（限流键清理）、S-W2/S-W3/S-W6/S-W7/S-W8、T-W1～T-W4 及全部 INFO。
+
+---
+
+## 当前 HEAD 复审（2026-08-22，`81adc8e`）
+
+本节是对上方历史报告和修复记录之后当前代码的复审。上方标记为已修复的 C-1/C-2/C-3、F-W1/F-W2、B-W4/B-W5、S-W1/S-W4/S-W5 在当前 HEAD 均未复现；本节中的编号是当前仍需处理的项目，历史报告不应被误读为全部仍未修复。
+
+### CRITICAL（已验证）
+
+#### R-C1【前端/跨层】浏览器持久化状态和同步草稿不按账号隔离
+
+- `src/stores/workspace-store.ts:285-313` 与 `src/stores/run-store.ts:54-55` 使用全局 localStorage key；退出登录路径 `src/pages/shared.tsx:166` 及会话失效路径 `src/App.tsx:190-200` 只清除 session，不清工作区、运行记录或冲突快照。
+- `src/lib/sync-outbox.ts:23-36,74-84` 的草稿身份仅含 `workspaceId + projectId`，不含用户 ID。新会话的同步器会在远端水合前恢复草稿（`src/ServerWorkspaceSynchronizer.tsx:420-430`），并在随后自动调度提交（`:403-414,523`）。
+- `ProjectsPage` 直接渲染持久化 store（`src/pages/ProjectsPage.tsx:30-58`），因此后一位登录者可在远端授权响应前看到上一位用户的缓存；若两人同属一个 workspace，后一位成员还会以自己的 token 自动提交上一位留下的未提交草稿。
+
+影响：这是跨账号数据泄露和错误归属写入，不只是同一用户的离线草稿恢复问题。建议把 workspace store、run store、outbox、sessionStorage conflict 都以稳定 user ID 分区，并在身份变化时原子清空内存和旧分区引用；补“用户 A 登出 -> 用户 B（同/不同 workspace）登录”的可见性、草稿不自动提交回归测试。
+
+### WARNING（已验证）
+
+| 编号 | 证据 | 影响与建议 |
+| --- | --- | --- |
+| R-W1 | 运行密钥弹窗承诺“不会保存至服务器存储”（`src/pages/FlowEditorPage.tsx:246-255`；共享实现也在 `src/pages/shared.tsx:549-614`），但编辑器、流程列表、版本页分别在 `FlowEditorPage.tsx:998-1002`、`FlowsPage.tsx:109-114`、`AgentsPage.tsx:94-98` 调用 `POST /secrets`。该路由实际加密持久化（`server-py/autoflow/handler/secrets.py:51-105`）且要求 `secret.manage`（`:20-25`）；member 只有 `run.execute`、没有 `secret.manage`（`server-py/autoflow/workspaces.py:52-66`）。 | UI 的留存承诺错误；普通成员即使项目管理员已配置密钥，也会在运行时被要求提交密钥并收到 403，无法执行流程。区分“服务端已配置、仅供执行”的密钥与“创建/轮换密钥”的管理权限；只允许管理员持久化，普通成员可使用已配置值运行；修正文案并补 member-run 覆盖。 |
+| R-W2 | 单次运行 API 入参没有幂等键（`src/api/platform-api.ts:780-785`），路由也未读取/传递该字段（`server-py/autoflow/handler/runs.py:95-110`）。服务层仅在调用者提供 `dispatchKey` 时去重（`server-py/autoflow/services/runs.py:363-369,464-482`）。编辑器“运行至此步骤”按钮在请求期间未禁用（`src/pages/FlowEditorPage.tsx:1900-1905`），而其它单次运行入口也没有请求锁。 | 双击、网络重试或两处操作并发会创建多组浏览器自动化，可能重复点击/提交外部系统。为单次运行生成并传递 idempotency/dispatch key，服务端按项目和发起者持久化去重；派发期间禁用所有对应按钮，并加入双击回归。 |
+| R-W3 | `scripts/ops/backup-manifest.py:42-53` 只校验 manifest 中列出的条目，允许空或遗漏 `platform.sqlite` 的 `files`；`scripts/ops/restore.ps1:13-17` 只另行确认该文件存在后复制。最小复现中，删除 manifest 的 `platform.sqlite` 条目、替换数据库后，`verify` 仍返回 `ok`（exit 0）。 | 损坏或被替换的主库可绕过宣称的恢复完整性门禁并覆盖生产数据库。验证 manifest schema/version 和预期 payload 集，至少强制存在并校验 `platform.sqlite` 条目；补“遗漏条目、未列出文件、空 files”回归。manifest 不是签名，不能将此修复表述为来源真实性保护。 |
+| R-W4 | `scripts/ops/install.ps1:40` 的 robocopy 未排除 `.env`、`.env.*`、`venv`/`.venv*`。生产启动器默认读取 `$app/.env`（`scripts/start-production.mjs:11-22,137-148`），Python 优先采用直接 `PLATFORM_SECRET_KEY`（`server-py/autoflow/services/core.py:51-60`）而非 WinSW 的受 ACL 保护 key file；`scripts/python-env.mjs:21-56` 还在 installer 创建的 `app/venv` 之前选择被复制的 `server-py/.venv*`。 | 本地开发密钥可静默覆盖托管密钥，开发虚拟环境可在生产中执行。robocopy 排除环境文件、所有开发 venv、`.trellis`、构建/测试产物；只创建并选择 `app/venv`；为包含开发 `.env`/venv 的安装源加隔离 smoke。 |
+| R-W5 | 恢复脚本调用 `AutoFlow.exe stop` 后既不检查 `$LASTEXITCODE`，也不等待服务确实停止（`scripts/ops/restore.ps1:10-17`）。PowerShell 的 `$ErrorActionPreference = "Stop"` 不会因 native command 返回非零而抛出，最小探针在 `cmd /c exit 7` 后仍继续。 | stop 失败或服务仍在写 SQLite 时可直接覆盖数据库。检查 stop/start 退出码并轮询已停止状态后才替换文件；失败时退出，补 WinSW stop-failure 和 timeout 负向测试。 |
+| R-W6 | `timeout 20s npm run test:py` 在 `test_identity_membership_lifecycle.py::test_http_role_matrix...` 超时（exit 124；TestClient 上下文为 `server-py/tests/unit/test_identity_membership_lifecycle.py:64`）。无产品代码的 FastAPI/Starlette `TestClient.__enter__()` 和 AnyIO portal 最小复现同样超时。当前锁定环境包含 `anyio==4.14.2`（`requirements.lock:6`）、FastAPI 0.141.1（`:12`）、httpx 0.28.1（`:17`）、Starlette 1.6.0（`:33`）；`pip check` 通过。`setup-py.mjs:61-65` 和 CI 实际安装宽泛的 `requirements.txt:1-8`，不使用/校验锁。 | Python 质量门禁当前不可用，且解析结果不可复现。验证一组可跨平台运行的 constraints/lock，让本地和 CI 安装并校验它；给 `test:py` 添加超时和堆栈诊断。尚未断言应升级或降级哪一个具体版本。 |
+| R-W7 | 唯一 CI 工作流只监听 `python_3.1`（`.github/workflows/phase0-ci.yml:3-9`）。这原本由 `docs/生产基线发布与分支保护.md:7` 明确，但当前审查分支已经合并进 `origin/master` 的 `c45fa48`，关联工作任务仍声明 `master` 为基线（`.trellis/tasks/08-21-flow-assertion-mvp/task.json:16`）。 | 对当前分支 push 或以 `master` 为目标的 PR 不会触发任何 repo 内工作流，质量门禁可被绕过。确定唯一集成分支，并同步 workflow trigger、任务基线和 GitHub 分支保护；或明确要求所有变更只以 `python_3.1` 为目标。未声称远端分支保护已经或未已经启用。 |
+| R-W8 | run 完成回调直接投递通知（`server-py/autoflow/services/runs.py:786` -> `services/notifications.py:337,377`）；每次最多处理 20 条（`:97`），单次 HTTP timeout 为 10 秒（`services/_shared.py:370`）。 | 慢通知端点可占用一个 ManagedRunner worker 最长约 200 秒，默认两个 worker 都被占用时后续流程无法调度。完成回调只入队，由维护循环（`server-py/autoflow/main.py:339-342`）或独立 worker 投递；补慢端点不阻塞下一运行的测试。当前回调已在 condition lock 外执行，历史报告中“阻塞事件循环/持锁”的表述应收窄。 |
+| R-W9 | `server-py/autoflow/crypto.py:13-17` 有公开默认密钥；`services/core.py:51-64` 仅在 `NODE_ENV=production` 时拒绝未配置密钥。直接启动 Python 服务会绕过 Node 生产入口。 | 获得 SQLite 文件的一方可推导非 production 服务的项目密钥和 webhook 签名密钥。默认拒绝，或仅在明确 `AUTOFLOW_ALLOW_INSECURE_DEV_KEY=1` 时开放开发回退；补直接 Python 启动测试。 |
+| R-W10 | 通道测试将 `str(exc)` 返回客户端并写审计（`server-py/autoflow/handler/channels.py:299`）；后台投递持久化原始异常（`services/notifications.py:173`），项目查看者可从 deliveries API 读到它（`handler/channels.py:473`）；模板应用也把 `str(e)` 放入 warnings（`handler/templates.py:829`）。 | DNS、连接、SQLite 等内部错误可能泄漏路径、主机名或实现细节。对外、审计和数据库只记录稳定错误码，原始异常仅进入受控服务端日志。 |
+| R-W11 | 登录限流的窗口字典按 socket peer IP 维护（`server-py/autoflow/handler/auth.py:21-32`；地址来源 `handler/_shared.py:176`），键从不回收。已有可信代理机制只用于 HTTPS 判定（`transport.py:17-36`）。 | 反代后所有用户共享同一个 10 次/分钟桶，同时大量来源会造成字典持续增长。仅在可信代理时解析经验证的转发地址，定期清理过期桶，并补代理和清理测试。 |
+
+### 本轮质量门禁
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过（0 warnings / 0 errors） |
+| `npm run build` | 通过 |
+| `npm run test:unit` | 通过（17 文件 / 66 用例） |
+| `npm run test:startup` | 通过 |
+| `npm run check:bundle` | 通过 |
+| `npm run test:windows` | 通过（本机 PowerShell smoke） |
+| `npm run test:py` | 未通过：20 秒 timeout，见 R-W6 |
+| `npm run test:e2e` | 未执行：Python 全量门禁无法完成，本轮未启动真实服务 |
+| `npm run test:coverage` | 本机未安装 lockfile 已声明的 `@vitest/coverage-v8`；属于本地依赖漂移，未作为产品缺陷 |
+
+### 误报排除和状态校正
+
+- `put_document` 的 `expectedVersion` 在人工多线程直接调用时有 TOCTOU，但当前实际调用方都位于同一 uvicorn event loop 的同步段，维护线程和 runner 不调用它；不列为当前生产缺陷。
+- SQLite 跨线程共享连接、30 秒轮询覆盖编辑器草稿、`PLATFORM_SECRET_KEY_FILE` 启动门禁、备份原子落盘等历史 CRITICAL 已有当前回归代码，未复现。
+- outbox 和 workspace 持久化会清空 secret 变量值；R-C1 是账号归属缺失，不是本地存储保留明文密钥。
+- backup manifest 缺陷是完整性检查覆盖不足，不等同于能抵抗拥有备份目录写权限的攻击者篡改 manifest 和数据。
+
+---
+
+## 修复记录（2026-08-22 第二轮，用户批准后执行）
+
+「高危三件」R-C1、R-W1、R-W2 已修复。R-W3~R-W11 未动，仍待排期。
+
+### R-C1 持久化状态与草稿按账号隔离
+
+| 内容 | 文件 |
+| --- | --- |
+| 新增用户分区存储层：`userScopedStorageKey` / 一次性旧 key 迁移 `migrateUnscopedStorageKey` / zustand `StateStorage` 适配器 | `src/lib/user-scoped-storage.ts`（新增）、`platform-context.ts`（`currentPlatformUserId`） |
+| workspace store、run store 的物理键改为 `<key>:u:<userId>`（导出 `workspaceStorageKey`/`runStorageKey` 常量） | `src/stores/workspace-store.ts`、`src/stores/run-store.ts` |
+| outbox 物理键同样分区；冲突快照键改为 `autoflow-conflict:<userId>:<projectId>`，读写清理收口为 `read/write/clearConflictSnapshot` 等 helper | `src/lib/sync-outbox.ts`、`ServerWorkspaceSynchronizer.tsx`、`pages/shared.tsx` |
+| 新增账号状态重置：监听 `platformContextChangedEvent`（登出/过期/登录/恢复统一经过 `storePlatformSession`）；任何身份变化清内存（workspace/run/flow/secret store + TanStack queryClient）；仅在两个具体账号间切换时删除旧分区与冲突快照；同账号过期重登保留磁盘分区（离线草稿不丢） | `src/lib/account-state-reset.ts`（新增）、`src/main.tsx` |
+| 回归测试：分区写入、同用户刷新不清、跨账号清空+旧分区删除、过期保留、匿名切换不动磁盘、旧 key 一次性迁移 | `src/lib/account-state-reset.test.ts`（新增 5 用例）、`src/lib/sync-outbox.test.ts`（+2 用例） |
+| e2e 适配分区后键位 | `e2e/production-sync.spec.ts`、`e2e/workbench.spec.ts` |
+
+效果：后登录者不再看到前一账号的缓存项目/运行记录，同步器不会恢复更不会自动提交前一账号的草稿（`schedulePendingDrafts` 读取的 outbox 已按用户隔离）。
+
+### R-W1 运行密钥：区分「使用已配置值」与「持久化管理」
+
+| 内容 | 文件 |
+| --- | --- |
+| `requestRunSecrets` 重写为 `ensurePlatformRunSecrets`：先读 `GET /secrets`（角色级权限，member 可读名称清单）；已配置密钥直接放行（部署机用服务端值执行）；未配置时 member 明确提示「联系项目管理员」并终止（不再触发 403）；admin 弹窗如实声明「密钥将加密保存至服务器」，已配置项留空沿用已保存值（保留轮换入口） | `src/pages/shared.tsx`（含纯函数 `splitSecretRequirements`） |
+| 删除 `FlowEditorPage` 内重复的弹窗实现；三个运行入口（编辑器、流程列表、版本页）统一走共享实现，`savePlatformSecret` 循环移入弹窗确认回调 | `FlowEditorPage.tsx`、`FlowsPage.tsx`、`AgentsPage.tsx`、`platform-api.ts`（新增 `getPlatformSecrets`） |
+| 服务端零改动：member 用已配置密钥运行本就支持（`resolve_run_spec` 服务端校验），GET=角色级 / POST=`secret.manage` 已有矩阵测试背书（`test_route_authorization_matrix.py:185-186`） | — |
+| 回归测试：已配置放行不弹窗、member 缺密钥报错不写入、admin 弹窗未填拒绝提交、split 纯函数 | `src/pages/run-secrets.test.tsx`（新增 6 用例） |
+
+### R-W2 单次运行幂等键 + 派发期间禁用
+
+| 内容 | 文件 |
+| --- | --- |
+| `createPlatformRun` 入参支持 `dispatchKey`；路由读取并透传（>128 字符返回 `RUN_DISPATCH_KEY_INVALID`），复用服务层既有 `dispatch_key` 去重 | `platform-api.ts`、`server-py/autoflow/handler/runs.py` |
+| 五个单次运行入口（编辑器运行/运行至此步骤、流程列表、版本页、运行列表重试、运行详情重试）生成 `web-<uuid>` 幂等键；网络超时/5xx 后保留复用同一 key（超时重点不产生重复自动化），成功或 4xx 才释放；派发期间禁用对应按钮（编辑器步骤面板按钮补上 `disabled`） | `FlowEditorPage.tsx`、`FlowsPage.tsx`、`AgentsPage.tsx`、`RunsPage.tsx`、`RunDetailPage.tsx`、`shared.tsx`（`newRunDispatchKey`/`shouldReleaseRunDispatchKey`） |
+| 回归测试：dispatchKey 形态、超时后重试沿用同一 key（前端）；同 key 去重/不同 key 独立/无 key 各建（服务层直连） | `flow-editor-save.test.tsx`（+2 用例）、`server-py/tests/unit/test_run_dispatch_idempotency.py`（新增 3 用例） |
+
+### 本轮门禁
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` / `build` / `check:bundle` | 通过（0 warnings / 0 errors；bundle ≤500 kB） |
+| `npm run test:unit` | 通过（19 文件 / 78 用例，较上轮 +12） |
+| `npm run test:py` | 定向通过：全量排除 R-W6 已知卡死的 `test_identity_membership_lifecycle.py` 后 167 通过（含新增 3 用例）；全量门禁仍被 R-W6 阻塞 |
+| `npm run test:startup` / `test:windows` | 通过（14/14；smoke ok） |
+| `npm run test:e2e` | 未执行：需真实服务且 R-W6 未解；e2e 键位已适配待后续验证 |

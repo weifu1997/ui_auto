@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { storePlatformSession } from "../api/platform-context";
 import {
   allSyncDraftPending,
   applyProjectDraft,
   buildProjectDraft,
+  migrateLegacyOutbox,
   readProjectDraft,
   readSyncOutbox,
   removeProjectDraft,
@@ -10,6 +12,15 @@ import {
   upsertProjectDraft,
 } from "./sync-outbox";
 import { useWorkspaceStore } from "../stores/workspace-store";
+import { userScopedStorageKey } from "./user-scoped-storage";
+
+function sessionFor(userId: string) {
+  return {
+    token: `token-${userId}`,
+    user: { id: userId, email: `${userId}@example.test`, name: userId, globalRole: null },
+    workspaces: [],
+  };
+}
 
 function seedStore() {
   useWorkspaceStore.setState({
@@ -44,8 +55,27 @@ describe("sync outbox", () => {
     const draft = buildProjectDraft("ws-1", "p-1", allSyncDraftPending);
     expect(draft.variables[0].value).toBe("");
     upsertProjectDraft(draft);
-    const raw = localStorage.getItem(syncOutboxStorageKey) ?? "";
+    const raw = localStorage.getItem(userScopedStorageKey(syncOutboxStorageKey)) ?? "";
     expect(raw).not.toContain("plaintext-secret");
+  });
+
+  it("migrates a legacy unscoped outbox key into the current user's scope once", () => {
+    storePlatformSession(sessionFor("user-x"));
+    localStorage.setItem(syncOutboxStorageKey, JSON.stringify([{ not: "a-draft" }]));
+    migrateLegacyOutbox();
+    expect(localStorage.getItem(syncOutboxStorageKey)).toBeNull();
+    expect(localStorage.getItem(userScopedStorageKey(syncOutboxStorageKey))).toBe(JSON.stringify([{ not: "a-draft" }]));
+    localStorage.setItem(syncOutboxStorageKey, "[]");
+    migrateLegacyOutbox();
+    expect(localStorage.getItem(userScopedStorageKey(syncOutboxStorageKey))).toBe(JSON.stringify([{ not: "a-draft" }]));
+  });
+
+  it("does not migrate the legacy key while anonymous so login can claim it later", () => {
+    // 模块加载时若处于匿名态，旧 key 必须原地保留，等真实账号登录后再归入其分区。
+    localStorage.setItem(syncOutboxStorageKey, JSON.stringify([{ legacy: "data" }]));
+    migrateLegacyOutbox();
+    expect(localStorage.getItem(syncOutboxStorageKey)).toBe(JSON.stringify([{ legacy: "data" }]));
+    expect(localStorage.getItem(userScopedStorageKey(syncOutboxStorageKey))).toBeNull();
   });
 
   it("replaces a project draft on upsert and removes it on demand", () => {

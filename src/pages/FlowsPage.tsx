@@ -1,12 +1,11 @@
 import { message } from "../lib/antd-feedback";
 import type { Flow, Project, Run } from "../lib/mock-data";
-import { PlatformApiError, createPlatformRun, createPlatformRunBatch, getPlatformRevisions, savePlatformSecret } from "../api/platform-api";
+import { PlatformApiError, createPlatformRun, createPlatformRunBatch, getPlatformRevisions } from "../api/platform-api";
 import type { PlatformRevision } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
-import { useSecretStore } from "../stores/secret-store";
-import { PageHeading, canUseCapability, describePlatformRunError, emptyEnvironments, emptyFlows, emptySecretValues, emptyVariables, platformRunAsRun, requestRunSecrets, requiredSecretVariables, statusTag, uniqueNameValidator, variableReference } from "./shared";
+import { PageHeading, canUseCapability, describePlatformRunError, emptyEnvironments, emptyFlows, emptyVariables, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, statusTag, uniqueNameValidator } from "./shared";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -29,10 +28,6 @@ export function FlowsPage({ project }: { project: Project }) {
   );
   const setFlows = useWorkspaceStore((state) => state.setFlows);
   const upsertRun = useRunStore((state) => state.upsertRun);
-  const sessionSecretValues = useSecretStore(
-    (state) => state.valuesByProject[project.id] ?? emptySecretValues,
-  );
-  const setSecretValues = useSecretStore((state) => state.setValues);
   const items = storedFlows ?? emptyFlows;
   const variables = storedVariables ?? emptyVariables;
   const environments = storedEnvironments ?? emptyEnvironments;
@@ -86,6 +81,8 @@ export function FlowsPage({ project }: { project: Project }) {
     item.name.toLowerCase().includes(search.toLowerCase()) &&
     (tagFilter === "all" || item.tags.includes(tagFilter)),
   );
+  const [dispatchingFlowId, setDispatchingFlowId] = useState<string | null>(null);
+  const runDispatchKeysRef = useRef(new Map<string, string>());
   const runFlow = async (flow: Flow) => {
     const steps = flow.definition ?? [];
     if (steps.length === 0) {
@@ -96,32 +93,30 @@ export function FlowsPage({ project }: { project: Project }) {
       message.error("当前项目没有可用运行环境");
       return;
     }
-    const secretValues = await requestRunSecrets(
-      project.id,
-      variables,
-      steps,
-      sessionSecretValues,
-      setSecretValues,
-    );
-    if (!secretValues) return;
     const platformContext = platformProjectContext(project.id);
-    if (platformContext) {
-      try {
-        for (const variable of requiredSecretVariables(variables, steps)) {
-          const value = secretValues[variable.id];
-          if (value) await savePlatformSecret(platformContext.session.token, platformContext.projectId, { name: variableReference(variable), value });
-        }
-        const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: activeEnvironment.id });
-        result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
-        updateFlowStatus(flow.id, "running");
-        message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
-        navigate(`/project/${project.id}/runs`);
-      } catch (error) {
-        message.error(describePlatformRunError(error));
-      }
+    if (!platformContext) {
+      message.error("当前项目尚未连接 Platform，请先完成项目同步");
       return;
     }
-    message.error("当前项目尚未连接 Platform，请先完成项目同步");
+    setDispatchingFlowId(flow.id);
+    const intent = runIntentKey({ projectId: platformContext.projectId, flowId: flow.id });
+    try {
+      if (!(await ensurePlatformRunSecrets(platformContext.session.token, platformContext.projectId, variables, steps))) {
+        return;
+      }
+      const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
+      const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: activeEnvironment.id, dispatchKey });
+      releaseRunDispatchKey(runDispatchKeysRef.current, intent);
+      result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+      updateFlowStatus(flow.id, "running");
+      message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
+      navigate(`/project/${project.id}/runs`);
+    } catch (error) {
+      releaseRunDispatchKey(runDispatchKeysRef.current, intent, error);
+      message.error(describePlatformRunError(error));
+    } finally {
+      setDispatchingFlowId(null);
+    }
   };
   const isFlowRunnable = (flowId: string) =>
     publishedFlowIds === null || publishedFlowIds.has(flowId);
@@ -240,7 +235,7 @@ export function FlowsPage({ project }: { project: Project }) {
                 size="small"
                 icon={<PlayCircleFilled />}
                 aria-label={`运行流程 ${flow.name}`}
-                disabled={!isFlowRunnable(flow.id)}
+                disabled={!isFlowRunnable(flow.id) || dispatchingFlowId !== null}
                 onClick={() => void runFlow(flow)}
               />
             </Tooltip>

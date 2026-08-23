@@ -102,6 +102,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
 });
 
 vi.mock("../api/platform-context", () => ({
+  currentPlatformUserId: () => "u1",
   platformProjectContext: () => undefined,
   readStoredPlatformSession: () => ({
     token: "t1",

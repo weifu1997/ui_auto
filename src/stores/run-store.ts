@@ -1,6 +1,10 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { Run } from "../lib/mock-data";
+import { migrateUnscopedStorageKey, userScopedStateStorage } from "../lib/user-scoped-storage";
+
+export const runStorageKey = "autoflow-run-records";
+migrateUnscopedStorageKey(runStorageKey);
 
 export type ApiRun = Run;
 
@@ -51,7 +55,8 @@ export const useRunStore = create<RunStore>()(
         }),
     }),
     {
-      name: "autoflow-run-records",
+      name: runStorageKey,
+      storage: createJSONStorage(() => userScopedStateStorage()),
       partialize: (state) => ({ apiRuns: state.apiRuns }),
     },
   ),

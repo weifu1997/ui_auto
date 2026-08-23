@@ -1,6 +1,7 @@
 """Run execution, batch, and run-artifact download routes."""
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,9 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         body = await request.json()
         if not isinstance(body, dict):
             body = {}
+        dispatch_key = _text(body.get("dispatchKey")).strip()
+        if len(dispatch_key) > 128:
+            raise PlatformError(400, "RUN_DISPATCH_KEY_INVALID")
         queued = services.queue_published_runs(
             {
                 "projectId": project_id,
@@ -107,6 +111,8 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 "upToStepId": _text(body.get("upToStepId")).strip() or None,
                 "createdBy": user.id,
                 "source": "manual",
+                # 客户端幂等键：同一派发意图的重复提交（超时重试/双击）按 key 去重。
+                "dispatchKey": dispatch_key or None,
             }
         )
         runs = [
@@ -262,7 +268,22 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         run = services.run_by_id(run_id, project_id)
         if run["status"] not in ("failed", "canceled"):
             raise PlatformError(409, "RUN_NOT_RETRYABLE")
-        retried = services.retry_run_snapshot(project_id, run_id, user.id)
+        raw_body = await request.body()
+        if raw_body:
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                body = {}
+        else:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        dispatch_key = _text(body.get("dispatchKey")).strip()
+        if len(dispatch_key) > 128:
+            raise PlatformError(400, "RUN_DISPATCH_KEY_INVALID")
+        retried = services.retry_run_snapshot(
+            project_id, run_id, user.id, dispatch_key or None
+        )
         return _send(
             Response(),
             202,

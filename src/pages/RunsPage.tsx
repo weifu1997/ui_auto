@@ -7,11 +7,11 @@ import { readPlatformProjectMap, readStoredPlatformSession } from "../api/platfo
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
-import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, platformRunAsRun, reportRetryError, statusMeta, statusTag, usePolling } from "./shared";
+import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
 import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 const batchStatusMeta = {
   queued: { label: "排队中", color: "default" },
   running: { label: "运行中", color: "processing" },
@@ -42,6 +42,7 @@ export function RunsPage({ project }: { project: Project }) {
   const [platformPageRuns, setPlatformPageRuns] = useState<Run[]>([]);
   const [platformTotal, setPlatformTotal] = useState(0);
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
+  const runDispatchKeysRef = useRef(new Map<string, string>());
   const [refreshing, setRefreshing] = useState(false);
   const [batches, setBatches] = useState<PlatformRunBatch[]>([]);
   const [batchTotal, setBatchTotal] = useState(0);
@@ -195,6 +196,7 @@ export function RunsPage({ project }: { project: Project }) {
   };
   const retry = async (run: Run) => {
     setUpdatingRunId(run.id);
+    let intent: string | undefined;
     try {
       if (platformSession && remotePlatformProjectId) {
         const prior = await getPlatformRun(platformSession.token, remotePlatformProjectId, run.id);
@@ -202,12 +204,19 @@ export function RunsPage({ project }: { project: Project }) {
         let created;
         if (prior.run.status === "success") {
           if (typeof flowId !== "string" || !flowId) throw new Error("PLATFORM_FRESH_RUN_FLOW_REQUIRED");
+          intent = runIntentKey({ projectId: remotePlatformProjectId, flowId });
+          const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
           created = await createPlatformRun(platformSession.token, remotePlatformProjectId, {
             flowId,
             environmentId: prior.run.environmentId,
+            dispatchKey,
           });
+          releaseRunDispatchKey(runDispatchKeysRef.current, intent);
         } else {
-          created = await retryPlatformRun(platformSession.token, remotePlatformProjectId, prior.run.id);
+          intent = runIntentKey({ projectId: remotePlatformProjectId, runId: prior.run.id });
+          const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
+          created = await retryPlatformRun(platformSession.token, remotePlatformProjectId, prior.run.id, dispatchKey);
+          releaseRunDispatchKey(runDispatchKeysRef.current, intent);
         }
         if (prior.run.status === "success" && created.runIds.length === 0) throw new Error("PLATFORM_FRESH_RUN_NOT_CREATED");
         created.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsRun(platformRun)));
@@ -218,6 +227,7 @@ export function RunsPage({ project }: { project: Project }) {
         throw new Error("PLATFORM_SESSION_REQUIRED");
       }
     } catch (error) {
+      if (intent) releaseRunDispatchKey(runDispatchKeysRef.current, intent, error);
       if (!reportRetryError(error)) message.error("重新提交失败，请稍后重试");
     } finally {
       setUpdatingRunId(null);

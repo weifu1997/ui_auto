@@ -22,7 +22,12 @@ MINIMAL_LEGACY_SCHEMA = """
     flow_snapshot TEXT NOT NULL,
     environment_snapshot TEXT NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS platform_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS platform_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 """
 
 
@@ -52,6 +57,7 @@ def test_run_platform_migrations_records_exactly_once():
             (11, "run-batches"),
             (12, "local-accounts-membership-rbac"),
             (13, "deployment-security-audit"),
+            (14, "scope-run-dispatch-key-uniqueness"),
         ]
         columns = _columns(database, "flow_revisions")
         assert "flow_id" in columns
@@ -70,6 +76,14 @@ def test_run_platform_migrations_records_exactly_once():
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
+        index_names = {
+            row[0]
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        assert "platform_runs_dispatch_key" not in index_names
+        assert "platform_runs_dispatch_key_project" in index_names
     finally:
         database.close()
 

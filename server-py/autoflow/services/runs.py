@@ -303,7 +303,11 @@ class RunServices:
         }
 
     def retry_run_snapshot(
-        self, project_id: str, run_id: str, actor_id: str
+        self,
+        project_id: str,
+        run_id: str,
+        actor_id: str,
+        dispatch_key: str | None = None,
     ) -> dict[str, Any]:
         from ..http import PlatformError
 
@@ -323,6 +327,7 @@ class RunServices:
                 row=row,
                 created_by=actor_id,
                 source="manual",
+                dispatch_key=dispatch_key,
                 retry_of_run_id=run_id,
             )
             self.database.execute("COMMIT")
@@ -362,8 +367,8 @@ class RunServices:
         up_to_step_id = spec["upToStepId"]
         if dispatch_key:
             existing = self.database.execute(
-                "SELECT id FROM platform_runs WHERE dispatch_key = ?",
-                (dispatch_key,),
+                "SELECT id FROM platform_runs WHERE dispatch_key = ? AND project_id = ?",
+                (dispatch_key, project_id),
             ).fetchone()
             if existing:
                 return existing[0]

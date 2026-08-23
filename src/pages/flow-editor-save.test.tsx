@@ -54,6 +54,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
   return {
     ...actual,
   getPlatformRevisions: vi.fn(async () => ({ revisions: mockRevisionsList })),
+  getPlatformSecrets: vi.fn(async () => ({ secrets: [] })),
   createPlatformRevision: (token: string, pid: string, input: any) => mockCreatePlatformRevision(token, pid, input),
   createPlatformRun: (token: string, pid: string, input: any) => mockCreatePlatformRun(token, pid, input),
   createPlatformElementValidation: vi.fn(),
@@ -71,6 +72,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
 });
 
 vi.mock("../api/platform-context", () => ({
+  currentPlatformUserId: () => "u1",
   platformProjectContext: (projectId: string) => ({
     session: { token: "token-1", user: { id: "u1" }, workspaces: [] },
     projectId,
@@ -136,6 +138,31 @@ describe("FlowEditorPage Save & Run with no published revision", () => {
       expect(mockCreatePlatformRevision).toHaveBeenCalledTimes(1);
       expect(mockCreatePlatformRun).toHaveBeenCalledTimes(1);
     });
+    const input = mockCreatePlatformRun.mock.calls[0][2] as { dispatchKey?: string };
+    expect(input.dispatchKey).toMatch(/^web-[0-9a-f-]{36}$/);
+  });
+
+  it("运行派发带幂等键：网络超时后重试沿用同一 dispatchKey", async () => {
+    const user = userEvent.setup();
+    const { PlatformApiError } = await import("../api/platform-api");
+    mockRevisionsList = [];
+    render(<FlowEditorPage />);
+
+    const runBtn = await screen.findByRole("button", { name: /运行整个流程/ });
+    await waitFor(() => expect(runBtn).not.toBeDisabled());
+
+    mockCreatePlatformRun.mockRejectedValueOnce(new PlatformApiError(0, "NETWORK"));
+    await user.click(runBtn);
+    await waitFor(() => expect(mockCreatePlatformRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runBtn).not.toBeDisabled());
+
+    mockCreatePlatformRun.mockResolvedValueOnce({ runs: [{ id: "run-1", status: "queued" }], runIds: ["run-1"] });
+    await user.click(runBtn);
+    await waitFor(() => expect(mockCreatePlatformRun).toHaveBeenCalledTimes(2));
+
+    const firstKey = (mockCreatePlatformRun.mock.calls[0][2] as { dispatchKey: string }).dispatchKey;
+    const secondKey = (mockCreatePlatformRun.mock.calls[1][2] as { dispatchKey: string }).dispatchKey;
+    expect(secondKey).toBe(firstKey);
   });
 
   it("点击保存会直接发布快照版本，且 getPlatformRevisions 仅请求一次避免死循环", async () => {

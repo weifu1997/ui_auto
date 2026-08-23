@@ -4,7 +4,6 @@ import {
   createPlatformRun,
   getPlatformRevisions,
   rollbackPlatformRevision,
-  savePlatformSecret,
 } from "../api/platform-api";
 import type { PlatformRevision } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
@@ -12,21 +11,20 @@ import { useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import {
   PageHeading,
+  describePlatformRunError,
   emptyEnvironments,
   emptyFlows,
   emptyVariables,
+  ensurePlatformRunSecrets,
+  nextRunDispatchKey,
   platformRunAsRun,
-  requestRunSecrets,
-  requiredSecretVariables,
-  variableReference,
+  releaseRunDispatchKey,
+  runIntentKey,
 } from "./shared";
-import { useSecretStore } from "../stores/secret-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { HistoryOutlined, PlayCircleFilled, ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Popconfirm, Space, Table, Tag, Tooltip } from "antd";
-import { useCallback, useEffect, useState } from "react";
-
-const emptySecretValues: Record<string, string> = {};
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function AgentsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
@@ -37,13 +35,13 @@ export function AgentsPage({ project }: { project: Project }) {
   const syncStatus = useWorkspaceStore((state) => state.platformSyncStatusById?.[project.id]);
   const syncError = useWorkspaceStore((state) => state.platformSyncErrorById?.[project.id]);
   const upsertRun = useRunStore((state) => state.upsertRun);
-  const sessionSecretValues = useSecretStore((state) => state.valuesByProject[project.id] ?? emptySecretValues);
-  const setSecretValues = useSecretStore((state) => state.setValues);
   const platformContext = platformProjectContext(project.id);
   const session = platformContext?.session;
   const platformProjectId = platformContext?.projectId;
   const [revisions, setRevisions] = useState<PlatformRevision[]>([]);
   const [loading, setLoading] = useState(false);
+  const [runningRevisionId, setRunningRevisionId] = useState<string | null>(null);
+  const runDispatchKeysRef = useRef(new Map<string, string>());
   const activeEnvironment = environments.find((environment) => environment.id === activeEnvironmentId) ?? environments[0];
 
   const loadRevisions = useCallback(async () => {
@@ -81,26 +79,24 @@ export function AgentsPage({ project }: { project: Project }) {
       message.error("版本没有可用的运行环境");
       return;
     }
+    setRunningRevisionId(revision.id);
+    const intent = runIntentKey({ projectId: platformProjectId, revisionId: revision.id });
     try {
       const flow = flows.find((item) => item.id === revision.flowId) ?? flows.find((item) => item.name === revision.flowName);
-      const secretValues = await requestRunSecrets(
-        project.id,
-        variables,
-        flow?.definition ?? [],
-        sessionSecretValues,
-        setSecretValues,
-      );
-      if (!secretValues) return;
-      for (const variable of requiredSecretVariables(variables, flow?.definition ?? [])) {
-        const value = secretValues[variable.id];
-        if (value) await savePlatformSecret(session.token, platformProjectId, { name: variableReference(variable), value });
+      if (!(await ensurePlatformRunSecrets(session.token, platformProjectId, variables, flow?.definition ?? []))) {
+        return;
       }
-      const result = await createPlatformRun(session.token, platformProjectId, { revisionId: revision.id, environmentId });
+      const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
+      const result = await createPlatformRun(session.token, platformProjectId, { revisionId: revision.id, environmentId, dispatchKey });
+      releaseRunDispatchKey(runDispatchKeysRef.current, intent);
       result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
       message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
       if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
-    } catch {
-      message.error("创建运行失败，请确认版本与环境配置");
+    } catch (error) {
+      releaseRunDispatchKey(runDispatchKeysRef.current, intent, error);
+      message.error(describePlatformRunError(error));
+    } finally {
+      setRunningRevisionId(null);
     }
   };
 
@@ -136,7 +132,7 @@ export function AgentsPage({ project }: { project: Project }) {
             { title: "创建时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() },
             { title: "", key: "actions", width: 88, align: "right", render: (_: unknown, revision: PlatformRevision) => (
               <Space size={4}>
-                <Tooltip title="使用当前环境执行"><Button type="text" size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment} onClick={() => void runPublishedRevision(revision)} /></Tooltip>
+                <Tooltip title="使用当前环境执行"><Button type="text" size="small" icon={<PlayCircleFilled />} aria-label={`执行版本 v${revision.revisionNumber}`} disabled={revision.status !== "published" || !activeEnvironment || runningRevisionId !== null} onClick={() => void runPublishedRevision(revision)} /></Tooltip>
                 {revision.status === "published" && (
                   <Popconfirm title="回滚到此版本" description={`将回滚到 v${revision.revisionNumber} 并生成新版本`} okText="回滚" cancelText="取消" onConfirm={() => void rollbackToRevision(revision)}>
                     <Tooltip title="回滚到此版本"><Button type="text" size="small" icon={<HistoryOutlined />} aria-label={`回滚到版本 v${revision.revisionNumber}`} /></Tooltip>

@@ -62,7 +62,7 @@ test("publishes, updates, and applies an internal template", async ({ page }) =>
   await page.evaluate((value) => {
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value));
     localStorage.setItem("autoflow-platform-workspace", value.workspaces[0].id);
-    localStorage.setItem("autoflow-workspace-projects", JSON.stringify({
+    localStorage.setItem("autoflow-workspace-projects:u:template-owner", JSON.stringify({
       state: {
         projects: [{ id: "template-project", name: "Template project", description: "" }],
         platformProjectIdsById: { "template-project": "template-project" },

@@ -1,6 +1,10 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { ElementAsset, Environment, Flow, Project, Variable } from "../lib/mock-data";
+import { migrateUnscopedStorageKey, userScopedStateStorage } from "../lib/user-scoped-storage";
+
+export const workspaceStorageKey = "autoflow-workspace-projects";
+migrateUnscopedStorageKey(workspaceStorageKey);
 
 export type PlatformWorkspaceProject = {
   platformProjectId: string;
@@ -282,8 +286,9 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         }),
     }),
     {
-      name: "autoflow-workspace-projects",
+      name: workspaceStorageKey,
       version: 8,
+      storage: createJSONStorage(() => userScopedStateStorage()),
       migrate: (persistedState) => ensurePlatformWorkspace(persistedState) as WorkspaceStore,
       merge: (persistedState, currentState) =>
         ensurePlatformWorkspace({

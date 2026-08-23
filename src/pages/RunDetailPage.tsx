@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "../router";
 import {
@@ -27,7 +27,7 @@ import type { PlatformRun } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { message } from "../lib/antd-feedback";
 import type { Project, Run } from "../lib/mock-data";
-import { canUseCapability } from "./shared";
+import { canUseCapability, nextRunDispatchKey, releaseRunDispatchKey, runIntentKey } from "./shared";
 
 type ProjectLayoutProps = {
   project: Project;
@@ -161,6 +161,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   const [platformTask, setPlatformTask] = useState<PlatformRun | null>(null);
   const [platformError, setPlatformError] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const runDispatchKeysRef = useRef(new Map<string, string>());
   const [canceling, setCanceling] = useState(false);
 
   useEffect(() => {
@@ -251,24 +252,33 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
       return;
     }
     setRetrying(true);
+    let intent: string | undefined;
     try {
       const prior = platformTask ?? (await getPlatformRun(context.session.token, context.platformProjectId, runId)).run;
       const flowId = (prior.snapshot.flow as { id?: unknown } | undefined)?.id;
       let created;
       if (prior.status === "success") {
         if (typeof flowId !== "string" || !flowId) throw new Error("PLATFORM_FRESH_RUN_FLOW_REQUIRED");
+        intent = runIntentKey({ projectId: context.platformProjectId, flowId });
+        const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
         created = await createPlatformRun(context.session.token, context.platformProjectId, {
           flowId,
           environmentId: prior.environmentId,
+          dispatchKey,
         });
+        releaseRunDispatchKey(runDispatchKeysRef.current, intent);
       } else {
-        created = await retryPlatformRun(context.session.token, context.platformProjectId, prior.id);
+        intent = runIntentKey({ projectId: context.platformProjectId, runId: prior.id });
+        const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
+        created = await retryPlatformRun(context.session.token, context.platformProjectId, prior.id, dispatchKey);
+        releaseRunDispatchKey(runDispatchKeysRef.current, intent);
       }
       const nextRunId = created.runIds[0];
       if (!nextRunId) throw new Error("PLATFORM_RUN_NOT_CREATED");
       message.success(prior.status === "success" ? "已按最新已发布版本创建新运行" : "已按原快照重新提交");
       navigate(`/project/${project.id}/runs/${nextRunId}`);
     } catch (error) {
+      if (intent) releaseRunDispatchKey(runDispatchKeysRef.current, intent, error);
       if (!reportRetryError(error)) message.error("重新提交失败，请稍后重试");
     } finally {
       setRetrying(false);

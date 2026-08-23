@@ -61,12 +61,32 @@ const session = platformAdminSession({
   workspaces: [{ id: "platform-ui-workspace", name: "Platform UI workspace" }],
 });
 
+// 工作区持久化已按登录用户分区（userScopedStorageKey），fixture 必须读当前会话
+// 用户对应分区，否则取不到应用写入的种子数据。
+const workspaceScopedStorageKey = `autoflow-workspace-projects:u:${session.user.id}`;
+
 async function configurePlatformSession(
   page: Page,
   localProjectId: string,
   platformProjectId: string,
 ) {
   await page.evaluate(({ value, localId, remoteId }) => {
+    // e2e 在设置会话前通过 UI 创建项目/环境/流程，此时应用以 fallback 会话
+    // （playwright-user）把工作区持久化到 `:u:playwright-user`。设置会话后应用
+    // 改读 `:u:<新userId>` 分区，这里把当前会话分区的工作区数据归入新分区，
+    // 保证 fixture 构建 mock 与 reload 后都能读到。
+    const sessionScopeKey = `autoflow-workspace-projects:u:${value.user.id}`;
+    if (localStorage.getItem(sessionScopeKey) === null) {
+      let sourceScopeKey = "autoflow-workspace-projects:u:_anonymous";
+      try {
+        const stored = JSON.parse(localStorage.getItem("autoflow-platform-session") ?? "null");
+        if (stored?.user?.id) sourceScopeKey = `autoflow-workspace-projects:u:${stored.user.id}`;
+      } catch {
+        // 保持匿名分区回退。
+      }
+      const source = localStorage.getItem(sourceScopeKey);
+      if (source !== null) localStorage.setItem(sessionScopeKey, source);
+    }
     localStorage.setItem("autoflow-platform-session", JSON.stringify(value));
     localStorage.setItem("autoflow-platform-workspace", value.workspaces[0].id);
     localStorage.setItem("autoflow-platform-project-map", JSON.stringify({ [value.workspaces[0].id]: { [localId]: remoteId } }));
@@ -85,8 +105,8 @@ export async function configurePlatformRunUiMocks(
 
   await configurePlatformSession(page, localProjectId, platformProjectId);
 
-  const revisions = await page.evaluate((localId) => {
-    const persisted = JSON.parse(localStorage.getItem("autoflow-workspace-projects") ?? "{}") as { state?: Record<string, unknown> };
+  const revisions = await page.evaluate(({ localId, storageKey }) => {
+    const persisted = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as { state?: Record<string, unknown> };
     const state = persisted.state ?? {};
     const flows = Array.isArray((state.flowsByProject as Record<string, unknown[] | undefined> | undefined)?.[localId])
       ? (state.flowsByProject as Record<string, Array<Record<string, unknown>>>)[localId]
@@ -132,10 +152,10 @@ export async function configurePlatformRunUiMocks(
         elements,
       };
     });
-  }, localProjectId) as FixtureRevision[];
+  }, { localId: localProjectId, storageKey: workspaceScopedStorageKey }) as FixtureRevision[];
   const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
-  const workspaceSeed = await page.evaluate((localId) => {
-    const persisted = JSON.parse(localStorage.getItem("autoflow-workspace-projects") ?? "{}") as { state?: Record<string, unknown> };
+  const workspaceSeed = await page.evaluate(({ localId, storageKey }) => {
+    const persisted = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as { state?: Record<string, unknown> };
     const state = persisted.state ?? {};
     const collections = <T>(key: string) => {
       const value = (state[key] as Record<string, T[] | undefined> | undefined)?.[localId];
@@ -149,7 +169,7 @@ export async function configurePlatformRunUiMocks(
       environments: collections<Record<string, unknown>>("environmentsByProject"),
       activeEnvironmentId: (state.activeEnvironmentByProject as Record<string, string | undefined> | undefined)?.[localId] ?? "",
     };
-  }, localProjectId);
+  }, { localId: localProjectId, storageKey: workspaceScopedStorageKey });
   const platformResourceResponse = (items: Array<Record<string, unknown>>) => ({
     resources: items.map((data) => ({
       id: String(data.id),
@@ -466,8 +486,8 @@ export async function configureRetryReproductionUiMocks(page: Page, localProject
   };
   await configurePlatformSession(page, localProjectId, platformProjectId);
 
-  const source = await page.evaluate((localId) => {
-    const persisted = JSON.parse(localStorage.getItem("autoflow-workspace-projects") ?? "{}") as { state?: Record<string, unknown> };
+  const source = await page.evaluate(({ localId, storageKey }) => {
+    const persisted = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as { state?: Record<string, unknown> };
     const state = persisted.state ?? {};
     const flows = Array.isArray((state.flowsByProject as Record<string, unknown[] | undefined> | undefined)?.[localId])
       ? (state.flowsByProject as Record<string, Array<Record<string, unknown>>>)[localId]
@@ -483,7 +503,7 @@ export async function configureRetryReproductionUiMocks(page: Page, localProject
         ? (state.elementsByProject as Record<string, unknown[]>)[localId]
         : [],
     };
-  }, localProjectId) as { flow?: Record<string, unknown>; environment?: Record<string, unknown>; elements: unknown[] };
+  }, { localId: localProjectId, storageKey: workspaceScopedStorageKey }) as { flow?: Record<string, unknown>; environment?: Record<string, unknown>; elements: unknown[] };
   if (!source.flow || !source.environment || typeof source.flow.id !== "string" || typeof source.environment.id !== "string") {
     throw new Error("retry reproduction fixture requires one flow and one environment");
   }

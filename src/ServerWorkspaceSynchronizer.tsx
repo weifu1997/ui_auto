@@ -23,11 +23,14 @@ import {
   allSyncDraftPending,
   applyProjectDraft,
   buildProjectDraft,
+  clearConflictSnapshot,
+  readConflictSnapshotRaw,
   readProjectDraft,
   readSyncOutbox,
   removeProjectDraft,
   updateProjectDraft,
   upsertProjectDraft,
+  writeConflictSnapshot,
 } from "./lib/sync-outbox";
 import type { SyncDraftPending } from "./lib/sync-outbox";
 import { message } from "./lib/antd-feedback";
@@ -178,7 +181,7 @@ export function ServerWorkspaceSynchronizer() {
       if (remoteUpdatedBy) draft.remoteUpdatedBy = remoteUpdatedBy;
       if (remoteUpdatedAt) draft.remoteUpdatedAt = remoteUpdatedAt;
     }
-    sessionStorage.setItem(`autoflow-conflict-${projectId}`, JSON.stringify(draft));
+    writeConflictSnapshot(projectId, draft);
     const code = error instanceof PlatformApiError ? error.code : "RESOURCE_VERSION_CONFLICT";
     useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "conflict");
     useWorkspaceStore.getState().setPlatformSyncError(projectId, code);
@@ -404,7 +407,7 @@ export function ServerWorkspaceSynchronizer() {
     for (const draft of readSyncOutbox()) {
       if (draft.workspaceId !== workspaceId) continue;
       if (draft.conflict) {
-        sessionStorage.setItem(`autoflow-conflict-${draft.projectId}`, JSON.stringify(conflictDraft(draft.projectId)));
+        writeConflictSnapshot(draft.projectId, conflictDraft(draft.projectId));
         useWorkspaceStore.getState().setPlatformSyncStatus(draft.projectId, "conflict");
         useWorkspaceStore.getState().setPlatformSyncError(draft.projectId, "RESOURCE_VERSION_CONFLICT");
         continue;
@@ -423,7 +426,7 @@ export function ServerWorkspaceSynchronizer() {
       if (draft.workspaceId !== workspaceId) continue;
       applyProjectDraft(draft);
       if (draft.conflict) {
-        sessionStorage.setItem(`autoflow-conflict-${draft.projectId}`, JSON.stringify(conflictDraft(draft.projectId)));
+        writeConflictSnapshot(draft.projectId, conflictDraft(draft.projectId));
         useWorkspaceStore.getState().setPlatformSyncStatus(draft.projectId, "conflict");
         useWorkspaceStore.getState().setPlatformSyncError(draft.projectId, "RESOURCE_VERSION_CONFLICT");
       }
@@ -509,7 +512,7 @@ export function ServerWorkspaceSynchronizer() {
         upsertProjectDraft(buildProjectDraft(workspaceId, projectId, allSyncDraftPending));
         store.setPlatformSyncStatus(projectId, "queued");
         store.setPlatformSyncError(projectId);
-        sessionStorage.removeItem(`autoflow-conflict-${projectId}`);
+        clearConflictSnapshot(projectId);
         retryDrafts.current.delete(projectId);
         resolvingConflicts.current.delete(projectId);
         syncApi.schedule(`project:${projectId}`, () => syncApi.syncProject(projectId));
@@ -517,7 +520,7 @@ export function ServerWorkspaceSynchronizer() {
       for (const projectId of resolvingConflicts.current) {
         useWorkspaceStore.getState().setPlatformSyncError(projectId);
         useWorkspaceStore.getState().setPlatformSyncStatus(projectId, "synced");
-        sessionStorage.removeItem(`autoflow-conflict-${projectId}`);
+        clearConflictSnapshot(projectId);
         resolvingConflicts.current.delete(projectId);
       }
       syncApi.schedulePendingDrafts();
@@ -560,14 +563,14 @@ export function ServerWorkspaceSynchronizer() {
       if (!detail?.projectId || !detail.action) return;
       if (detail.action === "resubmit") {
         try {
-          const draft = JSON.parse(sessionStorage.getItem(`autoflow-conflict-${detail.projectId}`) ?? "") as ConflictDraft;
+          const draft = JSON.parse(readConflictSnapshotRaw(detail.projectId) ?? "") as ConflictDraft;
           if (draft?.project) retryDrafts.current.set(detail.projectId, draft);
           updateProjectDraft(workspaceId, detail.projectId, { conflict: false });
-          sessionStorage.removeItem(`autoflow-conflict-${detail.projectId}`);
+          clearConflictSnapshot(detail.projectId);
         } catch { return; }
       } else {
         removeProjectDraft(workspaceId, detail.projectId);
-        sessionStorage.removeItem(`autoflow-conflict-${detail.projectId}`);
+        clearConflictSnapshot(detail.projectId);
         forceServerWins.current.add(detail.projectId);
       }
       resolvingConflicts.current.add(detail.projectId);
