@@ -94,13 +94,59 @@ function platformTaskAsRun(task: PlatformRun, fallback?: Run): Run {
   };
 }
 
+// 断言结果契约（result.assertions 与 step.asserted 事件共用同一判定载荷）。
+type AssertionRecord = {
+  stepIndex: number;
+  stepId: string;
+  title: string;
+  type: "visibility" | "text" | "count" | "attribute";
+  passed: boolean;
+  expected: string;
+  actual: string;
+};
+
+const ASSERTION_TYPE_LABELS: Record<string, string> = {
+  visibility: "可见性",
+  text: "文本",
+  count: "数量",
+  attribute: "属性",
+};
+
+function assertionTypeLabel(type: string) {
+  return ASSERTION_TYPE_LABELS[type] ?? type;
+}
+
+function runAssertions(run: Pick<PlatformRun, "result">): AssertionRecord[] {
+  const raw = run.result?.assertions;
+  if (!Array.isArray(raw)) return [];
+  const records: AssertionRecord[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const value = item as Record<string, unknown>;
+    if (typeof value.passed !== "boolean") continue;
+    records.push({
+      stepIndex: Number(value.stepIndex) || 0,
+      stepId: typeof value.stepId === "string" ? value.stepId : "",
+      title: typeof value.title === "string" ? value.title : "断言",
+      type: (value.type as AssertionRecord["type"]) ?? "text",
+      passed: value.passed,
+      expected: typeof value.expected === "string" ? value.expected : String(value.expected ?? ""),
+      actual: typeof value.actual === "string" ? value.actual : String(value.actual ?? ""),
+    });
+  }
+  return records;
+}
+
 function platformEventAsLog(event: PlatformRun["events"][number]): ReportLog {
-  const failed = event.kind.includes("failed") || event.kind.includes("error");
+  const isAsserted = event.kind === "step.asserted";
+  const failed = isAsserted
+    ? event.data.passed !== true
+    : event.kind.includes("failed") || event.kind.includes("error");
   const isStepCompleted = event.kind === "step.completed" || event.kind === "step.succeeded";
   const completed = isStepCompleted || event.kind === "run.complete";
   const index = Number(event.data.index);
   const title = typeof event.data.title === "string" ? event.data.title : "Step";
-  const message = typeof event.data.message === "string"
+  let message = typeof event.data.message === "string"
     ? event.data.message
     : event.kind === "step.started"
       ? "Step started"
@@ -109,10 +155,21 @@ function platformEventAsLog(event: PlatformRun["events"][number]): ReportLog {
         : event.kind === "run.complete"
           ? `Run ${event.data.status === "success" ? "passed" : "finished"}`
           : event.kind;
+  if (isAsserted) {
+    const expected = typeof event.data.expected === "string"
+      ? event.data.expected
+      : String(event.data.expected ?? "");
+    const actual = typeof event.data.actual === "string"
+      ? event.data.actual
+      : String(event.data.actual ?? "");
+    message = event.data.passed === true
+      ? `断言通过：期望 ${expected}，实际 ${actual}`
+      : `断言失败：期望 ${expected}，实际 ${actual}`;
+  }
   return {
     id: String(event.id),
     time: eventTime(event.at),
-    level: failed ? "error" : completed ? "success" : "info",
+    level: failed ? "error" : isAsserted || completed ? "success" : "info",
     step: Number.isFinite(index) ? `${index + 1}. ${title}` : "平台",
     message,
     duration: durationFromMilliseconds(event.data.durationMs),
@@ -223,6 +280,9 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   };
   const reportLogs: ReportLog[] = (platformTask?.events ?? []).map(platformEventAsLog);
   const logs = activeLog === "all" ? reportLogs : reportLogs.filter((log) => log.level === activeLog);
+  // 断言结果区块：读 run.result.assertions（无断言步骤的 run 不展示）。
+  const assertions = platformTask ? runAssertions(platformTask) : [];
+  const passedAssertions = assertions.filter((item) => item.passed).length;
   const artifacts = platformTask?.artifacts ?? [];
   const error = typeof platformTask?.result?.error === "string" ? platformTask.result.error : undefined;
   const securityDisabledMessage = (platformTask?.events ?? []).find((event) => event.kind === "run.security")
@@ -373,6 +433,37 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
             <div><Statistic title="重试次数" value={run.retries} /></div>
             {platformTask && <div><Statistic title="执行节点" value="部署机本机" /></div>}
           </div>
+          {assertions.length > 0 && (
+            <div className="assertion-block">
+              <div className="assertion-heading">
+                <h2>断言结果</h2>
+                <span>{passedAssertions}/{assertions.length} 通过</span>
+              </div>
+              <div className="assertion-list">
+                {assertions.map((assertion) => (
+                  <div
+                    className={`assertion-row ${assertion.passed ? "passed" : "failed"}`}
+                    key={`${assertion.stepId}-${assertion.stepIndex}`}
+                  >
+                    <span className="assertion-icon">
+                      {assertion.passed ? <CheckCircleFilled /> : <StopOutlined />}
+                    </span>
+                    <div className="assertion-title">
+                      <strong>{assertion.title}</strong>
+                      <small>{assertionTypeLabel(assertion.type)}断言</small>
+                    </div>
+                    <div className="assertion-compare">
+                      <span>期望 <code>{assertion.expected}</code></span>
+                      <span>实际 <code>{assertion.actual}</code></span>
+                    </div>
+                    <span className={`assertion-verdict ${assertion.passed ? "passed" : "failed"}`}>
+                      {assertion.passed ? "通过" : "失败"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="log-heading">
             <div>
               <h2>执行日志</h2>

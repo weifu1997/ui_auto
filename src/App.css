@@ -1633,6 +1633,85 @@
   font-size: var(--text-caption);
   color: var(--muted);
 }
+.assertion-block {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.assertion-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.assertion-heading h2 {
+  font-size: var(--text-title3);
+  margin: 0;
+}
+.assertion-heading span {
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.assertion-list {
+  display: grid;
+  gap: 8px;
+}
+.assertion-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.assertion-row.passed {
+  border-color: var(--success);
+}
+.assertion-row.failed {
+  border-color: var(--error);
+}
+.assertion-icon {
+  font-size: var(--text-body);
+}
+.assertion-row.passed .assertion-icon {
+  color: var(--success-strong);
+}
+.assertion-row.failed .assertion-icon {
+  color: var(--error);
+}
+.assertion-title strong,
+.assertion-title small {
+  display: block;
+}
+.assertion-title small {
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.assertion-compare {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.assertion-compare code {
+  color: var(--ink);
+  background: var(--subtle);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
+.assertion-verdict {
+  font-size: var(--text-caption);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.assertion-verdict.passed {
+  color: var(--success-strong);
+}
+.assertion-verdict.failed {
+  color: var(--error);
+}
 .detail-aside {
   display: grid;
   gap: var(--space-4);
