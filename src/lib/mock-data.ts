@@ -86,6 +86,15 @@ export type FlowStep = {
   responseUrl?: string;
   outputPath?: string;
   outputPublic?: boolean;
+  // 断言字段：每个字段只属于一种断言类型，枚举互斥，不得跨类型取值。
+  /** 仅文本/属性断言：匹配方式（缺省 contains，兼容既有行为）。 */
+  assertMatch?: "exact" | "contains";
+  /** 仅可见性断言：可见/不可见（缺省 visible）。不复用 assertMatch。 */
+  assertVisibility?: "visible" | "hidden";
+  /** 仅数量断言：匹配元素个数与期望数的关系（缺省 =）。 */
+  assertOperator?: "=" | ">" | "<" | ">=" | "<=";
+  /** 仅属性断言：属性名（如 value / disabled / href / checked / text）。 */
+  assertAttribute?: string;
 };
 
 export const actionOptions = [
@@ -99,5 +108,7 @@ export const actionOptions = [
   "等待",
   "可见性断言",
   "文本断言",
+  "数量断言",
+  "属性断言",
   "截图",
 ];

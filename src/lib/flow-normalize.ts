@@ -11,6 +11,10 @@ function normalizeStep(raw: unknown): FlowStep {
   }
   const step = raw as Record<string, unknown>;
   const action = typeof step.action === "string" ? step.action : "";
+  const assertMatch = step.assertMatch;
+  const assertVisibility = step.assertVisibility;
+  const assertOperator = step.assertOperator;
+  const assertAttribute = step.assertAttribute;
   return {
     ...step,
     id: typeof step.id === "string" ? step.id : "",
@@ -25,6 +29,21 @@ function normalizeStep(raw: unknown): FlowStep {
       typeof step.failurePolicy === "string" ? step.failurePolicy : "立即失败",
     status:
       step.status === "success" || step.status === "failed" ? step.status : "pending",
+    // 断言字段：仅接受各自枚举/类型内的合法值，非法数据回落 undefined（缺省语义由后端执行时兜底）。
+    assertMatch: assertMatch === "exact" || assertMatch === "contains" ? assertMatch : undefined,
+    assertVisibility:
+      assertVisibility === "visible" || assertVisibility === "hidden"
+        ? assertVisibility
+        : undefined,
+    assertOperator:
+      assertOperator === "=" || assertOperator === ">" || assertOperator === "<" ||
+      assertOperator === ">=" || assertOperator === "<="
+        ? assertOperator
+        : undefined,
+    assertAttribute:
+      typeof assertAttribute === "string" && assertAttribute !== ""
+        ? assertAttribute
+        : undefined,
   };
 }
 
