@@ -122,6 +122,168 @@ def _required(locator: Any) -> Any:
     return locator
 
 
+_ASSERT_OPERATORS = ("=", ">", "<", ">=", "<=")
+_ASSERT_MATCHES = ("exact", "contains")
+_ASSERT_VISIBILITIES = ("visible", "hidden")
+
+# 断言动作 -> 判定 type（事件/结果载荷里的统一标识）。
+_ASSERTION_TYPES = {
+    "可见性断言": "visibility",
+    "文本断言": "text",
+    "数量断言": "count",
+    "属性断言": "attribute",
+}
+
+
+def _assert_visibility(
+    locator: Any,
+    page: Any,
+    step: dict[str, Any],
+    timeout_ms: int,
+    value: str,
+) -> tuple[bool, str, str]:
+    """可见性断言：元素可见（默认）/不可见。
+
+    hidden 区分「不存在」与「存在但隐藏」：两者都算通过，但 actual 分别
+    报告为 not-found / hidden，便于审计定位。跨类型误值回落默认 visible。
+    """
+    expected = step.get("assertVisibility")
+    if expected not in _ASSERT_VISIBILITIES:
+        expected = "visible"
+    try:
+        if expected == "visible":
+            locator.wait_for(state="visible", timeout=timeout_ms)
+            return True, "visible", "visible"
+        locator.wait_for(state="hidden", timeout=timeout_ms)
+        actual = "hidden" if locator.count() > 0 else "not-found"
+        return True, "hidden", actual
+    except Exception:
+        if expected == "visible":
+            actual = "hidden" if locator.count() > 0 else "not-found"
+        else:
+            actual = "visible"
+        return False, expected, actual
+
+
+def _assert_text(
+    locator: Any,
+    page: Any,
+    step: dict[str, Any],
+    timeout_ms: int,
+    value: str,
+) -> tuple[bool, str, str]:
+    """文本断言：元素文本按匹配方式命中期望值（exact/contains，缺省 contains）。"""
+    match = step.get("assertMatch")
+    if match not in _ASSERT_MATCHES:
+        match = "contains"
+    expected = value
+    if locator is None:
+        raise RuntimeError("STEP_ELEMENT_REQUIRED")
+    try:
+        actual = locator.text_content(timeout=timeout_ms) or ""
+    except Exception:
+        return False, expected, "not-found"
+    passed = actual == expected if match == "exact" else expected in actual
+    return passed, expected, actual
+
+
+def _assert_count(
+    locator: Any,
+    page: Any,
+    step: dict[str, Any],
+    timeout_ms: int,
+    value: str,
+) -> tuple[bool, str, str]:
+    """数量断言：匹配元素个数与期望数的关系（= > < >= <=，缺省 =）。
+
+    期望数存于 value（字符串），执行前 int() 强转；转换失败即该断言失败，
+    不得让字符串与数字直接比较。
+    """
+    operator = step.get("assertOperator")
+    if operator not in _ASSERT_OPERATORS:
+        operator = "="
+    expected = value
+    try:
+        expected_number = int(value)
+    except (TypeError, ValueError):
+        return False, expected, "invalid"
+    if locator is None:
+        raise RuntimeError("STEP_ELEMENT_REQUIRED")
+    actual_count = locator.count()
+    if operator == "=":
+        passed = actual_count == expected_number
+    elif operator == ">":
+        passed = actual_count > expected_number
+    elif operator == "<":
+        passed = actual_count < expected_number
+    elif operator == ">=":
+        passed = actual_count >= expected_number
+    else:
+        passed = actual_count <= expected_number
+    return passed, expected, str(actual_count)
+
+
+def _assert_attribute(
+    locator: Any,
+    page: Any,
+    step: dict[str, Any],
+    timeout_ms: int,
+    value: str,
+) -> tuple[bool, str, str]:
+    """属性断言：元素某属性值按匹配方式命中期望值（缺省属性名 value）。"""
+    match = step.get("assertMatch")
+    if match not in _ASSERT_MATCHES:
+        match = "contains"
+    attribute = step.get("assertAttribute")
+    if not isinstance(attribute, str) or attribute == "":
+        attribute = "value"
+    expected = value
+    if locator is None:
+        raise RuntimeError("STEP_ELEMENT_REQUIRED")
+    try:
+        actual = locator.get_attribute(attribute, timeout=timeout_ms) or ""
+    except Exception:
+        return False, expected, "not-found"
+    passed = actual == expected if match == "exact" else expected in actual
+    return passed, expected, actual
+
+
+def _run_assertion(
+    locator: Any,
+    page: Any,
+    step: dict[str, Any],
+    timeout_ms: int,
+    value: str,
+) -> dict[str, Any]:
+    """按动作分发到四种断言判定，返回结构化判定 {type, passed, expected, actual}。"""
+    action = step.get("action")
+    if action == "可见性断言":
+        passed, expected, actual = _assert_visibility(locator, page, step, timeout_ms, value)
+    elif action == "文本断言":
+        passed, expected, actual = _assert_text(locator, page, step, timeout_ms, value)
+    elif action == "数量断言":
+        passed, expected, actual = _assert_count(locator, page, step, timeout_ms, value)
+    else:  # 属性断言
+        passed, expected, actual = _assert_attribute(locator, page, step, timeout_ms, value)
+    return {
+        "type": _ASSERTION_TYPES.get(action, "text"),
+        "passed": passed,
+        "expected": expected,
+        "actual": actual,
+    }
+
+
+class _AssertionFailure(RuntimeError):
+    """断言未通过：携带结构化判定记录，由执行循环写 result.assertions 并走既有 failurePolicy。"""
+
+    def __init__(self, record: dict[str, Any]):
+        super().__init__(
+            f"ASSERTION_FAILED: {record['type']} "
+            f"expected={record['expected']} actual={record['actual']}"
+        )
+        self.record = record
+
+
 def _capture_output(
     page: Any,
     step: dict[str, Any],
@@ -152,7 +314,15 @@ def _execute_step(
     input: dict[str, Any],
     outputs: dict[str, str],
     hooks: dict[str, Any],
-) -> None:
+    index: int = -1,
+) -> dict[str, Any] | None:
+    """执行一个步骤。
+
+    断言步骤返回结构化判定记录（含 stepIndex/stepId/title/type/passed/expected/
+    actual/durationMs）；非断言步骤返回 None。断言判定由本函数先发 step.asserted，
+    失败时抛 _AssertionFailure（携带记录），由 execute_browser_run 的既有
+    failurePolicy 逻辑决定中止/继续/重试，并保证 step.asserted 恒在结论事件之前。
+    """
     value = interpolate(str(step.get("value", "")), input, outputs)
     element = None
     if step.get("element"):
@@ -184,6 +354,7 @@ def _execute_step(
                 "step.autoOpened",
                 {"title": step.get("title"), "message": f"自动打开页面：{page.url}"},
             )
+    assertion_record: dict[str, Any] | None = None
     try:
         action = step.get("action")
         if action == "打开页面":
@@ -213,16 +384,40 @@ def _execute_step(
             except ValueError:
                 wait_ms = timeout
             page.wait_for_timeout(wait_ms)
-        elif action == "可见性断言":
-            _required(locator).wait_for(state="visible", timeout=timeout)
-        elif action == "文本断言":
-            actual = _required(locator).text_content(timeout=timeout) or ""
-            if value not in actual:
-                raise RuntimeError(
-                    f"TEXT_ASSERTION_FAILED: expected {value}, received {actual}"
-                )
+        elif action in _ASSERTION_TYPES:
+            assertion_started = time.time()
+            assertion = _run_assertion(locator, page, step, timeout, value)
+            duration_ms = int((time.time() - assertion_started) * 1000)
+            assertion_record = {
+                "stepIndex": index,
+                "stepId": step.get("id"),
+                "title": step.get("title"),
+                "type": assertion["type"],
+                "passed": assertion["passed"],
+                "expected": assertion["expected"],
+                "actual": assertion["actual"],
+                "durationMs": duration_ms,
+            }
+            # 顺序契约：断言判定恒在对应 step.completed / step.failed 之前发出。
+            hooks["event"](
+                "step.asserted",
+                {
+                    "index": index,
+                    "stepId": step.get("id"),
+                    "title": step.get("title"),
+                    "type": assertion["type"],
+                    "passed": assertion["passed"],
+                    "expected": assertion["expected"],
+                    "actual": assertion["actual"],
+                    "durationMs": duration_ms,
+                },
+            )
+            if not assertion["passed"]:
+                raise _AssertionFailure(assertion_record)
         elif action != "截图":
             raise RuntimeError(f"UNSUPPORTED_ACTION: {action}")
+    except _AssertionFailure:
+        raise
     except Exception as error:
         if (
             action != "打开页面"
@@ -238,6 +433,7 @@ def _execute_step(
     output = _capture_output(page, step, locator)
     if step.get("output") and output is not None:
         outputs[step["output"]] = output
+    return assertion_record
 
 
 def _artifact_name(name: str) -> str:
@@ -271,6 +467,7 @@ def execute_browser_run(
     completed_steps = 0
     tracing_started = False
     started = time.time()
+    assertions: list[dict[str, Any]] = []
     browser = None
     context = None
     try:
@@ -300,6 +497,7 @@ def execute_browser_run(
                 )
                 attempts = 2 if step.get("failurePolicy") == "重试 1 次" else 1
                 failure: Exception | None = None
+                assertion_record: dict[str, Any] | None = None
                 for attempt in range(1, attempts + 1):
                     try:
                         if step.get("action") == "截图":
@@ -317,9 +515,21 @@ def execute_browser_run(
                                     }
                                 )
                         else:
-                            _execute_step(page, step, input, outputs, hooks)
+                            step_result = _execute_step(
+                                page, step, input, outputs, hooks, index
+                            )
+                            if isinstance(step_result, dict):
+                                assertion_record = step_result
                         failure = None
                         break
+                    except _AssertionFailure as error:
+                        assertion_record = error.record
+                        failure = error
+                        if attempt < attempts:
+                            hooks["event"](
+                                "step.retrying",
+                                {"index": index, "stepId": step.get("id"), "attempt": attempt},
+                            )
                     except Exception as error:
                         failure = error
                         if attempt < attempts:
@@ -352,6 +562,8 @@ def execute_browser_run(
                             "durationMs": int((time.time() - step_started) * 1000),
                         },
                     )
+                    if assertion_record is not None:
+                        assertions.append(assertion_record)
                     if step.get("failurePolicy") != "继续执行":
                         raise failure
                 else:
@@ -367,6 +579,8 @@ def execute_browser_run(
                     hooks["event"]("step.completed", event_data)
                     # 兼容：同时写旧事件名「step.succeeded」，以便历史代码路径和外部工具在过渡期读取。
                     hooks["event"]("step.succeeded", event_data)
+                    if assertion_record is not None:
+                        assertions.append(assertion_record)
             if context and not sensitive:
                 path = hooks["artifact_path"]("trace", "zip")
                 context.tracing.stop(path=path)
@@ -384,6 +598,7 @@ def execute_browser_run(
                 "totalSteps": len(steps),
                 "elapsedMs": int((time.time() - started) * 1000),
                 "flowOutputs": outputs,
+                "assertions": assertions,
             }
     except Exception as error:
         canceled = bool(
@@ -396,6 +611,7 @@ def execute_browser_run(
             "elapsedMs": int((time.time() - started) * 1000),
             "error": "RUN_CANCELED" if canceled else str(error),
             "flowOutputs": outputs,
+            "assertions": assertions,
         }
     finally:
         hooks["browser"](None, None)
