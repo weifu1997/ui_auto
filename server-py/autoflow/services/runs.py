@@ -6,7 +6,14 @@ import uuid
 import re
 import shutil
 from typing import Any
-from ..core import json, now, parse_json, public_flow_output_names, safe_artifact_name
+from ..core import (
+    days_ago_iso,
+    json,
+    now,
+    parse_json,
+    public_flow_output_names,
+    safe_artifact_name,
+)
 from ..resources import as_record
 from ._shared import (
     _TERMINAL_RUN_STATUSES,
@@ -1037,6 +1044,92 @@ class RunServices:
         buffer = io.BytesIO()
         workbook.save(buffer)
         return buffer.getvalue()
+
+    def assertion_stats_for_runs(self, runs: list[dict[str, Any]]) -> dict[str, int]:
+        """跨 run 应用层聚合断言计数（口径写死：分子=含断言 run 中 passed 总数，
+        分母=含断言 run 的断言总数；无断言 run 不进分子分母）。"""
+        runs_with_assertions = 0
+        total = 0
+        passed = 0
+        for run in runs:
+            result = as_record(run.get("result"))
+            assertions = result.get("assertions") if isinstance(result, dict) else None
+            if not isinstance(assertions, list):
+                continue
+            total_this = 0
+            passed_this = 0
+            for item in assertions:
+                if isinstance(item, dict) and isinstance(item.get("passed"), bool):
+                    total_this += 1
+                    if item["passed"]:
+                        passed_this += 1
+            if total_this > 0:
+                runs_with_assertions += 1
+                total += total_this
+                passed += passed_this
+        return {
+            "runsWithAssertions": runs_with_assertions,
+            "totalAssertions": total,
+            "passedAssertions": passed,
+            "failedAssertions": total - passed,
+        }
+
+    def assertion_failures_for_runs(
+        self, runs: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """跨 run 收集失败断言明细（batch detail 的「失败明细列表」数据源）。
+
+        actual 经 redact_run_value 脱敏，与断言载荷脱敏约束一致。
+        """
+        failures: list[dict[str, Any]] = []
+        for run in runs:
+            result = as_record(run.get("result"))
+            assertions = result.get("assertions") if isinstance(result, dict) else None
+            if not isinstance(assertions, list):
+                continue
+            snapshot = as_record(run.get("snapshot"))
+            flow = as_record(snapshot.get("flow"))
+            flow_name = str(flow.get("name") or "Published flow")
+            for item in assertions:
+                if not isinstance(item, dict) or item.get("passed") is not False:
+                    continue
+                actual = self.redact_run_value(run, item.get("actual"))
+                failures.append(
+                    {
+                        "runId": str(run.get("id") or ""),
+                        "flowName": flow_name,
+                        "title": str(item.get("title") or "断言"),
+                        "type": str(item.get("type") or ""),
+                        "expected": str(item.get("expected") or ""),
+                        "actual": str(actual) if actual is not None else "",
+                    }
+                )
+        return failures
+
+    def assertion_stats(
+        self, project_id: str, window_days: int | None = None
+    ) -> dict[str, Any]:
+        """项目级断言聚合（全量扫描含断言 run，非分页口径）。
+
+        SQLite 对 JSON 列聚合不友好，应用层扫描 `platform_runs.result` 累加。
+        window_days 为 None 或 <=0 时不做时间过滤（全量）。返回含 windowDays。
+        """
+        params: list[Any] = [project_id]
+        window_sql = ""
+        if window_days is not None and window_days > 0:
+            window_sql = "AND created_at >= ?"
+            params.append(days_ago_iso(window_days))
+        rows = self.database.execute(
+            f"""
+            SELECT result FROM platform_runs
+            WHERE project_id = ? {window_sql}
+            """,
+            tuple(params),
+        ).fetchall()
+        runs = [{"result": parse_json(row[0], None)} for row in rows]
+        stats = self.assertion_stats_for_runs(runs)
+        stats["windowDays"] = window_days
+        return stats
 
     def persist_flow_outputs(
         self,

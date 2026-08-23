@@ -875,6 +875,23 @@ export type PlatformRunBatchItem = {
   updatedAt: string;
 };
 
+export type AssertionStats = {
+  runsWithAssertions: number;
+  totalAssertions: number;
+  passedAssertions: number;
+  failedAssertions: number;
+  windowDays?: number | null;
+};
+
+export type AssertionFailure = {
+  runId: string;
+  flowName: string;
+  title: string;
+  type: string;
+  expected: string;
+  actual: string;
+};
+
 export function createPlatformRunBatch(token: string, projectId: string, input: { flowIds: string[]; environmentId: string; clientRequestId: string }) {
   return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/run-batches`,
@@ -897,8 +914,22 @@ export function getPlatformRunBatches(token: string, projectId: string, query: {
 }
 
 export function getPlatformRunBatch(token: string, projectId: string, batchId: string) {
-  return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
+  return request<{
+    batch: PlatformRunBatch;
+    runs: PlatformRunBatchItem[];
+    assertionStats?: AssertionStats;
+    assertionFailures?: AssertionFailure[];
+  }>(
     `/platform/projects/${encodeURIComponent(projectId)}/run-batches/${encodeURIComponent(batchId)}`,
+    {},
+    token,
+  );
+}
+
+export function getPlatformAssertionStats(token: string, projectId: string, windowDays?: number) {
+  const suffix = windowDays !== undefined && windowDays > 0 ? `?windowDays=${windowDays}` : "";
+  return request<AssertionStats>(
+    `/platform/projects/${encodeURIComponent(projectId)}/assertion-stats${suffix}`,
     {},
     token,
   );

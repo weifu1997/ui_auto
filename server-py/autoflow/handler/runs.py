@@ -204,6 +204,26 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 200, {"run": services.run_response(run)})
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/assertion-stats",
+        methods=["GET"],
+    )
+    async def platform_assertion_stats(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_role(project_id, user.id)
+        query = request.query_params
+        raw_days = _text(query.get("windowDays")).strip()
+        try:
+            window_days = int(raw_days) if raw_days else None
+        except ValueError:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID") from None
+        if window_days is not None and window_days <= 0:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID")
+        stats = services.assertion_stats(project_id, window_days)
+        return _send(Response(), 200, stats)
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/runs/{run_id}/assertion-report",
         methods=["POST"],
     )
@@ -384,14 +404,18 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         user = services.session_user(dict(request.headers))
         services.require_project_role(project_id, user.id)
         batch = services.run_batch_by_id(project_id, batch_id)
+        runs = services.batch_runs(project_id, batch_id)
+        # 批量级断言计数：口径同全项目（只统计含断言的子 run）。
+        assertionStats = services.assertion_stats_for_runs(runs)
+        assertionFailures = services.assertion_failures_for_runs(runs)
         return _send(
             Response(),
             200,
             {
                 "batch": batch,
-                "runs": _batch_run_summaries(
-                    services.batch_runs(project_id, batch_id)
-                ),
+                "runs": _batch_run_summaries(runs),
+                "assertionStats": assertionStats,
+                "assertionFailures": assertionFailures,
             },
         )
 

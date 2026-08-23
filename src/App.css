@@ -1720,6 +1720,72 @@
 .assertion-verdict.failed {
   color: var(--error);
 }
+.assertion-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-size: var(--text-caption);
+  color: var(--muted);
+  background: var(--surface);
+}
+.assertion-stats-bar strong {
+  font-size: var(--text-title3);
+  color: var(--success-strong);
+}
+.assertion-stats-bar small {
+  margin-left: auto;
+  color: var(--muted);
+}
+.batch-detail {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0;
+}
+.batch-assertion-summary {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--subtle);
+  font-size: var(--text-caption);
+  color: var(--ink);
+}
+.batch-assertion-summary.empty {
+  color: var(--muted);
+}
+.batch-assertion-summary strong {
+  margin-right: 10px;
+}
+.batch-assertion-summary .pass-rate {
+  color: var(--muted);
+}
+.batch-assertion-failures {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.batch-assertion-failures li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  color: var(--error);
+}
+.batch-assertion-failures .failure-flow {
+  font-weight: 600;
+}
+.batch-assertion-failures code {
+  color: var(--ink);
+  background: var(--surface);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
 .detail-aside {
   display: grid;
   gap: var(--space-4);
