@@ -165,6 +165,7 @@ ROUTE_POLICIES = [
     *_indirect("/api/platform/projects/{project_id}/runs/{run_id}/retry", "POST", "run.execute", "run.project_id -> route project_id"),
     *_indirect("/api/platform/projects/{project_id}/runs/{run_id}/assertion-report", "POST", "project.view", "run.project_id -> route project_id"),
     *_project("/api/platform/projects/{project_id}/assertion-stats", "GET", "project.view"),
+    *_project("/api/platform/projects/{project_id}/runs/preview", "POST", "run.execute"),
     *_project("/api/platform/projects/{project_id}/run-batches", "GET", "project.view"),
     *_project("/api/platform/projects/{project_id}/run-batches", "POST", "run.execute"),
     *_indirect("/api/platform/projects/{project_id}/run-batches/{batch_id}", "GET", "project.view", "batch.project_id -> route project_id"),

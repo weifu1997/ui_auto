@@ -92,6 +92,30 @@ describe("recording editor state", () => {
     expect(JSON.stringify(plan)).not.toContain("plain-text-password");
   });
 
+  it("generates unchecked visibility assertions per referenced element", () => {
+    const plan = planRecordingImport(
+      recordingResult,
+      "env-1",
+      [existingElement],
+      { password: "project.loginPassword" },
+      100,
+    );
+
+    // 每个被非打开页面步骤引用的元素各生成一条候选可见性断言，使用 assertVisibility。
+    expect(plan.generatedAssertions.map((step) => step.action)).toEqual([
+      "可见性断言",
+      "可见性断言",
+    ]);
+    expect(plan.generatedAssertions.map((step) => step.element)).toEqual([
+      "Password field",
+      "Existing login button",
+    ]);
+    expect(plan.generatedAssertions.every((step) => step.assertVisibility === "visible")).toBe(true);
+    expect(plan.generatedAssertions.every((step) => step.failurePolicy === "立即失败")).toBe(true);
+    // 打开页面步骤不产生断言。
+    expect(plan.generatedAssertions.some((step) => step.title.includes("Open"))).toBe(false);
+  });
+
   it("rejects an incomplete binding before planning any draft changes", () => {
     const sourceElements = [existingElement];
     expect(() => planRecordingImport(recordingResult, "env-1", sourceElements, {}, 100))

@@ -107,6 +107,8 @@ export type RecordingImportPlan = {
   newElements: ElementAsset[];
   importedSteps: FlowStep[];
   elementsToValidate: ElementAsset[];
+  /** 候选可见性断言：默认不勾选，勾选后并入 importedSteps 一并导入。 */
+  generatedAssertions: FlowStep[];
 };
 
 export function planRecordingImport(
@@ -182,5 +184,28 @@ export function planRecordingImport(
     };
   });
 
-  return { newElements, importedSteps, elementsToValidate };
+  // 候选可见性断言：对每个被（非打开页面）步骤引用的元素，各生成一条
+  // 「{name} 可见」断言。按 recorded 步骤的引用顺序去重，保证多次重算稳定。
+  const assertionElementNames = new Set<string>();
+  for (const recorded of result.steps) {
+    if (recorded.action === "打开页面") continue;
+    if (typeof recorded.element !== "string" || !recorded.element) continue;
+    const resolvedName = elementNames.get(recorded.element);
+    if (resolvedName) assertionElementNames.add(resolvedName);
+  }
+  const generatedAssertions: FlowStep[] = [...assertionElementNames].map(
+    (name, index) => ({
+      id: `rec-assert-${now}-${index}`,
+      title: `「${name}」可见`,
+      action: "可见性断言",
+      element: name,
+      value: "",
+      assertVisibility: "visible" as const,
+      timeout: 10,
+      failurePolicy: "立即失败",
+      status: "pending" as const,
+    }),
+  );
+
+  return { newElements, importedSteps, elementsToValidate, generatedAssertions };
 }

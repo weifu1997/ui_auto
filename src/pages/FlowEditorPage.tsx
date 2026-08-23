@@ -261,6 +261,7 @@ export default function FlowEditorPage() {
     selectedStepId,
     setSelectedStep,
     updateStep,
+    updateSteps,
     addStep,
     removeStep,
     moveStep,
@@ -269,6 +270,8 @@ export default function FlowEditorPage() {
     isDirty,
     markSaved,
   } = useFlowStore();
+  // 批量编辑：仅断言步骤可勾选（rowSelection），批量操作条改匹配方式/失败策略。
+  const [selectedStepIds, setSelectedStepIds] = useState<string[]>([]);
   const [runToStep, setRunToStep] = useState(false);
   const runDispatchKeysRef = useRef(new Map<string, string>());
   const [recordingOpen, setRecordingOpen] = useState(false);
@@ -288,6 +291,9 @@ export default function FlowEditorPage() {
   const [recordingFreshLogin, setRecordingFreshLogin] = useState(false);
   const [recordingEvents, setRecordingEvents] = useState<RecordingEvent[]>([]);
   const [recordingImportBusy, setRecordingImportBusy] = useState(false);
+  // 导入弹窗里勾选的候选断言（按元素名去重；候选断言与元素一一对应，元素名
+  // 是稳定键，不随 plan 重算漂移）。默认不勾选。
+  const [selectedAssertionElements, setSelectedAssertionElements] = useState<Set<string>>(new Set());
   const recordingPollRef = useRef<number | undefined>(undefined);
   const recordingLastSeqRef = useRef(0);
   const recordingPollInFlightRef = useRef(false);
@@ -580,6 +586,57 @@ export default function FlowEditorPage() {
     [recordingResult],
   );
 
+  const toggleRecordingAssertion = useCallback((elementName: string, checked: boolean) => {
+    setSelectedAssertionElements((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(elementName);
+      else next.delete(elementName);
+      return next;
+    });
+  }, []);
+
+  const toggleStepSelection = useCallback((stepId: string, checked: boolean) => {
+    setSelectedStepIds((prev) =>
+      checked
+        ? [...new Set([...prev, stepId])]
+        : prev.filter((id) => id !== stepId),
+    );
+  }, []);
+
+  const handleRemoveStep = useCallback(
+    (id: string) => {
+      removeStep(id);
+      setSelectedStepIds((prev) => prev.filter((selected) => selected !== id));
+    },
+    [removeStep],
+  );
+
+  const applyBatchMatch = useCallback(
+    (match: "exact" | "contains") => {
+      if (selectedStepIds.length === 0) return;
+      const targetIds = steps
+        .filter(
+          (step) =>
+            selectedStepIds.includes(step.id) &&
+            (step.action === "文本断言" || step.action === "属性断言"),
+        )
+        .map((step) => step.id);
+      if (targetIds.length > 0) updateSteps(targetIds, { assertMatch: match });
+      if (targetIds.length < selectedStepIds.length) {
+        message.info("匹配方式仅对文本/属性断言步骤生效");
+      }
+    },
+    [selectedStepIds, steps, updateSteps],
+  );
+
+  const applyBatchFailurePolicy = useCallback(
+    (policy: string) => {
+      if (selectedStepIds.length === 0) return;
+      updateSteps(selectedStepIds, { failurePolicy: policy });
+    },
+    [selectedStepIds, updateSteps],
+  );
+
   useEffect(() => () => {
     if (recordingPollRef.current !== undefined) {
       window.clearInterval(recordingPollRef.current);
@@ -766,6 +823,7 @@ export default function FlowEditorPage() {
       clearRecordingPoll();
       setRecordingSession(stopped.session);
       setRecordingResult(stopped.result);
+      setSelectedAssertionElements(new Set());
       setRecordingSecretMap({});
       clearRecordingStorage();
     } catch {
@@ -787,6 +845,7 @@ export default function FlowEditorPage() {
       clearRecordingPoll();
       setRecordingSession(canceled.session);
       setRecordingResult(null);
+      setSelectedAssertionElements(new Set());
       setRecordingEvents([]);
       clearRecordingStorage();
       message.info("录制已取消");
@@ -818,15 +877,21 @@ export default function FlowEditorPage() {
     setRecordingImportBusy(true);
     try {
       const finalNewElements = plan.newElements.map((element) => mergeElementEdits(element, elementEdits));
+      // 勾选的候选断言并入 importedSteps（追加在录制步骤之后）。
+      const checkedAssertions = plan.generatedAssertions.filter((assertion) =>
+        selectedAssertionElements.has(assertion.element ?? ""),
+      );
+      const stepsToImport = [...plan.importedSteps, ...checkedAssertions];
       // All fallible work completes first. The two synchronous store writes then
       // expose one confirmed recording draft, never incremental event imports.
       setElements(project.id, [...elements, ...finalNewElements]);
-      importRecordingSteps(plan.importedSteps);
+      importRecordingSteps(stepsToImport);
     } finally {
       setRecordingImportBusy(false);
     }
     setRecordingResult(null);
     setRecordingSession(null);
+    setSelectedAssertionElements(new Set());
     setRecordingEvents([]);
     clearRecordingStorage();
     message.success("录制步骤已追加到流程草稿，请保存后发布");
@@ -1037,6 +1102,40 @@ export default function FlowEditorPage() {
               />
             </Tooltip>
           </div>
+          {selectedStepIds.length > 0 && (
+            <div className="batch-step-bar" role="group" aria-label="批量编辑断言步骤">
+              <span>已选 {selectedStepIds.length} 个断言步骤</span>
+              <Select
+                aria-label="批量匹配方式"
+                placeholder="匹配方式"
+                size="small"
+                style={{ width: 140 }}
+                options={[
+                  { value: "contains", label: "包含匹配" },
+                  { value: "exact", label: "精确匹配" },
+                ]}
+                onChange={(value) => applyBatchMatch(value as "exact" | "contains")}
+              />
+              <Select
+                aria-label="批量失败策略"
+                placeholder="失败策略"
+                size="small"
+                style={{ width: 140 }}
+                options={["立即失败", "继续执行", "重试 1 次"].map((value) => ({
+                  value,
+                }))}
+                onChange={(value) => applyBatchFailurePolicy(value)}
+              />
+              <Button
+                size="small"
+                type="text"
+                aria-label="清除步骤选择"
+                onClick={() => setSelectedStepIds([])}
+              >
+                清除选择
+              </Button>
+            </div>
+          )}
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -1054,9 +1153,12 @@ export default function FlowEditorPage() {
                     index={index}
                     isSelected={step.id === selectedStep?.id}
                     total={steps.length}
+                    selectable={step.action.includes("断言")}
+                    selected={selectedStepIds.includes(step.id)}
+                    onToggleSelection={toggleStepSelection}
                     onSelect={() => setSelectedStep(step.id)}
                     onMove={moveStep}
-                    onRemove={removeStep}
+                    onRemove={handleRemoveStep}
                   />
                 ))}
               </div>
@@ -1240,6 +1342,7 @@ export default function FlowEditorPage() {
         onCancel={() => {
           setRecordingResult(null);
           setRecordingSession(null);
+          setSelectedAssertionElements(new Set());
           setRecordingEvents([]);
         }}
         width={720}
@@ -1249,6 +1352,7 @@ export default function FlowEditorPage() {
             onClick={() => {
               setRecordingResult(null);
               setRecordingSession(null);
+              setSelectedAssertionElements(new Set());
               setRecordingEvents([]);
             }}
           >取消</Button>,
@@ -1316,6 +1420,23 @@ export default function FlowEditorPage() {
                 </li>
               ))}
             </ul>
+            {draftPlan && draftPlan.generatedAssertions.length > 0 && (
+              <div className="recording-assertions">
+                <p>候选可见性断言（默认不勾选，勾选后随录制步骤一并导入，可后续在编排器删改）：</p>
+                {draftPlan.generatedAssertions.map((assertion) => (
+                  <label key={assertion.element ?? assertion.id} className="recording-assertion-row">
+                    <Checkbox
+                      checked={selectedAssertionElements.has(assertion.element ?? "")}
+                      onChange={(event) =>
+                        toggleRecordingAssertion(assertion.element ?? "", event.target.checked)
+                      }
+                    >
+                      {assertion.title}
+                    </Checkbox>
+                  </label>
+                ))}
+              </div>
+            )}
             {recordingResult.warnings.length > 0 && (
               <ul>
                 {recordingResult.warnings.map((warning, index) => (
@@ -1615,6 +1736,9 @@ function SortableStep({
   index,
   total,
   isSelected,
+  selectable,
+  selected,
+  onToggleSelection,
   onSelect,
   onMove,
   onRemove,
@@ -1623,6 +1747,9 @@ function SortableStep({
   index: number;
   total: number;
   isSelected: boolean;
+  selectable: boolean;
+  selected: boolean;
+  onToggleSelection: (stepId: string, checked: boolean) => void;
   onSelect: () => void;
   onMove: (from: number, to: number) => void;
   onRemove: (id: string) => void;
@@ -1638,9 +1765,9 @@ function SortableStep({
     <div
       ref={setNodeRef}
       style={style}
-      className={`step-item ${isSelected ? "selected" : ""} ${
-        isDragging ? "dragging" : ""
-      }`}
+      className={`step-item ${selectable ? "has-select" : ""} ${
+        isSelected ? "selected" : ""
+      } ${isDragging ? "dragging" : ""}`}
       onClick={onSelect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") onSelect();
@@ -1648,6 +1775,18 @@ function SortableStep({
       role="button"
       tabIndex={0}
     >
+      {selectable && (
+        <span
+          className="step-select"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Checkbox
+            aria-label={`选择步骤：${step.title}`}
+            checked={selected}
+            onChange={(event) => onToggleSelection(step.id, event.target.checked)}
+          />
+        </span>
+      )}
       <span className="step-index">{index + 1}</span>
       <button
         className="step-drag-handle"

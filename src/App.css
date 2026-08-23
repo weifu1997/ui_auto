@@ -1188,6 +1188,23 @@
   display: grid;
   gap: var(--space-1);
 }
+.batch-step-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+}
+.batch-step-bar > span {
+  font-weight: 600;
+  color: var(--ink);
+}
 .step-item {
   min-height: 61px;
   display: grid;
@@ -1201,6 +1218,14 @@
   color: var(--ink);
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+.step-item.has-select {
+  grid-template-columns: 20px 20px 22px minmax(0, 1fr) 25px;
+}
+.step-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .step-item:hover {
   background: var(--surface-2);
@@ -1323,6 +1348,24 @@
 .recording-bindings .ant-select {
   flex: 1;
   min-width: 0;
+}
+.recording-assertions {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+.recording-assertions > p {
+  margin: 0;
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.recording-assertion-row {
+  display: flex;
+  align-items: center;
+  font-size: var(--text-footnote);
 }
 .validation-summary-tags {
   display: inline-flex;

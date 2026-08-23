@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json as _json
+import threading
 import uuid
 import re
 import shutil
@@ -1130,6 +1131,93 @@ class RunServices:
         stats = self.assertion_stats_for_runs(runs)
         stats["windowDays"] = window_days
         return stats
+
+    @staticmethod
+    def _flow_secret_names(flow: Any) -> list[str]:
+        """从试跑流程步骤里收集 `{{secret.X}}` 占位符对应的 secret 名。"""
+        steps = flow.get("steps") if isinstance(flow, dict) else []
+        if not isinstance(steps, list):
+            steps = []
+        names: set[str] = set()
+        for step in steps:
+            record = as_record(step)
+            value = record.get("value")
+            if not isinstance(value, str):
+                continue
+            for match in re.finditer(r"{{\s*([^}]+?)\s*}}", value):
+                expression = match.group(1).strip()
+                if expression.startswith("secret."):
+                    name = expression[len("secret.") :].strip()
+                    if name:
+                        names.add(name)
+        return sorted(names)
+
+    def preview_run(self, project_id: str, input: dict[str, Any]) -> dict[str, Any]:
+        """断言试跑通道：直调 runner，最小 hooks，不持久化。
+
+        - `upToStepId` 执行到该步（含）；不存在时复用 `RUN_STEP_NOT_FOUND`。
+        - 不写 `platform_runs` / `platform_run_events` / artifacts。
+        - 服务端解析项目 secret 注入 `input.secrets`，返回前统一脱敏。
+        """
+        from ..http import PlatformError
+        from ..runner import execute_browser_run
+
+        flow = as_record(input.get("flow"))
+        steps = flow.get("steps") if isinstance(flow, dict) else []
+        if not isinstance(steps, list):
+            steps = []
+        up_to_step_id = input.get("upToStepId")
+        if up_to_step_id:
+            if not any(as_record(step).get("id") == up_to_step_id for step in steps):
+                raise PlatformError(400, "RUN_STEP_NOT_FOUND")
+        requested = input.get("secretNames")
+        if not isinstance(requested, list):
+            requested = []
+        secret_names = sorted(
+            {
+                *[name for name in requested if isinstance(name, str)],
+                *self._flow_secret_names(flow),
+            }
+        )
+        execution_input = {
+            "environment": as_record(input.get("environment")),
+            "flow": {
+                "id": flow.get("id") if isinstance(flow, dict) else "preview",
+                "name": flow.get("name") if isinstance(flow, dict) else "试跑流程",
+                "steps": steps,
+            },
+            "elements": input.get("elements")
+            if isinstance(input.get("elements"), list)
+            else [],
+            "variables": input.get("variables")
+            if isinstance(input.get("variables"), dict)
+            else {},
+            "data": input.get("data") if isinstance(input.get("data"), dict) else {},
+            "secrets": self.secret_values(project_id, secret_names),
+            "upToStepId": up_to_step_id or None,
+        }
+        signal = threading.Event()
+        events: list[dict[str, Any]] = []
+        hooks = {
+            "signal": signal,
+            "artifact_path": lambda _name, extension: (
+                f"/tmp/ui-auto-preview-{uuid.uuid4()}.{extension}"
+            ),
+            "artifact": lambda _data: None,
+            "event": lambda kind, data: events.append({"kind": kind, "data": data}),
+            "browser": lambda *_args: None,
+        }
+        try:
+            result = execute_browser_run(execution_input, hooks)
+        except RuntimeError as error:
+            if str(error) == "RUN_STEP_NOT_FOUND":
+                raise PlatformError(400, "RUN_STEP_NOT_FOUND") from None
+            raise PlatformError(400, "PREVIEW_RUN_FAILED") from error
+        run_ref = {"projectId": project_id}
+        return {
+            "result": self.redact_run_value(run_ref, result),
+            "events": self.redact_run_value(run_ref, events),
+        }
 
     def persist_flow_outputs(
         self,

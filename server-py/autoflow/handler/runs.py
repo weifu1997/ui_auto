@@ -248,6 +248,28 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 201, report)
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/runs/preview",
+        methods=["POST"],
+    )
+    async def platform_run_preview(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "run.execute")
+        raw_body = await request.body()
+        if raw_body:
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                raise PlatformError(400, "PREVIEW_INPUT_INVALID") from None
+        else:
+            body = {}
+        if not isinstance(body, dict):
+            raise PlatformError(400, "PREVIEW_INPUT_INVALID")
+        preview = services.preview_run(project_id, body)
+        return _send(Response(), 200, preview)
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/runs/{run_id}/cancel",
         methods=["POST"],
     )
