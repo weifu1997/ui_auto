@@ -14,7 +14,7 @@ npm run build
 npm run start
 ```
 
-`npm run start` 是唯一受支持的应用入口，需要 Node.js `>=20.12`。它会自动设置 `NODE_ENV=production`，检查 `dist/index.html` 和非空的 `PLATFORM_SECRET_KEY`，默认监听 `127.0.0.1:8787`。未构建或未设置密钥时，服务会在监听前失败并给出修复提示。
+`npm run start` 是唯一受支持的应用入口，需要 Node.js `>=20.12`。它会自动设置 `NODE_ENV=production`，检查 `dist/index.html` 和非空的 `PLATFORM_SECRET_KEY`（或可读且非空的 `PLATFORM_SECRET_KEY_FILE` 密钥文件；两者同时设置时直接环境变量优先），默认监听 `127.0.0.1:8787`。未构建或未设置密钥时，服务会在监听前失败并给出修复提示。
 
 在 WSL/Linux 中，首次在仓库根目录创建受保护的 `.env`，然后填写至少一个
 `PLATFORM_SECRET_KEY`：
@@ -23,6 +23,8 @@ npm run start
 # 编辑 .env，至少填写 PLATFORM_SECRET_KEY
 chmod 600 .env
 ```
+
+密钥也可以通过文件托管：设置 `PLATFORM_SECRET_KEY_FILE` 指向一个当前用户可读、非空的密钥文件，启动门禁会校验文件存在且内容非空。Windows 生产安装（`scripts/ops/install.ps1`）即采用该方式，密钥文件由管理员 ACL 保护，不再内联进服务配置；托管边界与恢复流程见 `docs/密钥托管与恢复.md`。
 
 也可以通过 `AUTOFLOW_CONFIG_FILE` 指定相对于仓库根目录或绝对路径的配置文件：
 
@@ -43,9 +45,27 @@ npm run test:unit
 npm run test:e2e
 npm run test:py
 npm run test:windows
+npm run test:all    # 串联上述全部与 test:startup / check:bundle
 ```
 
 Playwright 会使用构建后的 `dist/` 和 `npm run start`，不再启动 Vite dev 或 `VITE_AUTH_REQUIRED` 模拟服务。
+
+## 仓库结构
+
+```text
+src/            React 前端：pages/ 路由页、stores/ Zustand 状态、api/ HTTP 边界、
+                lib/ 纯工具与领域类型；单测与源码同目录
+e2e/            Playwright 端到端用例
+server-py/      Python FastAPI 后端：autoflow/handler/ 域路由包、
+                autoflow/services/ 域服务包、tests/ 为 pytest
+scripts/        生产入口与环境链（start-production.mjs、setup-py.mjs 等）
+scripts/ops/    Windows 运维脚本（安装、备份、恢复、升级、回滚）
+deployment/     Windows 服务定义（AutoFlow.xml）
+data/           本地运行时数据（默认 SQLite 与 artifacts，已忽略；
+                生产环境对应 %BASE%\data）
+docs/           运维与决策文档（archive/ 保存历史版本）
+.trellis/       编码规范与任务流
+```
 
 ## Platform
 
