@@ -105,3 +105,10 @@
 - 无数据库 schema 变更：断言判定经 `platform_run_events`（`step.asserted`）与 `platform_runs.result`（`assertions` 数组）落地。
 - 关键约束：新字段必须进 `STEP_KEYS`，否则不进 revision checksum，导致"改断言不产生新版本"。
 - 敏感 run：断言不引入新的 secret 暴露面；`actual` 走既有脱敏路径。
+
+## 备注（Stage I 收尾）
+
+- 验收：`npm run test:all` 全绿（build / lint / test:unit / test:startup / test:py / check:bundle / test:e2e / test:windows 全部通过，2026-08-23）。
+- 范围确认：本任务不处理 4 个既有脏状态任务（`08-16-flow-retry-reproduction-correctness`、`08-15-flow-batch-execution-mvp`、`08-15-flow-recording-mvp`、`08-16-legacy-e2e-failures`）的归档收尾，仅在此记录（见 Out Of Scope）。
+- 回归：断言字段进 revision snapshot 后 retry 克隆仍完整（`retry-reproduction.spec.ts` 通过）；试跑/预览通道不产生 `platform_runs`/`platform_run_events` 记录、不影响正式 run 计数；录制与 workbench 走 FlowEditorPage 的既有 e2e 一并通过。
+
