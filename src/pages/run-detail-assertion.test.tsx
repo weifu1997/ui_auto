@@ -31,10 +31,15 @@ vi.mock("../api/platform-api", () => ({
   cancelPlatformRun: vi.fn(),
   createPlatformRun: vi.fn(),
   retryPlatformRun: vi.fn(),
+  createPlatformAssertionReport: vi.fn(),
   fetchPlatformArtifact: vi.fn(),
 }));
 
-import { getPlatformRun } from "../api/platform-api";
+import {
+  createPlatformAssertionReport,
+  fetchPlatformArtifact,
+  getPlatformRun,
+} from "../api/platform-api";
 import RunDetailPage from "./RunDetailPage";
 
 const mockProject = { id: "proj-test", name: "测试项目", description: "" };
@@ -179,5 +184,37 @@ describe("RunDetailPage 断言结果区块", () => {
 
     await screen.findByRole("heading", { name: "断言流程" });
     expect(screen.queryByText("断言结果")).not.toBeInTheDocument();
+  });
+
+  it("有断言：可导出 JSON/XLSX 报告（先创建再走下载链路）", async () => {
+    const run = makeRun({
+      result: {
+        status: "success",
+        assertions: [
+          { stepIndex: 1, stepId: "s2", title: "页面标题", type: "text", passed: true, expected: "Fixture login", actual: "Fixture login", durationMs: 31 },
+        ],
+      },
+    });
+    (createPlatformAssertionReport as ReturnType<typeof vi.fn>).mockResolvedValue({
+      artifact: { id: "report-artifact-1", name: "assertion-report-run-1.json", contentType: "application/json", createdAt: "2026-08-23T00:00:00.000Z" },
+    });
+    (fetchPlatformArtifact as ReturnType<typeof vi.fn>).mockResolvedValue(new Blob(["{}"], { type: "application/json" }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    renderRun(run);
+
+    await screen.findByText("导出 JSON");
+    await screen.getByText("导出 JSON").click();
+
+    await vi.waitFor(() => {
+      expect(createPlatformAssertionReport).toHaveBeenCalledWith("token-1", "proj-test", "run-1", "json");
+    });
+    expect(fetchPlatformArtifact).toHaveBeenCalledWith("token-1", "report-artifact-1");
+    expect(click).toHaveBeenCalled();
+    expect(createObjectURL).toHaveBeenCalled();
+    revokeObjectURL.mockRestore();
+    createObjectURL.mockRestore();
+    click.mockRestore();
   });
 });

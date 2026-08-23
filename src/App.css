@@ -1653,6 +1653,14 @@
   font-size: var(--text-caption);
   color: var(--muted);
 }
+.assertion-export {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.assertion-export .ant-btn-sm {
+  font-size: var(--text-caption);
+}
 .assertion-list {
   display: grid;
   gap: 8px;

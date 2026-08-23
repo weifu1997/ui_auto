@@ -955,6 +955,28 @@ export function deletePlatformRuns(token: string, projectId: string, runIds: str
   );
 }
 
+export type AssertionReportArtifact = {
+  id: string;
+  name: string;
+  contentType: string;
+  createdAt: string;
+};
+
+export function createPlatformAssertionReport(
+  token: string,
+  projectId: string,
+  runId: string,
+  format: "json" | "xlsx",
+) {
+  // 生成断言报告并登记为 run artifact；客户端再按返回 artifactId 走既有
+  // fetchPlatformArtifact 下载链路。
+  return request<{ artifact: AssertionReportArtifact }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/assertion-report?format=${format}`,
+    { method: "POST" },
+    token,
+  );
+}
+
 export type RecordingSessionStatus = "starting" | "recording" | "paused" | "stopped" | "canceled" | "expired" | "failed";
 
 export type RecordingSession = {

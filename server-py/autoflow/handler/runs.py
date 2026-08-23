@@ -204,6 +204,30 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 200, {"run": services.run_response(run)})
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/runs/{run_id}/assertion-report",
+        methods=["POST"],
+    )
+    async def platform_run_assertion_report(
+        request: Request, project_id: str, run_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        role = services.require_project_role(project_id, user.id)
+        services.run_by_id(run_id, project_id)
+        run_format = _text(request.query_params.get("format")) or "json"
+        if run_format not in ("json", "xlsx"):
+            raise PlatformError(400, "REPORT_FORMAT_INVALID")
+        report = services.build_assertion_report(run_id, run_format)
+        services.audit(
+            role["project"]["workspace_id"],
+            {"type": "user", "id": user.id},
+            "run.assertion_report_exported",
+            {"type": "run", "id": run_id},
+            {"format": run_format, "artifactId": report["artifact"]["id"]},
+            project_id,
+        )
+        return _send(Response(), 201, report)
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/runs/{run_id}/cancel",
         methods=["POST"],
     )

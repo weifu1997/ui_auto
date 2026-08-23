@@ -18,6 +18,7 @@ import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import {
   cancelPlatformRun,
+  createPlatformAssertionReport,
   createPlatformRun,
   fetchPlatformArtifact,
   getPlatformRun,
@@ -362,6 +363,35 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
       setCanceling(false);
     }
   };
+  // 导出断言报告：先请求生成（端点登记为 run artifact），再走既有产物下载链路。
+  const exportAssertionReport = async (format: "json" | "xlsx") => {
+    const context = platformContextFor(project.id);
+    if (!context || !runId) {
+      message.error("Platform session is unavailable");
+      return;
+    }
+    try {
+      const { artifact } = await createPlatformAssertionReport(
+        context.session.token,
+        context.platformProjectId,
+        runId,
+        format,
+      );
+      const blob = await fetchPlatformArtifact(context.session.token, artifact.id);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = artifact.name;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+      message.success("断言报告已导出");
+    } catch (error) {
+      const code = error instanceof Error && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+      message.error(code === "RUN_HAS_NO_ASSERTIONS" ? "本次运行没有断言可导出" : "导出断言报告失败");
+    }
+  };
   return (
     <ProjectLayout project={project} section="runs">
       <div className="detail-back">
@@ -438,6 +468,10 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
               <div className="assertion-heading">
                 <h2>断言结果</h2>
                 <span>{passedAssertions}/{assertions.length} 通过</span>
+                <div className="assertion-export">
+                  <Button size="small" onClick={() => void exportAssertionReport("json")}>导出 JSON</Button>
+                  <Button size="small" onClick={() => void exportAssertionReport("xlsx")}>导出 Excel</Button>
+                </div>
               </div>
               <div className="assertion-list">
                 {assertions.map((assertion) => (
