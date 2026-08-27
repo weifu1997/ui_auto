@@ -71,18 +71,19 @@ function elementKey(element: Pick<ElementAsset, "environment" | "path" | "method
 }
 
 /**
- * 新元素 id 必须由定位器内容确定性推导（FNV-1a）。
+ * 新元素/步骤/断言 id 必须由内容确定性推导（FNV-1a）。
  * 导入计划会随 workspace 同步轮询反复重算（elements 引用每次刷新都会变化），
- * 若 id 里带时间戳，元素 id 会随之漂移，正在进行的定位器校验结果和用户的
- * 编辑就会挂在旧 id 上，界面永远停在「校验中」。
+ * 并在「候选预览」与「确认导入」时各算一次；若 id 里带时间戳，id 会随之漂移，
+ * 勾选的候选断言会因重算后的 id 变化而被静默丢弃，正在进行的定位器校验结果和
+ * 用户的编辑也会挂在旧 id 上，界面永远停在「校验中」。
  */
-function recordedElementId(key: string): string {
+function contentId(prefix: string, key: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < key.length; index += 1) {
     hash ^= key.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
-  return `rec-el-${(hash >>> 0).toString(36)}`;
+  return `${prefix}-${(hash >>> 0).toString(36)}`;
 }
 
 function uniqueElementName(base: string, existingNames: Set<string>) {
@@ -116,7 +117,9 @@ export function planRecordingImport(
   environmentId: string,
   currentElements: ElementAsset[],
   secretBindings: Record<string, string>,
-  now = Date.now(),
+  // 保留该参数以兼容既有调用（测试以位置参数模拟不同时钟）；id 一律由内容派生，
+  // 不再读取它，改名 _now 使 tsc noUnusedParameters 放行。
+  _now = Date.now(),
 ): RecordingImportPlan {
   const recordedStepIds = new Set(result.steps.map((step) => step.id));
   for (const binding of result.requiredBindings) {
@@ -140,7 +143,7 @@ export function planRecordingImport(
     });
     const existing = elementsByKey.get(key);
     const resolved = existing ?? {
-      id: recordedElementId(key),
+      id: contentId("rec-el", key),
       name: uniqueElementName(recorded.name, names),
       path: recorded.path,
       method: recorded.method,
@@ -169,7 +172,10 @@ export function planRecordingImport(
     if (recorded.element && !element) throw new Error("RECORDING_ELEMENT_REFERENCE_MISSING");
     const binding = secretBindings[recorded.id]?.trim();
     return {
-      id: `rec-step-${now}-${index}`,
+      id: contentId(
+        "rec-step",
+        `${index}\u0000${recorded.id}\u0000${recorded.action}\u0000${element ?? ""}\u0000${recorded.value ?? ""}`,
+      ),
       title: recorded.title || recorded.action,
       action: recorded.action,
       element,
@@ -195,7 +201,7 @@ export function planRecordingImport(
   }
   const generatedAssertions: FlowStep[] = [...assertionElementNames].map(
     (name, index) => ({
-      id: `rec-assert-${now}-${index}`,
+      id: contentId("rec-assert", `${index}\u0000${name}`),
       title: `「${name}」可见`,
       action: "可见性断言",
       element: name,
@@ -232,8 +238,10 @@ export function planRecordingImport(
     ) {
       suggestionLimit.text -= 1;
       const snippet = asset.value.trim();
+      const seq = suggestionSeq;
+      suggestionSeq += 1;
       generatedAssertions.push({
-        id: `rec-assert-${now}-${suggestionSeq++}`,
+        id: contentId("rec-assert", `${seq}\u0000${resolvedName}\u0000${snippet}`),
         title: `「${resolvedName}」文本包含「${snippet.slice(0, 24)}${snippet.length > 24 ? "…" : ""}」`,
         action: "文本断言",
         element: resolvedName,
@@ -254,8 +262,10 @@ export function planRecordingImport(
     ) {
       suggestionLimit.attribute -= 1;
       const snippet = recorded.value.trim();
+      const seq = suggestionSeq;
+      suggestionSeq += 1;
       generatedAssertions.push({
-        id: `rec-assert-${now}-${suggestionSeq++}`,
+        id: contentId("rec-assert", `${seq}\u0000${resolvedName}\u0000${snippet}`),
         title: `「${resolvedName}」value 含「${snippet.slice(0, 24)}${snippet.length > 24 ? "…" : ""}」`,
         action: "属性断言",
         element: resolvedName,

@@ -219,7 +219,7 @@ describe("FlowEditorPage 录制导入生成候选断言", () => {
     const stopBtn = await screen.findByRole("button", { name: /停止录制/ });
     fireEvent.click(stopBtn);
     // 录制结果弹窗出现，含候选断言区块。
-    await screen.findByText("候选可见性断言（默认不勾选，勾选后随录制步骤一并导入，可后续在编排器删改）：");
+    await screen.findByText("候选断言（含可见性，以及可挑选的文本/属性建议草稿；默认不勾选）：");
   }
 
   it("默认不勾选：确认导入仅并入录制步骤，不含候选断言", async () => {

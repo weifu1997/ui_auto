@@ -144,6 +144,23 @@ describe("recording editor state", () => {
     // ids are derived from the locator key, not from the plan timestamp
     expect(a.newElements[0].id).not.toContain("100");
     expect(a.newElements[0].id).not.toContain("999999");
+
+    // 步骤与候选断言的 id 同样必须内容派生：FlowEditorPage 在「候选预览」
+    // （渲染期 draftPlan）与「确认导入」（importRecordedFlow 重算）各调一次
+    // planRecordingImport，若 id 随时钟变化，用户勾选的候选断言会在重算后被
+    // 静默丢弃（assertion.id 不再命中 selectedAssertionIds）。
+    expect(b.importedSteps.map((step) => step.id)).toEqual(a.importedSteps.map((step) => step.id));
+    expect(c.importedSteps.map((step) => step.id)).toEqual(a.importedSteps.map((step) => step.id));
+    expect(b.generatedAssertions.map((step) => step.id)).toEqual(a.generatedAssertions.map((step) => step.id));
+    expect(c.generatedAssertions.map((step) => step.id)).toEqual(a.generatedAssertions.map((step) => step.id));
+    expect(a.importedSteps[0].id).not.toContain("100");
+    expect(a.importedSteps[0].id).not.toContain("999999");
+    expect(a.generatedAssertions[0].id).not.toContain("100");
+    expect(a.generatedAssertions[0].id).not.toContain("999999");
+    // 同一计划内步骤与断言 id 必须互不冲突。
+    expect(new Set([...a.importedSteps, ...a.generatedAssertions].map((step) => step.id)).size).toBe(
+      a.importedSteps.length + a.generatedAssertions.length,
+    );
   });
 
   it("suggests text assertions for clicked text-located elements (W2-6)", () => {
