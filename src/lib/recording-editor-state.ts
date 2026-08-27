@@ -14,6 +14,10 @@ const terminalStatuses = new Set<RecordingSessionStatus>([
   "interrupted",
 ]);
 
+// R2-6：候选可见性断言生成上限。超大录制（~1000 步）若每个引用元素各生成一条
+// 「可见」断言会近千条，配合 R2-4 虚拟化仍须有界以保证 import 面板可读。
+export const VISIBILITY_ASSERTION_CAP = 20;
+
 export function isTerminalRecordingStatus(status: RecordingSessionStatus) {
   return terminalStatuses.has(status);
 }
@@ -192,9 +196,11 @@ export function planRecordingImport(
   });
 
   // 候选可见性断言：对每个被（非打开页面）步骤引用的元素，各生成一条
-  // 「{name} 可见」断言。按 recorded 步骤的引用顺序去重，保证多次重算稳定。
+  // 「{name} 可见」断言。按 recorded 步骤的引用顺序去重，保证多次重算稳定；
+  // 达上限即停（R2-6），超大录制不生成近千条候选淹没 import 面板。
   const assertionElementNames = new Set<string>();
   for (const recorded of result.steps) {
+    if (assertionElementNames.size >= VISIBILITY_ASSERTION_CAP) break;
     if (recorded.action === "打开页面") continue;
     if (typeof recorded.element !== "string" || !recorded.element) continue;
     const resolvedName = elementNames.get(recorded.element);

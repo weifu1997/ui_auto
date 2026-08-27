@@ -223,4 +223,38 @@ describe("recording editor state", () => {
     expect(plan.generatedAssertions.filter((a) => a.action === "文本断言")).toHaveLength(10);
     expect(plan.generatedAssertions.filter((a) => a.action === "可见性断言")).toHaveLength(14);
   });
+
+  it("caps visibility assertions at twenty for huge recordings (R2-6)", () => {
+    // 25 个互不相同的被引用元素 → 可见性断言只生成前 20 个（按步骤引用顺序），
+    // 超大录制不产生近千条候选淹没 import 面板。
+    const manySteps = Array.from({ length: 25 }, (_, index) => ({
+      id: `click-${index}`,
+      title: `Click ${index}`,
+      action: "点击",
+      element: `按钮 ${index}`,
+    }));
+    const manyElements = Array.from({ length: 25 }, (_, index) => ({
+      id: `btn-${index}`,
+      name: `按钮 ${index}`,
+      path: "/x",
+      method: "text",
+      value: `订单确认按钮文字示例第${index}号`,
+    }));
+    const result: RecordingResult = {
+      steps: [{ id: "open", title: "Open", action: "打开页面", value: "/" }, ...manySteps],
+      elements: manyElements,
+      requiredBindings: [],
+      warnings: [],
+      lastSeq: 26,
+    };
+    const plan = planRecordingImport(result, "env-1", [], {}, 100);
+    const visibility = plan.generatedAssertions.filter((a) => a.action === "可见性断言");
+    expect(visibility).toHaveLength(20);
+    // 取引用顺序前 20 个元素；21~25 号不生成断言。
+    expect(visibility.map((a) => a.element)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `按钮 ${index}`),
+    );
+    // 文本断言建议走各自独立的 10 条上限，不受可见性 cap 影响。
+    expect(plan.generatedAssertions.filter((a) => a.action === "文本断言")).toHaveLength(10);
+  });
 });

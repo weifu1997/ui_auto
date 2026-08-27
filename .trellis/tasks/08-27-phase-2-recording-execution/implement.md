@@ -53,8 +53,8 @@
 
 ## 阶段 G：R2-6 候选断言有界化
 
-- [ ] G1. `recording-editor-state.ts:planRecordingImport`（202–214）：可见性断言加生成上限（配合虚拟化保证 import 面板可读）；文本/属性断言既有 cap 保持。
-- [ ] G2. [gate] `npm run lint && npm run build && npm run test:unit` + `npm run test:py` 全绿。
+- [x] G1. `recording-editor-state.ts:planRecordingImport`（202–214）：可见性断言加生成上限（配合虚拟化保证 import 面板可读）；文本/属性断言既有 cap 保持。`VISIBILITY_ASSERTION_CAP = 20` 按步骤引用顺序去重取前 20 个元素，达上限即停。
+- [x] G2. [gate] 通过：`npm run lint`（oxlint 0 警告）&& `npm run build`（✓ built）&& `npm run test:unit` 116 全绿（115 基线 + 1 可见性 cap 用例）+ `npm run test:py` 282 全绿。
 
 ## 阶段 H：验收与收尾
 
