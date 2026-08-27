@@ -229,6 +229,53 @@ describe("FlowEditorPage 断言配置面板", () => {
     expect(screen.queryByLabelText("比较符")).not.toBeInTheDocument();
   });
 
+  it("URL 断言：出现匹配方式与期望值，隐藏元素与跨类型字段", async () => {
+    const user = userEvent.setup();
+    render(<FlowEditorPage />);
+
+    await screen.findByLabelText("步骤动作");
+    await selectAction(user, "URL 断言");
+
+    // 页面级断言：无元素选择器。
+    expect(screen.queryByLabelText("步骤元素")).not.toBeInTheDocument();
+    expect(await screen.findByLabelText("匹配方式")).toBeInTheDocument();
+    expect(screen.getByLabelText("期望值")).toBeInTheDocument();
+    expect(screen.queryByLabelText("期望状态")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("比较符")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("属性名")).not.toBeInTheDocument();
+  });
+
+  it("URL 断言：匹配方式选完全匹配并填写期望值，保存到步骤字段", async () => {
+    const user = userEvent.setup();
+    render(<FlowEditorPage />);
+
+    await screen.findByLabelText("步骤动作");
+    // 先在文本断言写入 assertMatch=exact，验证切到 URL 断言后 assertMatch 被保留
+    // （R3-1 值域扩展回归：URL 断言不是非断言动作，不得落入「全部清除」）。
+    await selectAction(user, "文本断言");
+    await selectOption(user, "匹配方式", "完全匹配");
+    const textValue = screen.getByLabelText("期望值");
+    await user.clear(textValue);
+    await user.type(textValue, "Order #12345");
+    expect(useFlowStore.getState().steps[0].assertMatch).toBe("exact");
+
+    await selectAction(user, "URL 断言");
+    expect(useFlowStore.getState().steps[0].assertMatch).toBe("exact");
+    const valueInput = screen.getByLabelText("期望值");
+    await user.clear(valueInput);
+    await user.type(valueInput, "https://test.com/__fixture/login");
+
+    const [step] = useFlowStore.getState().steps;
+    expect(step.action).toBe("URL 断言");
+    expect(step.assertMatch).toBe("exact");
+    expect(step.value).toBe("https://test.com/__fixture/login");
+    // 页面级断言不写元素；跨类型字段未写入。
+    expect(step.element).toBeUndefined();
+    expect(step.assertVisibility).toBeUndefined();
+    expect(step.assertOperator).toBeUndefined();
+    expect(step.assertAttribute).toBeUndefined();
+  });
+
   it("保存时新断言字段随步骤写入发布版本", async () => {
     const user = userEvent.setup();
     mockRevisionsList = [];

@@ -48,7 +48,7 @@ export function AssertionStepPanel({
           onChange={(action) => changeAction(action)}
         />
       </label>
-      {!["打开页面", "等待", "截图"].includes(step.action) && (
+      {!["打开页面", "等待", "截图", "URL 断言"].includes(step.action) && (
         <label>
           <span>元素</span>
           <Select
@@ -81,7 +81,9 @@ export function AssertionStepPanel({
               />
             </label>
           )}
-          {(step.action === "文本断言" || step.action === "属性断言") && (
+          {(step.action === "文本断言" ||
+            step.action === "属性断言" ||
+            step.action === "URL 断言") && (
             <label>
               <span>匹配方式</span>
               <Select

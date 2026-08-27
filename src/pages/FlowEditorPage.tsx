@@ -484,12 +484,14 @@ export default function FlowEditorPage() {
         .filter(
           (step) =>
             selectedStepIds.includes(step.id) &&
-            (step.action === "文本断言" || step.action === "属性断言"),
+            (step.action === "文本断言" ||
+              step.action === "属性断言" ||
+              step.action === "URL 断言"),
         )
         .map((step) => step.id);
       if (targetIds.length > 0) updateSteps(targetIds, { assertMatch: match });
       if (targetIds.length < selectedStepIds.length) {
-        message.info("匹配方式仅对文本/属性断言步骤生效");
+        message.info("匹配方式仅对文本/属性/URL 断言步骤生效");
       }
     },
     [selectedStepIds, steps, updateSteps],

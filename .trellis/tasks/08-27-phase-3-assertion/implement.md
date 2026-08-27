@@ -22,10 +22,10 @@
 
 ## 阶段 C：URL 断言编辑器（R3-1 编辑器）
 
-- [ ] C1. `AssertionStepPanel.tsx`：URL 断言分支——期望值输入 + `assertMatch` 选择（复用现有匹配方式选择器）；**不渲染元素选择**（现有元素选择器 56-64 对 URL 断言隐藏）。
-- [ ] C2. `FlowEditorPage.tsx:487` 批量「匹配方式」范围（现文本/属性）扩展含 URL；`消息.info("匹配方式仅对文本/属性断言步骤生效")` 文案同步。
-- [ ] C3. 前端单测：断言面板 URL 分支渲染（值输入 + 匹配方式 + 无元素选择）、批量匹配覆盖 URL。
-- [ ] C4. [gate] `npm run lint && npm run build && npm run test:unit` 全绿。
+- [x] C1. `AssertionStepPanel.tsx`：URL 断言分支——期望值输入 + `assertMatch` 选择（复用现有匹配方式选择器）；**不渲染元素选择**（元素选择器 51-67 对 URL 断言隐藏）。
+- [x] C2. `FlowEditorPage.tsx:489` 批量「匹配方式」范围（现文本/属性）扩展含 URL；`消息.info("匹配方式仅对文本/属性/URL 断言步骤生效")` 文案同步；`assertion-step-draft.ts:staleAssertionFields` 增 URL 断言分支（保留 assertMatch，不落「全部清除」）。
+- [x] C3. 前端单测：断言面板 URL 分支渲染（值输入 + 匹配方式 + 无元素/无跨类型字段）、匹配方式跨动作保留回归、批量匹配覆盖 URL。
+- [x] C4. [gate] `npm run lint`（0 警告）&& `npm run build`（✓ built）&& `npm run test:unit` 118 全绿（116 基线 + 2 URL）。
 
 ## 阶段 D：断言语义统一收口（R3-2）
 

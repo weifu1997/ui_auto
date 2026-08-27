@@ -28,6 +28,10 @@ export function staleAssertionFields(action: string): Partial<FlowStep> {
   if (action === "可见性断言") {
     return { ...clear("assertMatch"), ...clear("assertOperator"), ...clear("assertAttribute") };
   }
+  if (action === "URL 断言") {
+    // URL 断言保留 assertMatch（页面级，仅期望值 + 匹配方式；不引用元素）。
+    return { ...clear("assertVisibility"), ...clear("assertOperator"), ...clear("assertAttribute") };
+  }
   // 非断言动作：全部清除。
   return {
     assertMatch: undefined,
