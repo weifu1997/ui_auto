@@ -249,4 +249,36 @@ describe("RunDetailPage 断言结果区块", () => {
     createObjectURL.mockRestore();
     click.mockRestore();
   });
+
+  it("可导出 HTML 断言报告（R3-3 新增格式）", async () => {
+    const run = makeRun({
+      result: {
+        status: "success",
+        assertions: [
+          { stepIndex: 1, stepId: "s2", title: "页面标题", type: "url", passed: true, expected: "/__fixture/login", actual: "https://app.test/__fixture/login", durationMs: 18 },
+        ],
+      },
+    });
+    (createPlatformAssertionReport as ReturnType<typeof vi.fn>).mockResolvedValue({
+      artifact: { id: "report-artifact-html", name: "assertion-report-run-1.html", contentType: "text/html; charset=utf-8", createdAt: "2026-08-23T00:00:00.000Z" },
+    });
+    (fetchPlatformArtifact as ReturnType<typeof vi.fn>).mockResolvedValue(new Blob(["<!doctype html>"], { type: "text/html" }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock-html");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    renderRun(run);
+
+    await screen.findByText("导出 HTML");
+    await screen.getByText("导出 HTML").click();
+
+    await vi.waitFor(() => {
+      expect(createPlatformAssertionReport).toHaveBeenCalledWith("token-1", "proj-test", "run-1", "html");
+    });
+    expect(fetchPlatformArtifact).toHaveBeenCalledWith("token-1", "report-artifact-html");
+    expect(click).toHaveBeenCalled();
+    expect(createObjectURL).toHaveBeenCalled();
+    revokeObjectURL.mockRestore();
+    createObjectURL.mockRestore();
+    click.mockRestore();
+  });
 });

@@ -366,7 +366,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
     }
   };
   // 导出断言报告：先请求生成（端点登记为 run artifact），再走既有产物下载链路。
-  const exportAssertionReport = async (format: "json" | "xlsx") => {
+  const exportAssertionReport = async (format: "json" | "xlsx" | "html") => {
     const context = platformContextFor(project.id);
     if (!context || !runId) {
       message.error("Platform session is unavailable");
@@ -473,6 +473,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
                 <div className="assertion-export">
                   <Button size="small" onClick={() => void exportAssertionReport("json")}>导出 JSON</Button>
                   <Button size="small" onClick={() => void exportAssertionReport("xlsx")}>导出 Excel</Button>
+                  <Button size="small" onClick={() => void exportAssertionReport("html")}>导出 HTML</Button>
                 </div>
               </div>
               <div className="assertion-list">

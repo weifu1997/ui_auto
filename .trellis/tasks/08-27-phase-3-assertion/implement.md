@@ -36,10 +36,10 @@
 
 ## 阶段 E：HTML 断言报告（R3-3 可选）
 
-- [ ] E1. `_report.py:build_assertion_report` 增 HTML 变体（新 content type，与 XLSX/JSON 并存；产物名规则复用 `assertion-report-{run_id}.html`）。
-- [ ] E2. 敏感 run 约束：HTML 产物不写明文 secret（沿用既有脱敏）。
-- [ ] E3. `RunDetailPage` 报告导出菜单增「HTML」选项（前端）。
-- [ ] E4. [gate] `npm run test:py`（报告导出用例）+ `npm run test:unit` 全绿。
+- [x] E1. `_report.py:build_assertion_report` 增 HTML 变体（新 `text/html` content type，与 XLSX/JSON 并存；产物名复用 `assertion-report-{run_id}.html`）；`handler/runs.py` format 白名单增 `html`。
+- [x] E2. 敏感 run 约束：HTML 产物不写明文 secret——actual 沿用 `redact_run_value` 脱敏结果，且字段 `html.escape` 转义（注入值不成形）。
+- [x] E3. `RunDetailPage` 报告导出菜单增「导出 HTML」按钮；`createPlatformAssertionReport` format 类型扩 `"html"`。
+- [x] E4. [gate] `npm run test:py` 290 全绿（含 HTML 布局 + 脱敏转义用例）+ `npm run test:unit` 120 全绿（含 HTML 导出用例）。
 
 ## 阶段 F：验收与收尾
 

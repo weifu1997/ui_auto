@@ -1,8 +1,9 @@
 """Stage F4: 断言报告导出端点（POST .../assertion-report）与 build_assertion_report。
 
 覆盖（对应 implement.md F4 gate）：
-- JSON / XLSX 两种格式生成（201 + artifact 落库 + 文件内容校验）；
-- actual 经 redact_run_value 脱敏（含 secret 明文不落盘）；
+- JSON / XLSX / HTML 三种格式生成（201 + artifact 落库 + 文件内容校验）；
+- actual 经 redact_run_value 脱敏（含 secret 明文不落盘；HTML 产物同源脱敏）；
+- HTML 产物字段 html.escape 转义（注入值不成形）；
 - 失败截图 / trace 引用装配：按 `failure-step-{序号}.png` 匹配到 stepIndex，
   缺失的截图留空不报错；trace.zip 全量引用；
 - 状态码：201 / 400（非法格式）/ 403（无工作区访问权）/ 404（run 不存在）/
@@ -339,6 +340,113 @@ def test_assertion_report_redacts_secret_plaintext(tmp_path):
         report = _report_from_artifact(services, json.loads(response.body)["artifact"]["id"])
         assert report["assertions"][0]["actual"] == "token=***"
         assert "s3cret-token-42" not in json.dumps(report, ensure_ascii=False)
+    finally:
+        services.close()
+
+
+ASSERTIONS_WITH_URL = [
+    *ASSERTIONS,
+    {
+        "stepIndex": 2,
+        "stepId": "s3",
+        "title": "登录页",
+        "type": "url",
+        "passed": True,
+        "expected": "/__fixture/login",
+        "actual": "https://app.test/__fixture/login?next=/dash",
+        "durationMs": 18,
+    },
+]
+
+
+def _artifact_bytes(services: PlatformServices, artifact_id: str) -> bytes:
+    row = services.database.execute(
+        "SELECT path FROM platform_artifacts WHERE id = ?", (artifact_id,)
+    ).fetchone()
+    assert row is not None
+    return Path(row[0]).read_bytes()
+
+
+def test_assertion_report_html_layout(tmp_path):
+    """HTML 报告：text/html content type + .html 产物名 + 自包含表格（含 URL 类型行）。"""
+    services, session = _seed_services(tmp_path)
+    try:
+        _seed_run(services, assertions=ASSERTIONS_WITH_URL)
+        response = _call(
+            _route(services),
+            token=session["token"],
+            query_string=b"format=html",
+            project_id=PROJECT_ID,
+            run_id=RUN_ID,
+        )
+        assert response.status_code == 201
+        body = json.loads(response.body)
+        artifact = body["artifact"]
+        assert artifact["contentType"] == "text/html; charset=utf-8"
+        assert artifact["name"].startswith(f"assertion-report-{RUN_ID}.")
+        assert artifact["name"].endswith(".html")
+
+        document = _artifact_bytes(services, artifact["id"]).decode("utf-8")
+        assert document.startswith("<!doctype html>")
+        assert "断言报告 · 报告流程" in document
+        assert "Run {0} · 环境 报告环境 · 状态 success".format(RUN_ID) in document
+        assert "2/3 通过" in document
+        assert "可见性断言" in document
+        assert "<code>visible</code>" in document
+        assert "数量断言" in document
+        assert "<code>3</code>" in document
+        assert "<code>2</code>" in document
+        # URL 断言行：类型列透传 url。
+        assert "登录页" in document
+        assert "<td>url</td>" in document
+        assert 'class="passed"' in document
+        assert 'class="failed"' in document
+    finally:
+        services.close()
+
+
+def test_assertion_report_html_escapes_values_and_redacts_secret(tmp_path):
+    """HTML 产物：字段 html.escape（注入不成形）且 actual 沿既有脱敏不写明文 secret。"""
+    services, session = _seed_services(tmp_path)
+    try:
+        encrypted = services.encrypt("s3cret-token-42")
+        services.database.execute(
+            """
+            INSERT INTO project_secrets (
+              id, project_id, name, key_version, iv, tag, ciphertext,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+            """,
+            (
+                "secret-report-html",
+                PROJECT_ID,
+                "API_TOKEN",
+                encrypted["iv"],
+                encrypted["tag"],
+                encrypted["ciphertext"],
+                now(),
+                now(),
+            ),
+        )
+        _seed_run(
+            services,
+            actual_overrides={0: 'token=s3cret-token-42"><script>alert(1)</script>'},
+        )
+        response = _call(
+            _route(services),
+            token=session["token"],
+            query_string=b"format=html",
+            project_id=PROJECT_ID,
+            run_id=RUN_ID,
+        )
+        assert response.status_code == 201
+        document = _artifact_bytes(
+            services, json.loads(response.body)["artifact"]["id"]
+        ).decode("utf-8")
+        assert "s3cret-token-42" not in document
+        assert "<script>" not in document
+        assert "&lt;script&gt;" in document
+        assert "token=***" in document
     finally:
         services.close()
 

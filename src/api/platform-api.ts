@@ -1047,7 +1047,7 @@ export function createPlatformAssertionReport(
   token: string,
   projectId: string,
   runId: string,
-  format: "json" | "xlsx",
+  format: "json" | "xlsx" | "html",
 ) {
   // 生成断言报告并登记为 run artifact；客户端再按返回 artifactId 走既有
   // fetchPlatformArtifact 下载链路。

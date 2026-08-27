@@ -83,6 +83,10 @@ class _ReportMixin:
             )
             extension = "xlsx"
             data = self._assertion_report_xlsx(report)
+        elif run_format == "html":
+            content_type = "text/html; charset=utf-8"
+            extension = "html"
+            data = self._assertion_report_html(report)
         else:
             content_type = "application/json"
             extension = "json"
@@ -149,3 +153,68 @@ class _ReportMixin:
         buffer = io.BytesIO()
         workbook.save(buffer)
         return buffer.getvalue()
+
+    def _assertion_report_html(self, report: dict[str, Any]) -> bytes:
+        """渲染自包含 HTML 断言报告。
+
+        自包含（无外链资源）、所有字段 html.escape 转义防注入；
+        actual 沿用 build_assertion_report 的 redact_run_value 脱敏结果，
+        故 HTML 产物同样不写明文 secret。
+        """
+        import html
+
+        esc = html.escape
+        rows = report["assertions"]
+        passed = sum(1 for row in rows if row["passed"])
+        total = len(rows)
+        body_rows = []
+        for index, row in enumerate(rows, start=1):
+            body_rows.append(
+                f'<tr class="{"passed" if row["passed"] else "failed"}">'
+                f"<td>{index}</td>"
+                f"<td>{esc(str(row['title']))}</td>"
+                f"<td>{esc(str(row['type']))}</td>"
+                f'<td>{"通过" if row["passed"] else "失败"}</td>'
+                f"<td><code>{esc(str(row['expected']))}</code></td>"
+                f"<td><code>{esc(str(row['actual']))}</code></td>"
+                f"<td>{int(row['durationMs'])}</td>"
+                "</tr>"
+            )
+        # 模板用 @@TOKEN@@ 占位 + str.replace 填充：避免 CSS 花括号与 str.format 冲突。
+        document = (
+            "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n"
+            "<meta charset=\"utf-8\" />\n"
+            "<title>断言报告 · @@TITLE@@</title>\n"
+            "<style>"
+            "body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;"
+            "margin:2rem auto;max-width:960px;padding:0 1rem;color:#1f2328;}"
+            "h1{font-size:1.25rem;}.meta{color:#57606a;font-size:.875rem;"
+            "margin-bottom:1rem;}.summary{font-size:.875rem;margin-bottom:1rem;}"
+            "table{width:100%;border-collapse:collapse;font-size:.875rem;}"
+            "th,td{border:1px solid #d0d7de;padding:.5rem .625rem;text-align:left;}"
+            "th{background:#f6f8fa;}tr.failed td{background:#ffebe9;}"
+            "code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+            "font-size:.8125rem;}"
+            "</style>\n</head>\n<body>\n"
+            "<h1>断言报告 · @@TITLE@@</h1>\n"
+            "<div class=\"meta\">Run @@RUN_ID@@ · 环境 @@ENV@@ · 状态 @@STATUS@@ · "
+            "生成于 @@GENERATED_AT@@</div>\n"
+            "<div class=\"summary\">@@PASSED@@/@@TOTAL@@ 通过</div>\n"
+            "<table><thead><tr><th>序号</th><th>步骤</th><th>类型</th><th>判定</th>"
+            "<th>期望</th><th>实际</th><th>耗时(ms)</th></tr></thead><tbody>\n"
+            "@@ROWS@@\n"
+            "</tbody></table>\n</body>\n</html>\n"
+        )
+        substitutions = {
+            "@@TITLE@@": esc(str(report["flowName"])),
+            "@@RUN_ID@@": esc(str(report["runId"])),
+            "@@ENV@@": esc(str(report["environmentName"])),
+            "@@STATUS@@": esc(str(report["status"])),
+            "@@GENERATED_AT@@": esc(str(report["generatedAt"])),
+            "@@PASSED@@": str(passed),
+            "@@TOTAL@@": str(total),
+            "@@ROWS@@": "\n".join(body_rows),
+        }
+        for token, value in substitutions.items():
+            document = document.replace(token, value)
+        return document.encode("utf-8")

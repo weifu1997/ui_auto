@@ -251,7 +251,7 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         role = services.require_project_role(project_id, user.id)
         services.run_by_id(run_id, project_id)
         run_format = _text(request.query_params.get("format")) or "json"
-        if run_format not in ("json", "xlsx"):
+        if run_format not in ("json", "xlsx", "html"):
             raise PlatformError(400, "REPORT_FORMAT_INVALID")
         report = services.build_assertion_report(run_id, run_format)
         services.audit(
