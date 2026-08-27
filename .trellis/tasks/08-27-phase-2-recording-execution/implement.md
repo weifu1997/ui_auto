@@ -20,7 +20,7 @@
 - [x] B1. 补测启停路径：新增 `tests/unit/test_runner_lifecycle.py`（6 用例，假 Playwright 栈，含 CM 协议），拆分前对原代码全绿（基线）。
 - [x] B2. 抽 `_BrowserSession` context manager + `_is_canceled` + `_close_quietly`（`hooks["browser"]` 回调与 `storage_state` 为唯一差异参数；`tracing_started` 留在调用方 inner finally）：两入口改为使用，拆后 6 用例保持全绿。
 - [x] B3. `ManagedRunner._close_browser` 复用 `_close_quietly`（行为等价：逐项 try/except 关闭）。
-- [x] B4. [gate] 通过：`npm run test:py` 268 全绿（262 基线 + 6 启停用例；断言/取消/重试/并发不回归）。提交 `081bfab`。
+- [x] B4. [gate] 通过：`npm run test:py` 268 全绿（262 基线 + 6 启停用例；断言/取消/重试/并发不回归）。提交 `91dfecc`。
 
 ## 阶段 C：D6 后端 — 会话元数据落库 + 重启「已中断」+ 列表端点（R2-3 后端）
 
