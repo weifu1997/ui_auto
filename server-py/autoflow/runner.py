@@ -73,6 +73,20 @@ def _navigate_timeout_ms(environment_or_step: dict[str, Any], default_seconds: i
     return max(_NAVIGATE_TIMEOUT_FLOOR_MS, max(1, int(environment_or_step.get("timeout", default_seconds))) * 1000)
 
 
+def _wait_step_cap_ms() -> int:
+    """W1-5：「等待」步骤的硬上限（毫秒）。
+
+    保证任何单个步骤时长有界，从而"取消最坏延迟 = 当前步骤上限"成立。
+    环境变量 WAIT_STEP_MAX_MS 可调，默认 10 分钟，下限 1 秒。
+    """
+    raw = os.environ.get("WAIT_STEP_MAX_MS", "600000")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 600_000
+    return max(1_000, value)
+
+
 def _ensure_page_opened(
     page: Any,
     element: dict[str, Any] | None,
@@ -95,6 +109,7 @@ def _locator_for(
     page: Any,
     element: dict[str, Any],
     test_id_attribute: str = "data-testid",
+    on_locator_fallback: Any = None,
 ) -> Any:
     value = str(element.get("value", ""))
     method = element.get("method")
@@ -105,7 +120,18 @@ def _locator_for(
     if method == "label":
         return page.get_by_label(value)
     if method == "text":
-        return page.get_by_text(value, exact=True)
+        # W0-2 兜底：优先全字符串匹配（Playwright 对参数做空白归一化）；
+        # 页面上没有完全等值文本时（典型是旧数据里被截断的 60 字符标签）
+        # 自动降级为子串匹配，保证"录了能放"，并通过回调暴露可观测事件。
+        exact_locator = page.get_by_text(value, exact=True)
+        try:
+            if exact_locator.count() > 0:
+                return exact_locator
+        except Exception:
+            pass
+        if on_locator_fallback is not None:
+            on_locator_fallback(value)
+        return page.get_by_text(value, exact=False)
     if method == "role":
         match = re.match(r"^([\w-]+)(?:\[name=['\"]?(.*?)['\"]?\])?$", value)
         role = match.group(1) if match else value
@@ -165,6 +191,11 @@ def _assert_visibility(
         return False, expected, actual
 
 
+def _compare_normalize(value: str) -> str:
+    """W2-5：trimCompare 默认开启时的比较归一化（首尾空白 + 连续空白折叠）。"""
+    return " ".join(value.split())
+
+
 def _assert_text(
     locator: Any,
     page: Any,
@@ -172,7 +203,12 @@ def _assert_text(
     timeout_ms: int,
     value: str,
 ) -> tuple[bool, str, str]:
-    """文本断言：元素文本按匹配方式命中期望值（exact/contains，缺省 contains）。"""
+    """文本断言：元素文本按匹配方式命中期望值（exact/contains，缺省 contains）。
+
+    trimCompare 未显式设为 false 时（默认开），比较前对实际/期望文本做
+    空白归一化——录制采集折叠空白的历史产物与含换行的真实 text_content
+    才能互相匹配；期望值保留原样参与报告展示。
+    """
     match = step.get("assertMatch")
     if match not in _ASSERT_MATCHES:
         match = "contains"
@@ -183,8 +219,17 @@ def _assert_text(
         actual = locator.text_content(timeout=timeout_ms) or ""
     except Exception:
         return False, expected, "not-found"
-    passed = actual == expected if match == "exact" else expected in actual
-    return passed, expected, actual
+    compare_expected, compare_actual = expected, actual
+    if step.get("trimCompare") is not False:
+        compare_expected = _compare_normalize(expected)
+        compare_actual = _compare_normalize(actual)
+    passed = (
+        compare_actual == compare_expected
+        if match == "exact"
+        else compare_expected in compare_actual
+    )
+    # 报告记录归一化后的 actual：失败时用户看到的差异即判定所用差异。
+    return passed, expected, compare_actual
 
 
 def _assert_count(
@@ -255,18 +300,23 @@ def _run_assertion(
     timeout_ms: int,
     value: str,
 ) -> dict[str, Any]:
-    """按动作分发到四种断言判定，返回结构化判定 {type, passed, expected, actual}。"""
+    """按动作分发到四种断言判定，返回结构化判定 {type, passed, expected, actual}。
+
+    W2-5：未知断言动作显式报 UNSUPPORTED_ACTION，不再静默落属性断言。
+    """
     action = step.get("action")
+    if action not in _ASSERTION_TYPES:
+        raise RuntimeError(f"UNSUPPORTED_ACTION: {action}")
     if action == "可见性断言":
         passed, expected, actual = _assert_visibility(locator, page, step, timeout_ms, value)
     elif action == "文本断言":
         passed, expected, actual = _assert_text(locator, page, step, timeout_ms, value)
     elif action == "数量断言":
         passed, expected, actual = _assert_count(locator, page, step, timeout_ms, value)
-    else:  # 属性断言
+    else:  # 属性断言（且仅属性断言会走到这里）
         passed, expected, actual = _assert_attribute(locator, page, step, timeout_ms, value)
     return {
-        "type": _ASSERTION_TYPES.get(action, "text"),
+        "type": _ASSERTION_TYPES[action],
         "passed": passed,
         "expected": expected,
         "actual": actual,
@@ -336,11 +386,25 @@ def _execute_step(
             ),
             None,
         )
+    def _emit_locator_fallback(raw_value: str) -> None:
+        # W0-2 可观测性：text 定位从 exact 降级为子串匹配时打点。
+        hooks["event"](
+            "step.locatorFallback",
+            {
+                "index": index,
+                "stepId": step.get("id"),
+                "title": step.get("title"),
+                "method": "text",
+                "value": str(raw_value)[:200],
+            },
+        )
+
     locator = (
         _locator_for(
             page,
             element,
             str(input.get("environment", {}).get("testIdAttribute", "data-testid")),
+            on_locator_fallback=_emit_locator_fallback,
         )
         if element
         else None
@@ -383,6 +447,19 @@ def _execute_step(
                 wait_ms = int(value)
             except ValueError:
                 wait_ms = timeout
+            cap = _wait_step_cap_ms()
+            if wait_ms > cap:
+                hooks["event"](
+                    "step.waitCapped",
+                    {
+                        "index": index,
+                        "stepId": step.get("id"),
+                        "requestedMs": wait_ms,
+                        "cappedMs": cap,
+                        "message": f"等待时长被上限截断：{cap}ms",
+                    },
+                )
+                wait_ms = cap
             page.wait_for_timeout(wait_ms)
         elif action in _ASSERTION_TYPES:
             assertion_started = time.time()
@@ -490,6 +567,11 @@ def execute_browser_run(
             for index, step in enumerate(steps):
                 if hooks.get("signal") and hooks["signal"].is_set():
                     raise RuntimeError("RUN_CANCELED")
+                # W0-4 心跳：每步开始即上报进度，watchdog 依据其新鲜度判定，
+                # 长跑但健康的 run 不再因 updated_at 停滞被误杀。
+                progress = hooks.get("progress")
+                if callable(progress):
+                    progress(index)
                 step_started = time.time()
                 hooks["event"](
                     "step.started",

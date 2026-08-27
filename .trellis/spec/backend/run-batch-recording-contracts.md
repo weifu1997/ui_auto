@@ -255,3 +255,21 @@ if login_detected and not element_path_is_login_page:
         raise RuntimeError("ELEMENT_VALIDATION_LOGIN_INVALID")
     raise RuntimeError("ELEMENT_VALIDATION_LOGIN_REQUIRED")
 ```
+
+## Scenario: Integrity Hardening Contracts (W0–W2, 2026-08-27)
+
+### 1. Sensitive Word List Single Source
+- 唯一权威词表：`server-py/autoflow/sensitive.py`。浏览器注入脚本的正则由 `RECORDER_INIT_SCRIPT` 模板占位符替换生成；服务端判定 `is_sensitive_field` 直接委托。新增敏感词（含中文）只允许改这里，禁止在前后端各自复制正则。
+- 中文标签输入属于该契约范围：历史上前端词表含中文而服务端不含，造成明文经 GET events 外泄。回归锚点：`tests/unit/test_text_and_sensitive_fidelity.py::test_chinese_labeled_input_value_never_persists`。
+
+### 2. Run Finalize Transactional Contract
+- 终态落库唯一入口 `PlatformServices.finalize_completed_run(run_id, result)`：状态 UPDATE、flowOutputs、run.complete、审计、投递登记必须在同一 BEGIN IMMEDIATE 内提交；投递的 **网络发送** 用 `queue_run_deliveries(..., flush=False)` 只入队，COMMIT 之后统一 `deliver_pending_notifications()`。
+- 迟到成功兜底：行已被 watchdog 判死（failed）后收到 success 结果 → `absorb_late_completed_run` 补产物与 `run.lateCompletion` 事件，状态不回改。
+
+### 3. Heartbeat & Watchdog & Cancellation Marker
+- ManagedRunner hooks 增加 `progress(stepIndex)`：每步开始触发 `touch_run_heartbeat` 仅刷新 running 行 updated_at（不发事件流）。watchdog 窗口由环境变量 `RUN_WATCHDOG_MINUTES` 控制（默认 20，钳制 [5,240]），判定语义是"无步进超窗"。
+- 取消标记先行：`request_run_cancel` 无条件对 queued/running 写 `cancellation_requested=1` 再把仍 queued 的置 canceled；禁止回退为"先读后分支写"。
+- 「等待」步骤硬上限 `WAIT_STEP_MAX_MS`（默认 10 分钟，下限 1 秒），保证取消最坏延迟有界；截断发 `step.waitCapped`。
+
+### 4. Frontend: Persistent Run Dispatch Keys
+- `RunDispatchKeyMap`（src/pages/shared.tsx）：按用户分区持久化到 localStorage（base 键见 `RUN_DISPATCH_KEY_STORAGE`，TTL 24h）。五处调用统一 `createRunDispatchKeyStore()` 构造；新增运行入口不得再用裸 `new Map()`。登出清理经 account-state-reset 的 userScopedBases。

@@ -16,6 +16,7 @@ import {
   emptyFlows,
   emptyVariables,
   ensurePlatformRunSecrets,
+  createRunDispatchKeyStore,
   nextRunDispatchKey,
   platformRunAsRun,
   releaseRunDispatchKey,
@@ -41,7 +42,7 @@ export function AgentsPage({ project }: { project: Project }) {
   const [revisions, setRevisions] = useState<PlatformRevision[]>([]);
   const [loading, setLoading] = useState(false);
   const [runningRevisionId, setRunningRevisionId] = useState<string | null>(null);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const activeEnvironment = environments.find((environment) => environment.id === activeEnvironmentId) ?? environments[0];
 
   const loadRevisions = useCallback(async () => {

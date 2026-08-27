@@ -92,6 +92,8 @@ class CoreServices:
                 self.append_run_event(
                     row[0], "run.interrupted", {"reason": "RUN_ENQUEUE_FAILED"}
                 )
+        # W1-3：校验记录重启后不重排队（依赖进程内登录态快照），直接判死。
+        self.recover_interrupted_validations()
 
     @property
     def database(self) -> sqlite3.Connection:

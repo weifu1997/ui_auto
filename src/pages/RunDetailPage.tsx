@@ -28,7 +28,7 @@ import type { PlatformRun } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { message } from "../lib/antd-feedback";
 import type { Project, Run } from "../lib/mock-data";
-import { canUseCapability, nextRunDispatchKey, releaseRunDispatchKey, runIntentKey } from "./shared";
+import { canUseCapability, createRunDispatchKeyStore, nextRunDispatchKey, releaseRunDispatchKey, runIntentKey } from "./shared";
 
 type ProjectLayoutProps = {
   project: Project;
@@ -219,7 +219,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   const [platformTask, setPlatformTask] = useState<PlatformRun | null>(null);
   const [platformError, setPlatformError] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const [canceling, setCanceling] = useState(false);
 
   useEffect(() => {

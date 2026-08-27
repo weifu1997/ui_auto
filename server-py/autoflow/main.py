@@ -336,12 +336,25 @@ def create_app(services: PlatformServices | None = None) -> FastAPI:
     return app
 
 
+def _run_watchdog_minutes() -> int:
+    """W0-4：无心跳判死窗口（分钟）。
+
+    有了步骤级心跳后默认收紧到 20 分钟；配置异常时钳制在 [5, 240]。
+    """
+    raw = os.environ.get("RUN_WATCHDOG_MINUTES", "20")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 20
+    return max(5, min(240, value))
+
+
 def _maintenance_pass(services: PlatformServices, schedule: _MaintenanceSchedule) -> None:
     services.process_due_schedules()
     services.deliver_pending_notifications()
     services.recording_coordinator.sweep_expired()
     watchdog_cutoff = (
-        datetime.now(timezone.utc) - timedelta(minutes=30)
+        datetime.now(timezone.utc) - timedelta(minutes=_run_watchdog_minutes())
     ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     stuck = services.database.execute(
         """
@@ -354,6 +367,11 @@ def _maintenance_pass(services: PlatformServices, schedule: _MaintenanceSchedule
     for row in stuck:
         services.finalize_run_as_interrupted(row[0], "MANAGED_RUN_WATCHDOG_TIMEOUT")
         services.cancel_managed_run(row[0])
+    # W1-3：运行期收割卡死的元素校验。经 getattr 探测：维护流程必须容忍
+    # 最小服务面（如 operational-readiness 自检桩）。
+    reap_stale_validations = getattr(services, "reap_stale_element_validations", None)
+    if callable(reap_stale_validations):
+        reap_stale_validations()
     current_time = time.monotonic()
     if current_time - schedule.last_retention_cleanup < 3600:
         return

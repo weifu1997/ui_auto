@@ -785,6 +785,56 @@ export function createPlatformRun(token: string, projectId: string, input: { rev
   );
 }
 
+export type PlatformPreviewAssertion = {
+  stepIndex?: number;
+  stepId?: string;
+  title?: string;
+  type: string;
+  passed: boolean;
+  expected?: string;
+  actual?: string;
+  durationMs?: number;
+};
+
+export type PlatformPreviewEvent = {
+  kind: string;
+  data: Record<string, unknown>;
+};
+
+export type PlatformPreviewRun = {
+  result: {
+    status: "success" | "failed" | "canceled";
+    completedSteps?: number;
+    totalSteps?: number;
+    elapsedMs?: number;
+    error?: string;
+    assertions?: PlatformPreviewAssertion[];
+    [key: string]: unknown;
+  };
+  events: PlatformPreviewEvent[];
+};
+
+/** W1-6：编辑器「运行至此步骤」的试跑通道——直接执行、不落库，
+ *  断言结果不进入项目级通过率统计。 */
+export function previewPlatformRun(
+  token: string,
+  projectId: string,
+  input: {
+    environment: unknown;
+    flow: { id?: string; name?: string; steps: unknown[] };
+    elements: unknown[];
+    variables?: Record<string, unknown>;
+    secretNames?: string[];
+    upToStepId?: string;
+  },
+) {
+  return request<PlatformPreviewRun>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/preview`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
 export type PlatformSecret = {
   id: string;
   name: string;

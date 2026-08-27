@@ -145,4 +145,64 @@ describe("recording editor state", () => {
     expect(a.newElements[0].id).not.toContain("100");
     expect(a.newElements[0].id).not.toContain("999999");
   });
+
+  it("suggests text assertions for clicked text-located elements (W2-6)", () => {
+    const result: RecordingResult = {
+      ...recordingResult,
+      steps: [
+        { id: "open", title: "Open", action: "打开页面", value: "/" },
+        { id: "click-text", title: "Click text", action: "点击", element: "Text button" },
+      ],
+      elements: [
+        { id: "text-btn", name: "Text button", path: "/login", method: "text", value: "确认提交订单并支付" },
+      ],
+      requiredBindings: [],
+    };
+    const plan = planRecordingImport(result, "env-1", [], {}, 100);
+    const visibility = plan.generatedAssertions.filter((a) => a.action === "可见性断言");
+    const suggestions = plan.generatedAssertions.filter((a) => a.action === "文本断言");
+    expect(visibility.map((a) => a.element)).toEqual(["Text button"]);
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({
+      element: "Text button",
+      assertMatch: "contains",
+      value: "确认提交订单并支付",
+    });
+  });
+
+  it("skips attribute suggestion for secret-bound fills (W2-6)", () => {
+    // 密码步骤有绑定 → 不生成属性断言建议（明文值不应被断言固化）。
+    const bindings = { password: "project.loginPassword" };
+    const plan = planRecordingImport(recordingResult, "env-1", [], bindings, 100);
+    const valueSuggestions = plan.generatedAssertions.filter(
+      (a) => a.action === "属性断言",
+    );
+    expect(valueSuggestions).toEqual([]);
+  });
+
+  it("caps per-type assertion suggestions at ten (W2-6)", () => {
+    const manySteps = Array.from({ length: 14 }, (_, index) => ({
+      id: `click-${index}`,
+      title: `Click ${index}`,
+      action: "点击",
+      element: `按钮 ${index}`,
+    }));
+    const manyElements = Array.from({ length: 14 }, (_, index) => ({
+      id: `btn-${index}`,
+      name: `按钮 ${index}`,
+      path: "/x",
+      method: "text",
+      value: `订单确认按钮文字示例第${index}号`,
+    }));
+    const result: RecordingResult = {
+      steps: [{ id: "open", title: "Open", action: "打开页面", value: "/" }, ...manySteps],
+      elements: manyElements,
+      requiredBindings: [],
+      warnings: [],
+      lastSeq: 15,
+    };
+    const plan = planRecordingImport(result, "env-1", [], {}, 100);
+    expect(plan.generatedAssertions.filter((a) => a.action === "文本断言")).toHaveLength(10);
+    expect(plan.generatedAssertions.filter((a) => a.action === "可见性断言")).toHaveLength(14);
+  });
 });

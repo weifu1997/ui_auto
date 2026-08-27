@@ -179,6 +179,8 @@ class ManagedRunner:
             ),
             "artifact": callbacks["artifact"],
             "event": callbacks["event"] if item["kind"] == "run" else (lambda *_args: None),
+            # W0-4：步骤级心跳回调；未提供 progress 的入队方（如元素校验）安全降级。
+            "progress": callbacks.get("progress") or (lambda *_args: None),
             "browser": lambda browser, context: self._set_active_browser(
                 item["id"], browser, context
             ),

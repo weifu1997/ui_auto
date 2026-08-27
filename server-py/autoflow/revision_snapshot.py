@@ -25,6 +25,7 @@ STEP_KEYS = (
     "assertVisibility",
     "assertOperator",
     "assertAttribute",
+    "trimCompare",
     "output",
     "outputSource",
     "outputAttribute",

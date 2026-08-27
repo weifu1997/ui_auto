@@ -180,6 +180,7 @@ ROUTE_POLICIES = [
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/stop", "POST", "flow.edit", "in-memory session owner + project_id"),
     *_project("/api/platform/projects/{project_id}/element-validations", "POST", "run.execute"),
     *_indirect("/api/platform/projects/{project_id}/element-validations/{validation_id}", "GET", "project.view", "validation.project_id -> route project_id"),
+    *_indirect("/api/platform/projects/{project_id}/element-validations/{validation_id}/cancel", "POST", "run.execute", "validation.project_id -> route project_id"),
     *_indirect("/api/platform/validation-artifacts/{artifact_id}", "GET", "project.view", "validation artifact.project_id -> project"),
     *_indirect("/api/platform/artifacts/{artifact_id}", "GET", "project.view", "artifact.project_id -> project"),
     *_project("/api/platform/projects/{project_id}/revisions", "GET", "project.view"),

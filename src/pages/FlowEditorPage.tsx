@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "../router";
 import {
   ArrowLeftOutlined,
@@ -11,6 +11,7 @@ import {
   FileSearchOutlined,
   LoadingOutlined,
   MoreOutlined,
+  PartitionOutlined,
   AudioOutlined,
   PlayCircleFilled,
   PlusOutlined,
@@ -29,11 +30,15 @@ import { useRunStore } from "../stores/run-store";
 import { useSecretStore } from "../stores/secret-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { message, modal } from "../lib/antd-feedback";
-import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, previewPlatformRun, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
+import type { PlatformPreviewRun } from "../api/platform-api";
+
+// W3 试点：只读流程图懒加载为独立 chunk（React Flow 体积较大，避免进主包）。
+const FlowGraphView = lazy(() => import("../components/FlowGraphView"));
 import type { RecordingEvent, RecordingResult, RecordingSession } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { elementValidationLoginMessage } from "../lib/element-validation";
-import { describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, uniqueVariableNameValidator } from "./shared";
+import { createRunDispatchKeyStore, describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, uniqueVariableNameValidator } from "./shared";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,
@@ -48,7 +53,7 @@ import {
 } from "../lib/recording-editor-state";
 import { actionOptions } from "../lib/mock-data";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "../lib/mock-data";
-import { revisionInput, variableReference } from "../lib/revision-snapshot";
+import { revisionInput, snapshotVariables, variableReference } from "../lib/revision-snapshot";
 
 const emptyFlows: Flow[] = [];
 const emptyElements: ElementAsset[] = [];
@@ -273,7 +278,9 @@ export default function FlowEditorPage() {
   // 批量编辑：仅断言步骤可勾选（rowSelection），批量操作条改匹配方式/失败策略。
   const [selectedStepIds, setSelectedStepIds] = useState<string[]>([]);
   const [runToStep, setRunToStep] = useState(false);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const [previewResult, setPreviewResult] = useState<PlatformPreviewRun | null>(null);
+  const [flowGraphOpen, setFlowGraphOpen] = useState(false);
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const [recordingOpen, setRecordingOpen] = useState(false);
   const [recordingSession, setRecordingSession] = useState<RecordingSession | null>(null);
   const [recordingResult, setRecordingResult] = useState<RecordingResult | null>(null);
@@ -293,7 +300,7 @@ export default function FlowEditorPage() {
   const [recordingImportBusy, setRecordingImportBusy] = useState(false);
   // 导入弹窗里勾选的候选断言（按元素名去重；候选断言与元素一一对应，元素名
   // 是稳定键，不随 plan 重算漂移）。默认不勾选。
-  const [selectedAssertionElements, setSelectedAssertionElements] = useState<Set<string>>(new Set());
+  const [selectedAssertionIds, setSelectedAssertionIds] = useState<Set<string>>(new Set());
   const recordingPollRef = useRef<number | undefined>(undefined);
   const recordingLastSeqRef = useRef(0);
   const recordingPollInFlightRef = useRef(false);
@@ -586,11 +593,11 @@ export default function FlowEditorPage() {
     [recordingResult],
   );
 
-  const toggleRecordingAssertion = useCallback((elementName: string, checked: boolean) => {
-    setSelectedAssertionElements((prev) => {
+  const toggleRecordingAssertion = useCallback((assertionId: string, checked: boolean) => {
+    setSelectedAssertionIds((prev) => {
       const next = new Set(prev);
-      if (checked) next.add(elementName);
-      else next.delete(elementName);
+      if (checked) next.add(assertionId);
+      else next.delete(assertionId);
       return next;
     });
   }, []);
@@ -823,7 +830,7 @@ export default function FlowEditorPage() {
       clearRecordingPoll();
       setRecordingSession(stopped.session);
       setRecordingResult(stopped.result);
-      setSelectedAssertionElements(new Set());
+      setSelectedAssertionIds(new Set());
       setRecordingSecretMap({});
       clearRecordingStorage();
     } catch {
@@ -845,7 +852,7 @@ export default function FlowEditorPage() {
       clearRecordingPoll();
       setRecordingSession(canceled.session);
       setRecordingResult(null);
-      setSelectedAssertionElements(new Set());
+      setSelectedAssertionIds(new Set());
       setRecordingEvents([]);
       clearRecordingStorage();
       message.info("录制已取消");
@@ -879,7 +886,7 @@ export default function FlowEditorPage() {
       const finalNewElements = plan.newElements.map((element) => mergeElementEdits(element, elementEdits));
       // 勾选的候选断言并入 importedSteps（追加在录制步骤之后）。
       const checkedAssertions = plan.generatedAssertions.filter((assertion) =>
-        selectedAssertionElements.has(assertion.element ?? ""),
+        selectedAssertionIds.has(assertion.id),
       );
       const stepsToImport = [...plan.importedSteps, ...checkedAssertions];
       // All fallible work completes first. The two synchronous store writes then
@@ -891,7 +898,7 @@ export default function FlowEditorPage() {
     }
     setRecordingResult(null);
     setRecordingSession(null);
-    setSelectedAssertionElements(new Set());
+    setSelectedAssertionIds(new Set());
     setRecordingEvents([]);
     clearRecordingStorage();
     message.success("录制步骤已追加到流程草稿，请保存后发布");
@@ -996,6 +1003,45 @@ export default function FlowEditorPage() {
       setRunToStep(false);
     }
   };
+  // W1-6：「运行至此步骤」走服务端试跑通道（不落库、不污染通过率统计），
+  // 正式全量运行仍由 run() 走真实运行链路。
+  const previewToStep = async (upToStepId: string) => {
+    if (steps.length === 0) {
+      message.error("请先添加至少一个流程步骤。");
+      return;
+    }
+    const environment = activeEnvironment;
+    if (!environment) {
+      message.error("当前项目没有可用运行环境");
+      return;
+    }
+    const platformContext = platformProjectContext(project.id);
+    if (!platformContext) {
+      message.error("当前项目尚未连接 Platform，请先完成项目同步");
+      return;
+    }
+    setRunToStep(true);
+    try {
+      if (!(await ensurePlatformRunSecrets(platformContext.session.token, platformContext.projectId, variables, steps))) {
+        return;
+      }
+      const input = revisionInput(flow, environment, elements, variables);
+      const stepsToRun = steps.slice(0, steps.findIndex((step) => step.id === upToStepId) + 1);
+      const outcome = await previewPlatformRun(platformContext.session.token, platformContext.projectId, {
+        environment: input.environment,
+        flow: { id: input.flow.id, name: input.flow.name, steps: stepsToRun },
+        elements: input.elements,
+        variables: snapshotVariables(variables),
+        secretNames: input.secretNames,
+        upToStepId,
+      });
+      setPreviewResult(outcome);
+    } catch (error) {
+      message.error(describePlatformRunError(error));
+    } finally {
+      setRunToStep(false);
+    }
+  };
   return (
     <div className="editor-page">
       <header className="editor-topbar">
@@ -1008,6 +1054,13 @@ export default function FlowEditorPage() {
           <span>{isDirty ? "未保存修改" : "已保存"}</span>
         </div>
         <div className="editor-actions">
+          <Button
+            icon={<PartitionOutlined />}
+            disabled={steps.length === 0}
+            onClick={() => setFlowGraphOpen(true)}
+          >
+            流程图
+          </Button>
           {recordingSession && !isTerminalRecordingStatus(recordingSession.status) ? (
             <>
               <span className="recording-status" aria-live="polite">
@@ -1204,7 +1257,7 @@ export default function FlowEditorPage() {
               elements={elements}
               onChange={updateStep}
               runInFlight={runToStep}
-              onRunToHere={() => run(selectedStep.id)}
+              onRunToHere={() => previewToStep(selectedStep.id)}
             />
           ) : (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="从左侧添加一个步骤开始编排" />
@@ -1342,7 +1395,7 @@ export default function FlowEditorPage() {
         onCancel={() => {
           setRecordingResult(null);
           setRecordingSession(null);
-          setSelectedAssertionElements(new Set());
+          setSelectedAssertionIds(new Set());
           setRecordingEvents([]);
         }}
         width={720}
@@ -1352,7 +1405,7 @@ export default function FlowEditorPage() {
             onClick={() => {
               setRecordingResult(null);
               setRecordingSession(null);
-              setSelectedAssertionElements(new Set());
+              setSelectedAssertionIds(new Set());
               setRecordingEvents([]);
             }}
           >取消</Button>,
@@ -1422,13 +1475,13 @@ export default function FlowEditorPage() {
             </ul>
             {draftPlan && draftPlan.generatedAssertions.length > 0 && (
               <div className="recording-assertions">
-                <p>候选可见性断言（默认不勾选，勾选后随录制步骤一并导入，可后续在编排器删改）：</p>
+                <p>候选断言（含可见性，以及可挑选的文本/属性建议草稿；默认不勾选）：</p>
                 {draftPlan.generatedAssertions.map((assertion) => (
-                  <label key={assertion.element ?? assertion.id} className="recording-assertion-row">
+                  <label key={assertion.id} className="recording-assertion-row">
                     <Checkbox
-                      checked={selectedAssertionElements.has(assertion.element ?? "")}
+                      checked={selectedAssertionIds.has(assertion.id)}
                       onChange={(event) =>
-                        toggleRecordingAssertion(assertion.element ?? "", event.target.checked)
+                        toggleRecordingAssertion(assertion.id, event.target.checked)
                       }
                     >
                       {assertion.title}
@@ -1601,6 +1654,84 @@ export default function FlowEditorPage() {
             )}
           </div>
         )}
+      </Modal>
+      <Modal
+        open={previewResult !== null}
+        title="试跑结果"
+        onCancel={() => setPreviewResult(null)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setPreviewResult(null)}>
+            关闭
+          </Button>,
+        ]}
+        width={640}
+      >
+        {previewResult ? (
+          <div className="preview-result" aria-live="polite">
+            <Alert
+              showIcon
+              type={
+                previewResult.result.status === "success"
+                  ? "success"
+                  : previewResult.result.status === "failed"
+                    ? "error"
+                    : "warning"
+              }
+              message={`试跑${
+                previewResult.result.status === "success"
+                  ? "成功"
+                  : previewResult.result.status === "failed"
+                    ? "失败"
+                    : "已取消"
+              }${typeof previewResult.result.elapsedMs === "number" ? ` · ${previewResult.result.elapsedMs}ms` : ""}`}
+              description={
+                previewResult.result.error
+                  ? String(previewResult.result.error)
+                  : "试跑不产生运行记录，也不影响项目通过率统计。"
+              }
+            />
+            {(previewResult.result.assertions ?? []).length > 0 ? (
+              <ul className="preview-assertions">
+                {(previewResult.result.assertions ?? []).map((item, index) => (
+                  <li key={`${item.stepId ?? index}-${index}`}>
+                    <Tag color={item.passed ? "success" : "error"}>
+                      {item.passed ? "通过" : "失败"}
+                    </Tag>
+                    <span>{item.title ?? item.stepId ?? `步骤 ${item.stepIndex}`}</span>
+                    {typeof item.expected === "string" && (
+                      <span className="preview-assertion-detail">
+                        期望「{item.expected}」实际「{item.actual ?? ""}」
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>本次试跑没有断言步骤。</p>
+            )}
+          </div>
+        ) : null}
+      </Modal>
+      <Modal
+        open={flowGraphOpen}
+        title="流程图（只读）"
+        onCancel={() => setFlowGraphOpen(false)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setFlowGraphOpen(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={720}
+      >
+        <Suspense fallback={<p>流程图加载中…</p>}>
+          <FlowGraphView
+            steps={steps}
+            onSelectStep={(stepId) => {
+              setSelectedStep(stepId);
+              setFlowGraphOpen(false);
+            }}
+          />
+        </Suspense>
       </Modal>
       {project && secretCreatorStepId !== null && (
         <SecretCreatorDrawer
@@ -2010,8 +2141,21 @@ function StepForm({
           </span>
           <Input
             value={step.value}
-            onChange={(event) => onChange({ value: event.target.value })}
-            placeholder="支持 {{env.baseUrl}}、{{project.username}} 等变量引用"
+            inputMode={step.action === "数量断言" ? "numeric" : undefined}
+            onChange={(event) =>
+              onChange({
+                // W2-5：数量断言期望值只允许数字，配置期拦截非法输入。
+                value:
+                  step.action === "数量断言"
+                    ? event.target.value.replace(/[^0-9]/g, "")
+                    : event.target.value,
+              })
+            }
+            placeholder={
+              step.action === "数量断言"
+                ? "纯数字，例如 3"
+                : "支持 {{env.baseUrl}}、{{project.username}} 等变量引用"
+            }
           />
         </label>
       )}
@@ -2082,7 +2226,7 @@ function StepForm({
         <Button icon={<PlayCircleFilled />} disabled={runInFlight} onClick={onRunToHere}>
           运行至此步骤
         </Button>
-        <span>会从第一步开始执行，完成当前步骤后停止。</span>
+        <span>在服务端直接试跑（不产生运行记录、不影响通过率统计）。</span>
       </div>
     </div>
   );

@@ -207,5 +207,67 @@ export function planRecordingImport(
     }),
   );
 
+  // W2-6：在可见性之外追加「建议草稿」——文本断言（点击 text 定位元素）与
+  // 属性断言（填写了非敏感值）。默认不勾选，用户在导入面板自行挑选；
+  // 每类上限 10 条，避免超大录制淹没面板。
+  const assetByName = new Map(
+    result.elements.map((asset) => [String(asset.name), asset] as const),
+  );
+  const boundStepIds = new Set(Object.keys(secretBindings));
+  let suggestionSeq = generatedAssertions.length;
+  const suggestionLimit = { text: 10, attribute: 10 };
+  for (const recorded of result.steps) {
+    if (typeof recorded.element !== "string" || !recorded.element) continue;
+    const resolvedName = elementNames.get(recorded.element);
+    if (!resolvedName) continue;
+    const asset = assetByName.get(String(recorded.element));
+    if (!asset) continue;
+
+    if (
+      recorded.action === "点击" &&
+      suggestionLimit.text > 0 &&
+      asset.method === "text" &&
+      typeof asset.value === "string" &&
+      asset.value.trim().length >= 4
+    ) {
+      suggestionLimit.text -= 1;
+      const snippet = asset.value.trim();
+      generatedAssertions.push({
+        id: `rec-assert-${now}-${suggestionSeq++}`,
+        title: `「${resolvedName}」文本包含「${snippet.slice(0, 24)}${snippet.length > 24 ? "…" : ""}」`,
+        action: "文本断言",
+        element: resolvedName,
+        value: snippet,
+        assertMatch: "contains",
+        timeout: 10,
+        failurePolicy: "立即失败",
+        status: "pending" as const,
+      });
+    }
+
+    if (
+      recorded.action === "填写" &&
+      suggestionLimit.attribute > 0 &&
+      !boundStepIds.has(recorded.id) &&
+      typeof recorded.value === "string" &&
+      recorded.value.trim() !== ""
+    ) {
+      suggestionLimit.attribute -= 1;
+      const snippet = recorded.value.trim();
+      generatedAssertions.push({
+        id: `rec-assert-${now}-${suggestionSeq++}`,
+        title: `「${resolvedName}」value 含「${snippet.slice(0, 24)}${snippet.length > 24 ? "…" : ""}」`,
+        action: "属性断言",
+        element: resolvedName,
+        value: snippet,
+        assertAttribute: "value",
+        assertMatch: "contains",
+        timeout: 10,
+        failurePolicy: "立即失败",
+        status: "pending" as const,
+      });
+    }
+  }
+
   return { newElements, importedSteps, elementsToValidate, generatedAssertions };
 }

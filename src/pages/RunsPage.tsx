@@ -7,7 +7,7 @@ import { readPlatformProjectMap, readStoredPlatformSession } from "../api/platfo
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
-import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
+import { FilterBar, FilterItem, PageHeading, canUseCapability, createRunDispatchKeyStore, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
 import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
@@ -42,7 +42,7 @@ export function RunsPage({ project }: { project: Project }) {
   const [platformPageRuns, setPlatformPageRuns] = useState<Run[]>([]);
   const [platformTotal, setPlatformTotal] = useState(0);
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const [refreshing, setRefreshing] = useState(false);
   const [batches, setBatches] = useState<PlatformRunBatch[]>([]);
   const [batchTotal, setBatchTotal] = useState(0);

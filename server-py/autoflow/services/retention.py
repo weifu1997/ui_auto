@@ -117,4 +117,55 @@ class RetentionServices:
             (run_cutoff,),
         ).rowcount
 
+        # 5. W1-2 孤儿文件清扫：磁盘上存在而 platform_artifacts 无行引用、
+        # 且写入时间超过 24h 的产物文件。来源是取消窗口/completed 崩溃等
+        # 「已写盘未登记」的半途文件；retention 只认 DB 行，这些文件此前
+        # 只增不减。
+        summary["orphanFiles"] = self._sweep_orphan_artifact_files(
+            artifact_directory, max_age_hours=24, dry_run=dry_run
+        )
+
         return summary
+
+    def _sweep_orphan_artifact_files(
+        self,
+        artifact_directory: Path,
+        *,
+        max_age_hours: int,
+        dry_run: bool,
+    ) -> int:
+        base = Path(artifact_directory)
+        if not base.is_dir():
+            return 0
+        referenced: set[str] = set()
+        for (path_value,) in self.database.execute(
+            "SELECT path FROM platform_artifacts"
+        ).fetchall():
+            if isinstance(path_value, str) and path_value:
+                try:
+                    referenced.add(str(Path(path_value).resolve()))
+                except OSError:
+                    continue
+        cutoff_ts = (
+            datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        ).timestamp()
+        removed = 0
+        for candidate in base.rglob("*"):
+            if not candidate.is_file():
+                continue
+            try:
+                resolved = str(candidate.resolve())
+                stat_result = candidate.stat()
+            except OSError:
+                continue
+            if resolved in referenced:
+                continue
+            if stat_result.st_mtime > cutoff_ts:
+                continue
+            removed += 1
+            if not dry_run:
+                try:
+                    candidate.unlink()
+                except OSError:
+                    pass
+        return removed

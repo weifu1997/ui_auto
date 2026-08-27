@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json as _json
+import shutil
+import tempfile
 import threading
 import uuid
 import re
-import shutil
+from pathlib import Path
 from typing import Any
 from ..core import (
     days_ago_iso,
@@ -683,6 +685,31 @@ class RunServices:
             }
         return response
 
+    def request_run_cancel(self, run_id: str, project_id: str) -> None:
+        """W1-5：取消标记先行落库。
+
+        旧实现"先读状态再分支 UPDATE"存在窗口——读到 queued 后 worker 抢先
+        转 running，分支语句 0 行命中，cancellation_requested 未持久化，
+        终态被错记为 failed。现在无条件先把标记写到（queued/running 界内），
+        再对仍处 queued 的行直接置 canceled；completed 映射尊重标记。
+        """
+        self.database.execute(
+            """
+            UPDATE platform_runs
+            SET cancellation_requested = 1, updated_at = ?
+            WHERE id = ? AND project_id = ? AND status IN ('queued', 'running')
+            """,
+            (now(), run_id, project_id),
+        )
+        self.database.execute(
+            """
+            UPDATE platform_runs
+            SET status = 'canceled', updated_at = ?
+            WHERE id = ? AND project_id = ? AND status = 'queued'
+            """,
+            (now(), run_id, project_id),
+        )
+
     def cancel_managed_run(self, run_id: str) -> bool:
         return self.managed_runner.cancel(run_id)
 
@@ -761,6 +788,10 @@ class RunServices:
             )
             self.append_run_event(run_id, "run.started", {"executorType": "managed"})
 
+        def progress(step_index: int) -> None:
+            # W0-4 心跳：仅刷新 updated_at，不进事件流（每步都发事件会淹没详情页）。
+            self.touch_run_heartbeat(run_id, step_index)
+
         def event(kind: str, data: dict[str, Any]) -> None:
             self.append_run_event(
                 run_id,
@@ -797,32 +828,7 @@ class RunServices:
             )
 
         def completed(result: dict[str, Any]) -> None:
-            current_run = self.run_by_id(run_id)
-            safe_result = self.redact_run_value(current_run, result)
-            requested_status = (
-                result.get("status")
-                if result.get("status") in ("success", "failed")
-                else "failed"
-            )
-            status = "canceled" if current_run["cancellationRequested"] else requested_status
-            updated = self.database.execute(
-                """
-                UPDATE platform_runs
-                SET status = ?, result = ?, updated_at = ?
-                WHERE id = ? AND status IN ('queued', 'running')
-                """,
-                (status, json(safe_result), now(), run_id),
-            )
-            if updated.rowcount != 1:
-                return
-            self.persist_flow_outputs(current_run, safe_result)
-            self.append_run_event(
-                run_id,
-                "run.complete",
-                {"status": status, "result": safe_result, "executorType": "managed"},
-            )
-            self.audit_run_lifecycle(run_id, current_run, status)
-            self.queue_run_deliveries(self.run_by_id(run_id), status)
+            self.finalize_completed_run(run_id, result)
 
         self.managed_runner.enqueue(
             run_id,
@@ -832,6 +838,7 @@ class RunServices:
                 "event": event,
                 "artifact": artifact,
                 "completed": completed,
+                "progress": progress,
             },
             kind="run",
             workspace_id=self.project_for(run["projectId"])["workspace_id"],
@@ -1110,10 +1117,13 @@ class RunServices:
     def assertion_stats(
         self, project_id: str, window_days: int | None = None
     ) -> dict[str, Any]:
-        """项目级断言聚合（全量扫描含断言 run，非分页口径）。
+        """项目级断言聚合（仅统计正式终态 run，非分页口径）。
 
-        SQLite 对 JSON 列聚合不友好，应用层扫描 `platform_runs.result` 累加。
-        window_days 为 None 或 <=0 时不做时间过滤（全量）。返回含 windowDays。
+        W1-6 口径修正：只纳入 `status IN ('success','failed')` 且非取消的
+        run——编辑器试跑此前直接写库并混入分子分母，导致通过率被试跑污染；
+        canceled 的半截结果同样不具统计意义。SQLite 对 JSON 列聚合不友好，
+        应用层扫描 result 累加。window_days 为 None 或 <=0 时为全量窗口。
+        返回含 windowDays。
         """
         params: list[Any] = [project_id]
         window_sql = ""
@@ -1123,7 +1133,9 @@ class RunServices:
         rows = self.database.execute(
             f"""
             SELECT result FROM platform_runs
-            WHERE project_id = ? {window_sql}
+            WHERE project_id = ?
+              AND status IN ('success', 'failed')
+              {window_sql}
             """,
             tuple(params),
         ).fetchall()
@@ -1198,10 +1210,13 @@ class RunServices:
         }
         signal = threading.Event()
         events: list[dict[str, Any]] = []
+        # W1-2：预览产物统一落在专用临时目录，结束时整体删除，
+        # 不再向 /tmp 根部散落一次性 png/zip。
+        preview_directory = tempfile.mkdtemp(prefix="autoflow-preview-")
         hooks = {
             "signal": signal,
-            "artifact_path": lambda _name, extension: (
-                f"/tmp/ui-auto-preview-{uuid.uuid4()}.{extension}"
+            "artifact_path": lambda _name, extension: str(
+                Path(preview_directory) / f"artifact_{uuid.uuid4()}.{extension}"
             ),
             "artifact": lambda _data: None,
             "event": lambda kind, data: events.append({"kind": kind, "data": data}),
@@ -1213,6 +1228,8 @@ class RunServices:
             if str(error) == "RUN_STEP_NOT_FOUND":
                 raise PlatformError(400, "RUN_STEP_NOT_FOUND") from None
             raise PlatformError(400, "PREVIEW_RUN_FAILED") from error
+        finally:
+            shutil.rmtree(preview_directory, ignore_errors=True)
         run_ref = {"projectId": project_id}
         return {
             "result": self.redact_run_value(run_ref, result),
@@ -1284,6 +1301,94 @@ class RunServices:
             detail,
             run["projectId"],
         )
+
+    def touch_run_heartbeat(self, run_id: str, step_index: int = -1) -> None:
+        """W0-4 心跳：步骤开始时刷新 running 行的 updated_at。
+
+        watchdog 只依据 updated_at 新鲜度判活；异常情况下静默放弃本次心跳
+        （失败只影响误杀窗口，绝不能把执行线程拖挂）。
+        """
+        try:
+            self.database.execute(
+                """
+                UPDATE platform_runs SET updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now(), run_id),
+            )
+        except Exception:
+            pass
+
+    def finalize_completed_run(self, run_id: str, result: dict[str, Any]) -> None:
+        """执行终态落库（W1-1 事务化）。
+
+        状态终写、flowOutputs、run.complete 事件、审计与投递登记放在同一个
+        BEGIN IMMEDIATE 内；中途崩溃不再出现「账面已结束但输出丢失」。
+        投递的网络发送在提交之后统一触发。截图/trace 文件由 runner 在执行
+        期间先行落盘，事务失败时产生的无行引用文件由 retention 孤儿清扫处理。
+        """
+        current_run = self.run_by_id(run_id)
+        safe_result = self.redact_run_value(current_run, result)
+        requested_status = (
+            result.get("status")
+            if result.get("status") in ("success", "failed")
+            else "failed"
+        )
+        status = "canceled" if current_run["cancellationRequested"] else requested_status
+        try:
+            self.database.execute("BEGIN IMMEDIATE")
+            updated = self.database.execute(
+                """
+                UPDATE platform_runs
+                SET status = ?, result = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                (status, json(safe_result), now(), run_id),
+            )
+            if updated.rowcount != 1:
+                self.database.execute("ROLLBACK")
+                # W0-4 兜底：run 被 watchdog 判死（failed）后真实 success 结果
+                # 才返回时，状态不改回（通知口径已按 failed 发出），但产物与
+                # 可解释事件必须补齐入库，不再静默丢弃。
+                if requested_status == "success" and current_run["status"] == "failed":
+                    self.absorb_late_completed_run(run_id, current_run, safe_result)
+                return
+            self.persist_flow_outputs(current_run, safe_result)
+            self.append_run_event(
+                run_id,
+                "run.complete",
+                {"status": status, "result": safe_result, "executorType": "managed"},
+            )
+            self.audit_run_lifecycle(run_id, current_run, status)
+            self.queue_run_deliveries(
+                self.run_by_id(run_id), status, flush=False
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            try:
+                self.database.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        self.deliver_pending_notifications()
+
+    def absorb_late_completed_run(
+        self,
+        run_id: str,
+        current_run: dict[str, Any],
+        safe_result: dict[str, Any],
+    ) -> None:
+        """W0-4 兜底：watchdog 误杀后迟到的 success 结果，产物补齐入库。"""
+        try:
+            self.persist_flow_outputs(current_run, safe_result)
+            self.append_run_event(
+                run_id,
+                "run.lateCompletion",
+                {"attemptedStatus": "success", "result": safe_result},
+            )
+        except Exception:
+            # 兜底路径自身的写盘失败不应反向炸掉 worker 回调线程。
+            pass
 
     def finalize_run_as_interrupted(self, run_id: str, reason: str) -> None:
         updated = self.database.execute(

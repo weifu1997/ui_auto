@@ -11,6 +11,7 @@ const stepKeys = [
   "assertVisibility",
   "assertOperator",
   "assertAttribute",
+  "trimCompare",
   "output",
   "outputSource",
   "outputAttribute",

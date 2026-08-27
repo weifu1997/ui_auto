@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import re
 import threading
 import time
 import uuid
@@ -25,20 +24,22 @@ from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .browser_session import close_browser_session, launch_browser_session
-
-SENSITIVE_FIELD_PATTERN = re.compile(
-    r"password|passwd|secret|token|api[-_ ]?key|credential", re.IGNORECASE
+from .sensitive import (
+    JS_SENSITIVE_PATTERN_SOURCE,
+    SENSITIVE_FIELD_PATTERN,
 )
+from .sensitive import is_sensitive_field as shared_is_sensitive_field
+
 NAVIGATION_CAUSALITY_MS = 1500
 CLICK_SUPPRESSION_MS = 15000
 MEANINGFUL_KEYS = ("Enter", "Escape", "Tab")
 MAX_LOGICAL_STEPS = 1000
 
-RECORDER_INIT_SCRIPT = r"""
+RECORDER_INIT_SCRIPT_TEMPLATE = r"""
 (() => {
   if (window.__autoflowRecorderInstalled) return;
   window.__autoflowRecorderInstalled = true;
-  const SENSITIVE = /password|passwd|secret|token|api[-_ ]?key|credential/i;
+  const SENSITIVE = new RegExp("@@AUTOFLOW_SENSITIVE@@", "i");
   const frameKind = () => (window.top === window ? "top" : "child");
   const safeUrl = () => location.protocol + "//" + location.host + location.pathname;
   const labelText = (el) => {
@@ -94,7 +95,10 @@ RECORDER_INIT_SCRIPT = r"""
     role: roleFor(el),
     accessibleName: labelText(el) || (el.getAttribute("aria-label") || "").trim(),
     testid: el.getAttribute("data-testid") || "",
+    // text 是展示用的折叠截断标签；fullText 才是定位候选使用的原文全文
+    // （重放端 get_by_text 按空白归一化后的全字符串匹配，截断值必然失配）。
     text: (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60),
+    fullText: (el.innerText || el.textContent || "").trim().slice(0, 1000),
     css: cssPath(el),
     contenteditable: Boolean(el.isContentEditable || el.getAttribute("contenteditable") === "true"),
   });
@@ -237,6 +241,11 @@ RECORDER_INIT_SCRIPT = r"""
 })();
 """
 
+# 词表由 autoflow.sensitive 单源生成后替换进模板（W0-3），保持对外常量名不变。
+RECORDER_INIT_SCRIPT = RECORDER_INIT_SCRIPT_TEMPLATE.replace(
+    "@@AUTOFLOW_SENSITIVE@@", JS_SENSITIVE_PATTERN_SOURCE
+)
+
 
 def sanitize_url(url: str) -> str:
     parsed = urlsplit(url or "")
@@ -253,15 +262,8 @@ def url_path(url: str) -> str:
 
 
 def is_sensitive_field(element: dict[str, Any] | None) -> bool:
-    if not isinstance(element, dict):
-        return False
-    if str(element.get("type") or "").lower() == "password":
-        return True
-    haystack = " ".join(
-        str(element.get(field) or "")
-        for field in ("name", "id", "label", "accessibleName", "autocomplete")
-    )
-    return bool(SENSITIVE_FIELD_PATTERN.search(haystack))
+    """委托 sensitive 单源判定；保留名字以维持既有调用/测试的导入路径。"""
+    return shared_is_sensitive_field(element)
 
 
 def _element_key(element: dict[str, Any] | None) -> str:
@@ -537,8 +539,13 @@ class RecorderNormalizer:
             return {"method": "role", "value": f'{role}[name="{accessible}"]'}
         if element.get("label"):
             return {"method": "label", "value": str(element["label"])}
-        if element.get("text"):
-            return {"method": "text", "value": str(element["text"])}
+        if element.get("fullText") or element.get("text"):
+            # 全文优先：展示标签 text 已被折叠截断，直接作为定位值会导致
+            # 重放端全字符串匹配永远失败（W0-2）。
+            return {
+                "method": "text",
+                "value": str(element.get("fullText") or element["text"]),
+            }
         return {"method": "css", "value": str(element.get("css") or "")}
 
     def _unique_name(self, element: dict[str, Any]) -> str:
@@ -663,6 +670,7 @@ def validate_recorder_event(payload: Any) -> dict[str, Any] | None:
             "accessibleName": _bounded_text(element_source.get("accessibleName"), 120),
             "testid": _bounded_text(element_source.get("testid"), 200),
             "text": _bounded_text(element_source.get("text"), 200),
+            "fullText": _bounded_text(element_source.get("fullText"), 1000),
             "css": _bounded_text(element_source.get("css"), 500),
             "contenteditable": bool(element_source.get("contenteditable")),
         }

@@ -9,8 +9,15 @@ import { useFlowStore } from "../stores/flow-store";
 import { useSecretStore } from "../stores/secret-store";
 import { useWorkspaceStore, workspaceStorageKey } from "../stores/workspace-store";
 import { clearAllConflictSnapshots, syncOutboxStorageKey } from "./sync-outbox";
+// W1-7：运行派发幂等键也按登录用户分区持久化，切号时随其它分区一并清理。
+import { RUN_DISPATCH_KEY_STORAGE } from "../pages/shared";
 
-const userScopedBases = [workspaceStorageKey, runStorageKey, syncOutboxStorageKey];
+const userScopedBases = [
+  workspaceStorageKey,
+  runStorageKey,
+  syncOutboxStorageKey,
+  RUN_DISPATCH_KEY_STORAGE,
+];
 
 export function resetInMemoryWorkspaceState() {
   // 抑制 persist 写盘：重置内存态只应清空视图，不能把当前用户已持久化的数据覆盖成空对象。

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from ..core import now
 from ..http import PlatformError
 from ..services import PlatformServices
@@ -15,6 +17,21 @@ from ._shared import (
     _send,
     _text,
 )
+
+# preview 会在 worker 线程里同步驱动 Playwright，整个进程只允许一个并发
+# preview 占位；超出的请求立即失败而不是排队占死线程池。
+_PREVIEW_SLOTS = threading.BoundedSemaphore(1)
+
+
+async def dispatch_preview(
+    services: PlatformServices, project_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    if not _PREVIEW_SLOTS.acquire(blocking=False):
+        raise PlatformError(409, "PREVIEW_BUSY")
+    try:
+        return await run_in_threadpool(services.preview_run, project_id, body)
+    finally:
+        _PREVIEW_SLOTS.release()
 
 
 def register(router: APIRouter, services: PlatformServices) -> None:
@@ -266,7 +283,7 @@ def register(router: APIRouter, services: PlatformServices) -> None:
             body = {}
         if not isinstance(body, dict):
             raise PlatformError(400, "PREVIEW_INPUT_INVALID")
-        preview = services.preview_run(project_id, body)
+        preview = await dispatch_preview(services, project_id, body)
         return _send(Response(), 200, preview)
 
     @router.api_route(
@@ -288,26 +305,8 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 202,
                 {"run": services.run_response(run)},
             )
-        if run["status"] == "queued":
-            services.database.execute(
-                """
-                UPDATE platform_runs
-                SET cancellation_requested = 1,
-                    status = 'canceled',
-                    updated_at = ?
-                WHERE id = ? AND project_id = ? AND status = 'queued'
-                """,
-                (now(), run["id"], project_id),
-            )
-        else:
-            services.database.execute(
-                """
-                UPDATE platform_runs
-                SET cancellation_requested = 1, updated_at = ?
-                WHERE id = ? AND project_id = ? AND status = 'running'
-                """,
-                (now(), run["id"], project_id),
-            )
+        # W1-5：标记先行、queued 直置终态，消除与 worker 的读后写竞态。
+        services.request_run_cancel(run["id"], project_id)
         services.cancel_managed_run(run["id"])
         services.append_run_event(
             run["id"], "run.cancel_requested", {"actorId": user.id}

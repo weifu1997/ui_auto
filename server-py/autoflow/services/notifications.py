@@ -334,7 +334,9 @@ class NotificationServices:
             "completedAt": now(),
         }
 
-    def queue_run_deliveries(self, run: dict[str, Any], status: str) -> None:
+    def queue_run_deliveries(self, run: dict[str, Any], status: str, *, flush: bool = True) -> None:
+        """登记待投递记录；``flush=False`` 只入队不发送（供外层事务内调用，
+        网络发送由调用方在事务提交后统一触发，见 W1-1）。"""
         if status not in ("success", "failed", "canceled"):
             return
         project = self.project_for(run["projectId"])
@@ -374,4 +376,5 @@ class NotificationServices:
                     run["id"],
                 ),
             )
-        self.deliver_pending_notifications()
+        if flush:
+            self.deliver_pending_notifications()

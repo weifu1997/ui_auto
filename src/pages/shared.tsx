@@ -7,6 +7,7 @@ import type { PlatformCapability, PlatformRun, PlatformSession } from "../api/pl
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../api/platform-context";
 import { getPlatformSecrets, logoutPlatform, savePlatformSecret } from "../api/platform-api";
 import { readConflictSnapshotRaw } from "../lib/sync-outbox";
+import { userScopedStorageKey } from "../lib/user-scoped-storage";
 import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
@@ -684,6 +685,93 @@ export type RunIntentInput = {
 // 运行的重试与其它派发隔离开。
 export function runIntentKey(input: RunIntentInput) {
   return `${input.projectId}:${input.revisionId ?? input.flowId ?? input.runId ?? ""}:${input.upToStepId ?? ""}`;
+}
+
+export const RUN_DISPATCH_KEY_STORAGE = "autoflow-run-dispatch-keys";
+const RUN_DISPATCH_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+
+type StoredRunDispatchKeys = Record<string, { key: string; at: number }>;
+
+function loadStoredRunDispatchKeys(): StoredRunDispatchKeys {
+  try {
+    const raw = localStorage.getItem(userScopedStorageKey(RUN_DISPATCH_KEY_STORAGE));
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: StoredRunDispatchKeys = {};
+    const nowMs = Date.now();
+    for (const [intent, entry] of Object.entries(parsed as StoredRunDispatchKeys)) {
+      if (
+        entry &&
+        typeof entry.key === "string" &&
+        typeof entry.at === "number" &&
+        entry.at <= nowMs + 60_000 &&
+        nowMs - entry.at < RUN_DISPATCH_KEY_TTL_MS
+      ) {
+        out[intent] = { key: entry.key, at: entry.at };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredRunDispatchKeys(entries: StoredRunDispatchKeys) {
+  try {
+    localStorage.setItem(userScopedStorageKey(RUN_DISPATCH_KEY_STORAGE), JSON.stringify(entries));
+  } catch {
+    // 存储写满/不可用时不阻塞派发流程：幂等键降级为页面内生命周期。
+  }
+}
+
+/**
+ * W1-7：dispatchKey 从页面内存 Map 升级为用户分区 localStorage 持久化
+ * （TTL 24h）。此前刷新页面即丢失在途派发的幂等键，双击/重试会创建重复运行；
+ * 持久化后刷新后仍复用同一 key，由服务端 dispatch_key 唯一索引去重。
+ */
+export class RunDispatchKeyMap extends Map<string, string> {
+  private records: StoredRunDispatchKeys;
+
+  constructor() {
+    super();
+    this.records = loadStoredRunDispatchKeys();
+    for (const [intent, record] of Object.entries(this.records)) {
+      super.set(intent, record.key);
+    }
+  }
+
+  private persist() {
+    saveStoredRunDispatchKeys(this.records);
+  }
+
+  override set(intent: string, key: string): this {
+    // 同一意图复用已存在 key 时保留原时间戳，避免 TLA 反复续期。
+    this.records[intent] = {
+      key,
+      at: this.records[intent]?.key === key ? this.records[intent].at : Date.now(),
+    };
+    super.set(intent, key);
+    this.persist();
+    return this;
+  }
+
+  override delete(intent: string): boolean {
+    delete this.records[intent];
+    const removed = super.delete(intent);
+    this.persist();
+    return removed;
+  }
+
+  override clear(): void {
+    this.records = {};
+    super.clear();
+    this.persist();
+  }
+}
+
+export function createRunDispatchKeyStore(): RunDispatchKeyMap {
+  return new RunDispatchKeyMap();
 }
 
 export function nextRunDispatchKey(map: Map<string, string>, intent: string) {
