@@ -86,14 +86,10 @@
 
 ## 阶段 F：验收与收尾
 
-- [ ] F1. 全量门禁：
-  ```bash
-  npm run test:all   # build && lint && test:unit && test:startup && test:py && check:bundle && test:e2e && test:windows
-  ```
-  非 Windows 环境 `test:windows` 豁免；e2e 为阶段完整验收门禁（断言契约、录制、workbench、retry/batch 既有 spec 不回归）。
-- [ ] F2. 回滚：每个拆分独立提交、独立可回滚（行为保持，回滚即 revert 单个提交，无数据迁移）。
-- [ ] F3. spec 同步：契约文档挂入 `.trellis/spec/backend/index.md`；`architecture-boundaries.md` 若涉及拆分后文件路径变化则更新。
-- [ ] F4. 收尾：更新阶段1 PRD 验收清单；阶段2（录制/执行稳定性）不提前开工。
+- [x] F1. 全量门禁 `npm run test:all` 全绿：build ✓ / lint ✓（oxlint 干净）/ test:unit 114（26 文件）/ test:startup 14 pass 0 fail / test:py 262 / check:bundle ≤ 500 kB / test:e2e 28（含 assertion-contract、assertion、production-sync、recording、templates、workbench 不回归）/ test:windows 冒烟 ✓。退出码 0。
+- [x] F2. 回滚演练（干净树验证）：(a) 全阶段 `git revert --no-commit 51f88d8^..HEAD`（A→E+F-doc）干净应用，0 冲突、38 文件 staged，`git revert --abort` 完整还原至 `6749671`；(b) 单提交 revert（E `175b97b`）干净应用 0 冲突，abort 还原；(c) 阶段提交链线性、每提交自包含（A 51f88d8 10 文件 / B af4bcc9 9 / C 1ee48fb 8 / D 3b9619a 5 / E 175b97b 7 / F-doc 6749671 4），全部行为保持拆分、零数据迁移 → 回滚即 `git revert <单提交>`，独立可回滚成立。
+- [x] F3. spec 同步：断言契约文档已挂入 `.trellis/spec/backend/index.md`；`architecture-boundaries.md` 拆分后路径更新（`services/runs.py` → `services/runs/` 包、runs.py 标注、main.py 工厂标注、FlowEditorPage 完成态、Synchronizer 补测标注）；`audit-governance.md` 审计钩子位置更新为 `runs/_lifecycle.py`。
+- [x] F4. 收尾：阶段1 PRD 验收清单 4 项全勾（契约单源+parity、三处拆分按序门禁全绿、MSW+同步器单测、test:all）；阶段2 未提前开工。
 
 ## 风险文件 / 回滚点
 
