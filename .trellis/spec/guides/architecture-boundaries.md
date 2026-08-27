@@ -45,8 +45,8 @@
 
 - `src/pages/FlowEditorPage.tsx`（2233 行）拆分（阶段1-B 完成：2233→1366 行，抽出 AssertionStepPanel/RecordingImportPanel/AssertionBatchBar/StepList）
 - `server-py/autoflow/services/runs/` 包（阶段1-C 完成：原 `runs.py` 1409 行拆为 `RunServicesBase` + `_RunsLifecycleMixin`/`_RunEventsMixin`/`_BatchMixin`/`_ReportMixin`/`_AggregationMixin`；`from .runs import RunServices` 路径不变）
-- `runner.py`（849 行）抽公共启停
-- `recorder.py`（1305 行）拆文件
+- `runner.py` 抽公共启停（阶段2-B 完成：`_BrowserSession` context manager + `_close_quietly`，两运行入口共用；阶段2-F 另增 D5 自愈辅助 `_fallback_candidates`/`_heal_locator`/`_run_element_action`）
+- `recorder.py`（1305 行）拆文件（阶段2-A 完成：行为逻辑拆到 `recorder_capture.py`/`recorder_normalizer.py`/`recorder_validation.py`，`recorder.py` 收窄为 `RecordingCoordinator` + shim re-export，import 路径零变化）
 - `shared.tsx` 去重
 - `main.py` 移除模块级副作用（阶段1-D 完成：`create_platform_app()` 工厂 + 模块 `__getattr__` 惰性暴露 `app`）
 - `ServerWorkspaceSynchronizer.tsx`（588 行）— 阶段1-E 已补 MSW 单测，可继续重构

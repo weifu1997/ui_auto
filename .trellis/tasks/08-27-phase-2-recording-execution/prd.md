@@ -66,12 +66,13 @@
 
 ## Acceptance Criteria
 
-- [ ] recorder.py 拆分后对外 import/行为零变化；`npm run test:py` 录制相关用例全绿。
-- [ ] runner.py 公共启停抽出，启停测试覆盖先行；`npm run test:py` + 既有取消/重试用例不回归。
-- [ ] 迁移 v15 上线；重启后遗留录制会话显示「已中断」终态而非 404；两端枚举同步；`test:startup` 覆盖重启恢复路径。
-- [ ] react-virtual 接入候选/日志长列表；`check:bundle` 不超预算。
-- [ ] 自愈 MVP：`LocatorScorer` 接口 + 启发式评分 + `step.locatorFallback` 复用，无外部 AI 依赖。
-- [ ] `npm run test:all` 全绿（阶段完整验收门禁，e2e 录制/执行/断言 spec 不回归）。
+- [x] recorder.py 拆分后对外 import/行为零变化；`npm run test:py` 录制相关用例全绿。
+- [x] runner.py 公共启停抽出，启停测试覆盖先行；`npm run test:py` + 既有取消/重试用例不回归。
+- [x] 迁移 v15 上线；重启后遗留录制会话显示「已中断」终态而非 404；两端枚举同步；`test:startup` 覆盖重启恢复路径。
+- [x] react-virtual 接入候选/日志长列表；`check:bundle` 不超预算。
+- [x] 自愈 MVP：`LocatorScorer` 接口 + 启发式评分 + `step.locatorFallback` 复用，无外部 AI 依赖。
+- [x] R2-6 候选断言有界化：可见性断言 `VISIBILITY_ASSERTION_CAP=20`，文本/属性既有 10 条 cap 保持；配合虚拟化保证 import 面板可读。
+- [x] `npm run test:all` 全绿（阶段完整验收门禁，e2e 录制/执行/断言 spec 不回归）。
 
 ## Non-Goals
 

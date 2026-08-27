@@ -58,10 +58,10 @@
 
 ## 阶段 H：验收与收尾
 
-- [ ] H1. 全量门禁 `npm run test:all`（build/lint/unit/startup/py/bundle/e2e/windows；e2e 录制/执行/断言 spec 不回归）。
-- [ ] H2. 回滚演练：每个阶段独立提交、独立可回滚；迁移 v15 为增量（回滚时表留无害冗余，无数据迁移）。
-- [ ] H3. spec 同步：`.trellis/spec` 更新（录制会话状态契约、`recording_sessions` 表、列表端点、`interrupted` 状态、自愈 LocatorScorer 接口预留）；`architecture-boundaries.md` 拆分后路径更新（recorder.py → recorder 包文件）。
-- [ ] H4. 收尾：更新阶段2 PRD 验收清单；阶段3（断言体系）不提前开工。
+- [x] H1. 全量门禁 `npm run test:all` 通过（exit 0）：build ✓ / lint 0 警告 / test:unit 116 / test:startup 14 / test:py 282 / check:bundle ≤500kB / test:e2e 28（含 assertion、assertion-contract、recording、retry-reproduction 录制/执行/断言 spec）/ test:windows smoke 通过。
+- [x] H2. 回滚演练通过：A `fa355c9`、B `91dfecc`、C `3bc0773`、D `b9843d3`、E `5d9798e`、F `7b4dc9c`、G `26d574a` 各自独立提交、独立可回滚；迁移 v15 纯增量（`CREATE TABLE IF NOT EXISTS` + 索引，回滚时表留无害冗余、无数据迁移）。
+- [x] H3. spec 同步：`run-batch-recording-contracts.md` 录制会话场景补列表端点、`recording_sessions` 元数据落库、`interrupted` 终态与重启恢复、自愈 LocatorScorer 新场景（复用 `step.locatorFallback` 契约）；`architecture-boundaries.md` ② 区标完成并更新 recorder 包/runner 拆分后路径。
+- [x] H4. 收尾：阶段2 PRD 验收清单全勾（新增 R2-6 有界化条目）；阶段3（断言体系）未提前开工。
 
 ## 风险文件 / 回滚点
 
