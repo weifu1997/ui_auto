@@ -43,10 +43,10 @@
 
 ## Acceptance Criteria
 
-- [ ] 契约文档存在且两端各自单一模块引用；parity 单测 + e2e 通过；`STEP_KEYS` 仍含全部断言字段。
-- [ ] FlowEditorPage / runs.py / main.py 拆分按序完成，全程门禁全绿，无对外行为变化。
-- [ ] MSW 接入，`ServerWorkspaceSynchronizer` 有单测覆盖，bundle 不超预算。
-- [ ] `npm run test:all` 全绿（e2e 每阶段完整验收门禁）。
+- [x] 契约文档存在且两端各自单一模块引用；parity 单测 + e2e 通过；`STEP_KEYS` 仍含全部断言字段。（阶段1-A：`assertions.ts` / `assertion_contract.py` + 两端 parity 单测 + e2e 跨层校验）
+- [x] FlowEditorPage / runs.py / main.py 拆分按序完成，全程门禁全绿，无对外行为变化。（阶段1-B 2233→1366 行；阶段1-C 1409 行→`services/runs/` 包，40 函数体 AST 等价；阶段1-D 工厂化，`--factory` + 惰性 `app`）
+- [x] MSW 接入，`ServerWorkspaceSynchronizer` 有单测覆盖，bundle 不超预算。（阶段1-E：`msw ^2.15.0` devDependency；`server-handlers.ts` + `setup-msw.ts`；同步器 3 用例；bundle ≤ 500 kB）
+- [x] `npm run test:all` 全绿（2026-08-28：build / lint / unit 114 / startup 14 / py 262 / bundle / e2e 28 / windows smoke 全过）。（阶段1-F）
 
 ## Non-Goals
 

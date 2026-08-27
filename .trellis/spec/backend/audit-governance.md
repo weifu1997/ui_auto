@@ -20,7 +20,7 @@ Executable contracts for the platform audit trail and governance analytics (impl
 | --- | --- |
 | `auth.registered` / `auth.login_succeeded` / `auth.logout` / `auth.login_failed` | `server-py/autoflow/handler/auth.py` login/session routes; login events include `ip` from the request |
 | `notification.delivered` / `notification.rejected` / `notification.failed` | `server-py/autoflow/services/notifications.py` `deliver_pending_notifications`, terminal attempts only (retries not audited); `rejected` when error starts with `NOTIFICATION_REJECTED_` |
-| `run.completed` / `run.failed` / `run.canceled` | `server-py/autoflow/services/runs.py` `audit_run_lifecycle` (managed runner completed + watchdog interrupted paths) |
+| `run.completed` / `run.failed` / `run.canceled` | `server-py/autoflow/services/runs/_lifecycle.py` `audit_run_lifecycle` (managed runner completed + watchdog interrupted paths; 阶段1-C 拆分后所在文件) |
 | `secret.decrypted_for_run` | `server-py/autoflow/services/secrets.py` `secret_values` — only when at least one secret is decrypted for a run payload |
 
 ### Gotcha: secretNames Snapshot Filtering

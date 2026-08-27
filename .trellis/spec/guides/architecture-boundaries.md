@@ -43,13 +43,13 @@
 
 允许拆分/抽公共/去重，但**对外可观测行为必须不变**。动之前先确认有测试覆盖；没有的（如 `ServerWorkspaceSynchronizer.tsx` 零单测）**先补测试再重构**。
 
-- `src/pages/FlowEditorPage.tsx`（2233 行）拆分
-- `server-py/autoflow/services/runs.py`（1409 行）拆 mixin
+- `src/pages/FlowEditorPage.tsx`（2233 行）拆分（阶段1-B 完成：2233→1366 行，抽出 AssertionStepPanel/RecordingImportPanel/AssertionBatchBar/StepList）
+- `server-py/autoflow/services/runs/` 包（阶段1-C 完成：原 `runs.py` 1409 行拆为 `RunServicesBase` + `_RunsLifecycleMixin`/`_RunEventsMixin`/`_BatchMixin`/`_ReportMixin`/`_AggregationMixin`；`from .runs import RunServices` 路径不变）
 - `runner.py`（849 行）抽公共启停
 - `recorder.py`（1305 行）拆文件
 - `shared.tsx` 去重
-- `main.py`（436 行）移除模块级副作用
-- `ServerWorkspaceSynchronizer.tsx`（588 行）先补测试再重构
+- `main.py` 移除模块级副作用（阶段1-D 完成：`create_platform_app()` 工厂 + 模块 `__getattr__` 惰性暴露 `app`）
+- `ServerWorkspaceSynchronizer.tsx`（588 行）— 阶段1-E 已补 MSW 单测，可继续重构
 
 ---
 

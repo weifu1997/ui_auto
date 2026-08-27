@@ -36,16 +36,16 @@
 
 - 三区划分正式评审通过（D7）；基线门禁全绿；修复阻塞绿基线的正确性问题（`recording-editor-state.ts` 断言/步骤 id 时间戳派生导致勾选断言被静默丢弃），不改任何契约，已记录。
 
-### 阶段1 整体架构（断言 schema 单源化 + 大文件拆分 + MSW） — 🔄 进行中
+### 阶段1 整体架构（断言 schema 单源化 + 大文件拆分 + MSW） — ✅ 已完成（2026-08-28）
 
-进度：**A/B/C 完成并提交，D 方案已确认待开工，E/F 待办。** 执行清单见 `.trellis/tasks/08-27-phase-1-architecture/implement.md`。
+进度：**A/B/C/D/E/F 全部完成并提交；`npm run test:all` 全绿（build / lint / unit 114 / startup 14 / py 262 / bundle / e2e 28 / windows smoke）。** 执行清单与逐项证据见 `.trellis/tasks/08-27-phase-1-architecture/implement.md`。
 
 - **A 断言 schema 单源化** ✅：权威契约 `.trellis/spec/backend/assertion-field-contract.md`；前端收敛 `src/domain/assertions.ts`，后端收敛 `server-py/autoflow/assertion_contract.py`；两端各一份 parity 单测 + e2e 校验；不引入代码生成。gate：lint/build/unit + py。
 - **B FlowEditorPage 拆分** ✅：2233→1366 行；抽出 `AssertionStepPanel`/`RecordingImportPanel`/`AssertionBatchBar`/`StepList` + `assertion-step-draft.ts`/`element-validation.ts`/`SecretCreatorDrawer.tsx`；纯展示 + 回调上抛，状态留页面。gate：lint/build/unit。
 - **C runs.py 拆 mixin** ✅：`services/runs.py`（1409 行）→ `services/runs/` 包 = `RunServicesBase` + `_RunsLifecycleMixin`/`_RunEventsMixin`/`_BatchMixin`/`_ReportMixin`/`_AggregationMixin`；`from .runs import RunServices` 路径不变。gate：test:py（262 passed）。注意：`_RunEventsMixin` 无独立事件分页（事件在 `run_response` 内嵌 LIMIT 500）、`_BatchMixin` 仅 `queue_published_runs`（真 batch 在 `batches.py`）。
-- **D main.py 移除模块级副作用** ⏳（方案已确认，未写代码）：删 `main.py:436` 模块级 `app = create_app()`；新增 `create_platform_app()` 工厂；模块 `__getattr__` 惰性暴露 `app`（兼容手动 `uvicorn autoflow.main:app`）；`scripts/server-py.mjs` 改 `--factory autoflow.main:create_platform_app`；`conftest.py` docstring 同步（`PLATFORM_DATA_DIRECTORY` 重定向保留为无害安全网）。已核实测试只 `from autoflow.main import create_app`，无任何地方 import 模块级 `app`。gate：`npm run test:py && npm run test:startup` + 工厂冒烟（in-process `/health` + `uvicorn ... --factory` 真启动）。
-- **E MSW 测试基建** ⏳：`msw` 仅 devDependency（不进生产 bundle）；`src/test/server-handlers.ts` 映射 platform-api 端点（revisions/secrets/runs/batch/断言统计/录制会话/元素校验/工作区同步）；vitest setup 接 `msw/node` `setupServer`，默认未匹配 404 暴露覆盖缺口；**先为 `ServerWorkspaceSynchronizer.tsx`（零单测）补测**：30s 轮询、并发刷新合并、编辑后整体 PUT 不丢模板扩展字段（`variables`/`secretNames`/未知键透传，对应 `flow-normalize.ts` W2-4）；渐进替换 `vi.mock("../api/platform-api")` 手写 mock（可共存）。gate：`npm run test:unit && npm run check:bundle`（bundle ≤ 500 kB）。
-- **F 收尾** ⏳：`npm run test:all` 全绿；F2 回滚演练（per-commit revert）；F3 spec 同步（`architecture-boundaries.md` 中 `services/runs.py` 路径更新为 `services/runs/` 包、契约文档挂 `backend/index.md`）；F4 更新阶段1 PRD 验收清单，阶段2 不提前开工。
+- **D main.py 移除模块级副作用** ✅：`main.py:436` 模块级 `app = create_app()` 移除；新增 `create_platform_app()` 工厂；模块 `__getattr__` 惰性暴露 `app`（兼容手动 `uvicorn autoflow.main:app`）；`scripts/server-py.mjs` 改 `--factory autoflow.main:create_platform_app`；`conftest.py` docstring 同步（`PLATFORM_DATA_DIRECTORY` 重定向保留为无害安全网）。gate：`npm run test:py && npm run test:startup` + 工厂冒烟（import 无副作用 + in-process `/health` + `uvicorn ... --factory` 真启动 `/health` 200）。
+- **E MSW 测试基建** ✅：`msw ^2.15.0` 仅 devDependency（不进生产 bundle）；`src/test/server-handlers.ts` 映射 platform-api 端点（工作区同步 endpoints 带版本有状态实现：projects/resources/settings/revisions；secrets/runs/batch/断言统计/录制会话/元素校验为最小占位形状）；vitest setup 接 `msw/node` `setupServer`（`src/test/setup-msw.ts`），未匹配 `/api/*` 显式抛错暴露覆盖缺口；**为 `ServerWorkspaceSynchronizer.tsx`（原零单测）补测 3 用例**：30s 轮询、并发刷新合并、编辑后整体 PUT 不丢模板扩展字段（`variables`/`secretNames`/未知键透传，对应 `flow-normalize.ts` W2-4）+ 保存即快照；既有 `vi.mock` 手写 mock 可共存（不阻塞迁移）。注：fake timers 下 testing-library `waitFor` 卡死，改本地 `advanceTimersByTimeAsync` 轮询。gate：`npm run test:unit && npm run check:bundle`（bundle ≤ 500 kB）。
+- **F 收尾** ✅：`npm run test:all` 全绿（含 e2e 28）；F2 回滚演练（per-stage commit 独立可回滚）；F3 spec 同步（`architecture-boundaries.md` 拆分后路径更新为 `services/runs/` 包 + 完成态标注；`audit-governance.md` 钩子位置更新为 `runs/_lifecycle.py`；`backend/index.md` 已含断言契约）；F4 更新阶段1 PRD 验收清单（4 项全勾）。阶段2 未开工。
 
 ### 阶段2 录制/执行稳定性 — ⏳ 未开工（PRD 待固化，规划草案如下）
 
