@@ -57,10 +57,12 @@
 
 纯新增，不改既有行为。按阶段引入的新依赖也在此区（引入即需评估许可证/兼容性/维护度）。
 
-- 新断言类型（URL 匹配、网络响应/API 断言等，需新基建的另起任务）
-- 定位器自愈引擎（`LocatorScorer` 接口预留可选 LLM 实现）
+- ✅ **URL 断言**（阶段3 已完成：复用 `value`+`assertMatch` 零新字段，`STEP_KEYS` 不变；`_assert_url` 页面级，无 `STEP_ELEMENT_REQUIRED`）
+- ✅ **HTML 断言报告**（阶段3 已完成：`build_assertion_report` 增 html 变体，自包含转义 + 沿既有脱敏）
+- 新断言类型（网络响应/API 断言等，需新基建的另起任务）
+- 定位器自愈引擎（`LocatorScorer` 接口预留可选 LLM 实现；D5 自愈 MVP 已完成）
 - 新端点 / 新表（增量迁移）
-- 图表（recharts）、虚拟滚动（@tanstack/react-virtual）、MSW 测试基建、限流、HTML 报告
+- 图表（recharts）、虚拟滚动（@tanstack/react-virtual）、MSW 测试基建、限流
 
 ---
 

@@ -43,10 +43,10 @@
 
 ## 阶段 F：验收与收尾
 
-- [ ] F1. 全量门禁 `npm run test:all`（build/lint/unit/startup/py/bundle/e2e/windows；e2e 断言/录制/执行 spec 不回归，含 URL 断言新步骤）。
-- [ ] F2. 回滚演练：契约登记独立提交可单独 revert；`STEP_KEYS` 零改动（快照 checksum 单测保持绿）。
-- [ ] F3. spec 同步：`assertion-field-contract.md` 更新（阶段 A 已登记）；`architecture-boundaries.md` ③ 区标记 URL 断言/HTML 报告完成态；阶段3 PRD 验收清单勾选。
-- [ ] F4. 收尾：阶段4（编排体验 UI）按主提示词顺序开工前先固化其 PRD。
+- [x] F1. 全量门禁 `npm run test:all`（build/lint/unit/startup/py/bundle/e2e/windows；e2e 断言/录制/执行 spec 不回归，含 URL 断言新步骤）——EXIT=0，28 e2e + windows smoke 通过。
+- [x] F2. 回滚演练：契约登记独立提交 `88a9bba` 可单独 revert；`STEP_KEYS`/`ASSERTION_KEYS` 零改动（阶段3 五个提交均未触碰 `revision_snapshot.py`，快照 checksum 单测保持绿）。
+- [x] F3. spec 同步：`assertion-field-contract.md` 更新（阶段 A 已登记）；`architecture-boundaries.md` ③ 区标记 URL 断言/HTML 报告/自愈 MVP 完成态；阶段3 PRD 验收清单全勾。
+- [x] F4. 收尾：阶段4（编排体验 UI）按主提示词顺序开工前先固化其 PRD。
 
 ## 风险文件 / 回滚点
 

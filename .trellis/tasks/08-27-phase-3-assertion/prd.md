@@ -53,13 +53,13 @@
 
 ## Acceptance Criteria
 
-- [ ] URL 断言贯通录制/编辑器/执行/报告：编辑器可创建、执行判定正确、`step.asserted` 载荷 `{type:"url", passed, expected, actual}` 恒在 `step.completed`/`step.failed` 之前、报告/统计按 type 渲染。
-- [ ] `_assert_url` 判定矩阵单测：exact/contains、缺省 contains、期望值含查询串、`page.url` 异常（页面未打开）不抛非预期异常；无元素不落 `STEP_ELEMENT_REQUIRED`。
-- [ ] parity 三件套绿：后端 `test_assertion_contract.py`、前端 `assertions-contract.test.ts`、e2e `assertion-contract.spec.ts`（动作映射含 URL）。
-- [ ] `STEP_KEYS`/`ASSERTION_KEYS` 零改动；既有修订快照 checksum 单测保持全绿（旧快照可读）。
-- [ ] R3-2 端到端往返一致性用例绿（录制候选 → 执行 → 报告字段零漂移）；批量匹配覆盖 URL。
-- [ ] R3-3（若采纳）HTML 报告导出可用，敏感 run 不泄漏 secret；XLSX/JSON 行为不变。
-- [ ] `npm run test:all` 全绿（阶段完整验收门禁，e2e 断言/录制/执行 spec 不回归）。
+- [x] URL 断言贯通录制/编辑器/执行/报告：编辑器可创建（C）、执行判定正确（B）、`step.asserted` 载荷 `{type:"url", passed, expected, actual}` 恒在 `step.completed`/`step.failed` 之前（e2e assertion-contract s3）、报告/统计按 type 渲染（D/E）。
+- [x] `_assert_url` 判定矩阵单测：exact/contains、缺省 contains、期望值含查询串、`page.url` 异常（页面未打开）不抛非预期异常；无元素不落 `STEP_ELEMENT_REQUIRED`（`test_assertion_contract_hardening.py` 6 用例）。
+- [x] parity 三件套绿：后端 `test_assertion_contract.py`、前端 `assertions-contract.test.ts`、e2e `assertion-contract.spec.ts`（动作映射含 URL）。
+- [x] `STEP_KEYS`/`ASSERTION_KEYS` 零改动；既有修订快照 checksum 单测保持全绿（旧快照可读）。
+- [x] R3-2 端到端往返一致性用例绿（录制候选 → 执行 → 报告字段零漂移）；批量匹配覆盖 URL（`run-detail-assertion.test.tsx` URL 往返用例 + `applyBatchMatch` 含 URL）。
+- [x] R3-3（采纳）HTML 报告导出可用，敏感 run 不泄漏 secret；XLSX/JSON 行为不变（`test_assertion_report.py` HTML 脱敏转义 + 既有 JSON/XLSX 用例保持绿）。
+- [x] `npm run test:all` 全绿（阶段完整验收门禁，e2e 断言/录制/执行 spec 不回归）。
 
 ## Non-Goals
 
