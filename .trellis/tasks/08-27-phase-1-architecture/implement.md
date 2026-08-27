@@ -57,14 +57,14 @@
 
 ## 阶段 C：runs.py 拆 mixin（保留行为）
 
-- [ ] C1. `RunServices`（`services/runs.py:26`）拆为 `RunServicesBase` + mixin：
-  - `_RunsLifecycleMixin`（run 创建/取消/重试/终态）
-  - `_RunEventsMixin`（事件分页/游标）
-  - `_BatchMixin`（batch 执行/聚合）
-  - `_ReportMixin`（断言报告导出）
-  - `_AggregationMixin`（断言统计）
-- [ ] C2. 对外方法名、签名、返回结构零变化；路由层 import 的类路径若变化，同步更新 `handler.py` 引用。
-- [ ] C3. [gate] `npm run test:py` 全绿（runs/batch/retry/report/aggregation 全部覆盖）。
+- [x] C1. `RunServices`（`services/runs.py`，1409 行）拆为 `RunServicesBase` + mixin，落为 `services/runs/` 包：
+  - `_RunsLifecycleMixin`（23 个：run 创建/取消/重试/终态）
+  - `_RunEventsMixin`（`append_run_event` + `run_response` 事件序列化；适配注：runs.py 无独立事件分页/游标方法，事件以 run_response 内嵌 LIMIT 500 呈现）
+  - `_BatchMixin`（`queue_published_runs`；适配注：真正的 batch 生命周期/聚合在 `batches.py`/BatchServices）
+  - `_ReportMixin`（断言报告导出 JSON/XLSX）
+  - `_AggregationMixin`（metrics + 断言统计）
+- [x] C2. 对外方法名、签名、返回结构零变化；`from .runs import RunServices`（`services/__init__.py:16`）指向包 `__init__.py`，handler/tests 引用零改动（验证：40 个函数体 AST 等价，modulo 包深度 import 修正）。
+- [x] C3. [gate] `npm run test:py` 全绿：262 passed（runs/batch/retry/report/aggregation 全部覆盖）。
 
 ## 阶段 D：main.py 移除模块级副作用
 

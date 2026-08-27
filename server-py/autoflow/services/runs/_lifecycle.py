@@ -1,4 +1,4 @@
-"""Run spec resolution, enqueue/execute lifecycle, deletion, and metrics."""
+"""Run lifecycle: spec resolution, create/cancel/retry/terminal-state persistence."""
 from __future__ import annotations
 
 import json as _json
@@ -9,36 +9,15 @@ import uuid
 import re
 from pathlib import Path
 from typing import Any
-from ..core import (
-    days_ago_iso,
-    json,
-    now,
-    parse_json,
-    public_flow_output_names,
-    safe_artifact_name,
-)
-from ..resources import as_record
-from ._shared import (
-    _TERMINAL_RUN_STATUSES,
-)
+from ...core import json, now, parse_json, public_flow_output_names, safe_artifact_name
+from ...resources import as_record
+from .._shared import _TERMINAL_RUN_STATUSES
 
-
-class RunServices:
-    """Run spec resolution, enqueue/execute lifecycle, deletion, and metrics."""
-
-    def append_run_event(
-        self, run_id: str, kind: str, data: dict[str, Any]
-    ) -> None:
-        self.database.execute(
-            """
-            INSERT INTO platform_run_events (run_id, kind, data, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (run_id, kind, json(data), now()),
-        )
+class _RunsLifecycleMixin:
+    """Run lifecycle: create/cancel/retry/terminal-state."""
 
     def resolve_run_spec(self, input: dict[str, Any]) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         project_id = input["projectId"]
         revision = self.published_revision_for(
@@ -169,7 +148,7 @@ class RunServices:
     def _preflight_retry_variables(
         self, project_id: str, flow: dict[str, Any], secret_names: list[str]
     ) -> None:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         required = self._required_retry_variable_names(flow, secret_names)
         if not required:
@@ -206,7 +185,7 @@ class RunServices:
             raise PlatformError(409, "RUN_VARIABLE_NOT_CONFIGURED")
 
     def _preflight_retry_spec(self, project_id: str, spec: dict[str, Any]) -> None:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         snapshot_secret_names = [
             name
@@ -232,7 +211,7 @@ class RunServices:
 
     def clone_retry_spec_from_run(self, run: dict[str, Any]) -> dict[str, Any]:
         """从源 run 的持久 snapshot 构造一对一 retry spec，不重新解析 revision/dataset。"""
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         snapshot = run.get("snapshot")
         if not isinstance(snapshot, dict):
@@ -319,7 +298,7 @@ class RunServices:
         actor_id: str,
         dispatch_key: str | None = None,
     ) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         run = self.run_by_id(run_id)
         if run["projectId"] != project_id:
@@ -364,7 +343,7 @@ class RunServices:
         batch_item_index: int | None = None,
         retry_of_run_id: str | None = None,
     ) -> str:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         project_id = spec["projectId"]
         revision = spec["revision"]
@@ -476,43 +455,10 @@ class RunServices:
             )
         return run_id
 
-    def queue_published_runs(self, input: dict[str, Any]) -> dict[str, Any]:
-        spec = self.resolve_run_spec(input)
-        run_ids: list[str] = []
-        self.database.execute("BEGIN IMMEDIATE")
-        try:
-            for row in spec["rows"]:
-                dispatch_key = (
-                    f"{input['dispatchKey']}:{row['rowNumber'] or 0}"
-                    if input.get("dispatchKey")
-                    else None
-                )
-                run_ids.append(
-                    self.insert_run_from_spec(
-                        spec,
-                        row=row,
-                        created_by=input["createdBy"],
-                        source=input["source"],
-                        dispatch_key=dispatch_key,
-                    )
-                )
-            self.database.execute("COMMIT")
-        except Exception:
-            self.database.execute("ROLLBACK")
-            raise
-        for run_id in run_ids:
-            self.enqueue_managed_run(run_id)
-        return {
-            "runIds": run_ids,
-            "revision": spec["revision"],
-            "environmentId": spec["environmentId"],
-            "datasetVersionId": spec["datasetVersionId"],
-        }
-
     def run_by_id(
         self, run_id: str, project_id: str | None = None
     ) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         row = self.database.execute(
             """
@@ -543,7 +489,7 @@ class RunServices:
         }
 
     def delete_run(self, project_id: str, run_id: str) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         run = self.database.execute(
             "SELECT id, project_id, status FROM platform_runs WHERE id = ?",
@@ -614,76 +560,6 @@ class RunServices:
             self.database.execute("ROLLBACK")
             raise
         return {"runIds": deletable_run_ids, "deletedCount": deleted_count}
-
-    def run_response(self, run: dict[str, Any]) -> dict[str, Any]:
-        agent = self.database.execute(
-            """
-            SELECT id, name, browser_version, os, max_concurrency, last_seen_at
-            FROM agents WHERE id = ?
-            """,
-            (run["agentId"],),
-        ).fetchone()
-        artifacts = self.database.execute(
-            """
-            SELECT id, name, content_type, created_at FROM platform_artifacts
-            WHERE run_id = ? ORDER BY created_at ASC
-            """,
-            (run["id"],),
-        ).fetchall()
-        events = self.database.execute(
-            """
-            SELECT id, kind, data, created_at FROM platform_run_events
-            WHERE run_id = ? ORDER BY id ASC LIMIT 500
-            """,
-            (run["id"],),
-        ).fetchall()
-        flow_outputs = self.database.execute(
-            """
-            SELECT name, value, source, created_at FROM flow_outputs
-            WHERE run_id = ? ORDER BY name ASC
-            """,
-            (run["id"],),
-        ).fetchall()
-        response: dict[str, Any] = {
-            **run,
-            "artifacts": [
-                {
-                    "id": row[0],
-                    "name": row[1],
-                    "contentType": row[2],
-                    "createdAt": row[3],
-                }
-                for row in artifacts
-            ],
-            "events": [
-                {
-                    "id": row[0],
-                    "kind": row[1],
-                    "data": parse_json(row[2], {}),
-                    "at": row[3],
-                }
-                for row in events
-            ],
-            "flowOutputs": [
-                {
-                    "name": row[0],
-                    "value": row[1],
-                    "source": row[2],
-                    "createdAt": row[3],
-                }
-                for row in flow_outputs
-            ],
-        }
-        if run["executorType"] == "agent" and agent:
-            response["agent"] = {
-                "id": agent[0],
-                "name": agent[1],
-                "browserVersion": agent[2],
-                "os": agent[3],
-                "maxConcurrency": agent[4],
-                "lastSeenAt": agent[5],
-            }
-        return response
 
     def request_run_cancel(self, run_id: str, project_id: str) -> None:
         """W1-5：取消标记先行落库。
@@ -844,306 +720,6 @@ class RunServices:
             workspace_id=self.project_for(run["projectId"])["workspace_id"],
         )
 
-    def metrics(self) -> dict[str, Any]:
-        """OBS-02 service-level metrics (DB-backed, JSON)."""
-        run_counts: dict[str, int] = {}
-        for row in self.database.execute(
-            "SELECT status, COUNT(*) FROM platform_runs GROUP BY status"
-        ).fetchall():
-            run_counts[str(row[0])] = int(row[1])
-
-        delivery_counts: dict[str, int] = {}
-        for row in self.database.execute(
-            "SELECT status, COUNT(*) FROM deliveries GROUP BY status"
-        ).fetchall():
-            delivery_counts[str(row[0])] = int(row[1])
-
-        disk: dict[str, int] | None = None
-        try:
-            usage = shutil.disk_usage(str(self.data_directory))
-            disk = {"total": usage.total, "used": usage.used, "free": usage.free}
-        except Exception:
-            pass
-
-        return {
-            "runs": run_counts,
-            "deliveries": delivery_counts,
-            "disk": disk,
-            "artifactBytes": self._artifact_bytes(),
-        }
-
-    def _artifact_bytes(self) -> int:
-        total = 0
-        try:
-            for path in self.managed_runner.artifact_directory.rglob("*"):
-                if path.is_file():
-                    total += path.stat().st_size
-        except Exception:
-            pass
-        return total
-
-    def redact_run_value(self, run: dict[str, Any], value: Any) -> Any:
-        try:
-            rows = self.database.execute(
-                """
-                SELECT name, iv, tag, ciphertext FROM project_secrets
-                WHERE project_id = ?
-                """,
-                (run["projectId"],),
-            ).fetchall()
-            secrets = {
-                row[0]: self.decrypt({"iv": row[1], "tag": row[2], "ciphertext": row[3]})
-                for row in rows
-            }
-
-            def redact(current: Any) -> Any:
-                if isinstance(current, str):
-                    result = current
-                    for secret in secrets.values():
-                        if secret:
-                            result = result.replace(secret, "***")
-                    return result
-                if isinstance(current, list):
-                    return [redact(item) for item in current]
-                if isinstance(current, dict):
-                    return {key: redact(item) for key, item in current.items()}
-                return current
-
-            return redact(value)
-        except Exception:
-            return "***"
-
-    def build_assertion_report(
-        self, run_id: str, run_format: str
-    ) -> dict[str, Any]:
-        """装配断言报告并登记为 run 的 artifact（JSON/XLSX）。
-
-        数据源：run.result.assertions + 同 run 的失败截图/trace artifact 引用
-        （截图名 `failure-step-{序号}.png`、trace 名 `trace.zip`，缺失留空不报错）。
-        actual 经 redact_run_value 脱敏。无断言 raise 409。
-        """
-        from ..http import PlatformError
-
-        run = self.run_by_id(run_id)
-        result = as_record(run.get("result"))
-        assertions = result.get("assertions") if isinstance(result, dict) else None
-        if not isinstance(assertions, list) or not assertions:
-            raise PlatformError(409, "RUN_HAS_NO_ASSERTIONS")
-
-        artifact_rows = self.database.execute(
-            """
-            SELECT id, name, content_type, path FROM platform_artifacts
-            WHERE run_id = ? ORDER BY created_at ASC
-            """,
-            (run_id,),
-        ).fetchall()
-        screenshots: dict[str, str] = {}
-        trace_id: str | None = None
-        for artifact_id, name, _content_type, _path in artifact_rows:
-            if name.startswith("failure-step-") and name.endswith(".png"):
-                stem = name[len("failure-step-"):][:-len(".png")]
-                if stem.isdigit():
-                    screenshots[stem] = artifact_id
-            elif name == "trace.zip":
-                trace_id = artifact_id
-
-        snapshot = as_record(run.get("snapshot"))
-        flow = as_record(snapshot.get("flow"))
-        environment = as_record(snapshot.get("environment"))
-        rows: list[dict[str, Any]] = []
-        for item in assertions:
-            if not isinstance(item, dict) or not isinstance(item.get("passed"), bool):
-                continue
-            step_index = int(item.get("stepIndex") or 0)
-            actual = self.redact_run_value(run, item.get("actual"))
-            rows.append(
-                {
-                    "stepIndex": step_index,
-                    "stepId": str(item.get("stepId") or ""),
-                    "title": str(item.get("title") or "断言"),
-                    "type": str(item.get("type") or ""),
-                    "passed": item["passed"],
-                    "expected": str(item.get("expected") or ""),
-                    "actual": str(actual) if actual is not None else "",
-                    "durationMs": int(item.get("durationMs") or 0),
-                    "screenshotArtifactId": screenshots.get(str(step_index + 1)),
-                    "traceArtifactId": trace_id,
-                }
-            )
-        report = {
-            "runId": run_id,
-            "flowName": str(flow.get("name") or "Published flow"),
-            "environmentName": str(environment.get("name") or ""),
-            "status": run["status"],
-            "generatedAt": now(),
-            "assertionCount": len(rows),
-            "assertions": rows,
-        }
-
-        if run_format == "xlsx":
-            content_type = (
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            extension = "xlsx"
-            data = self._assertion_report_xlsx(report)
-        else:
-            content_type = "application/json"
-            extension = "json"
-            data = _json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8")
-
-        artifact_directory = self.managed_runner.artifact_directory
-        artifact_directory.mkdir(parents=True, exist_ok=True)
-        artifact_name = safe_artifact_name(f"assertion-report-{run_id}.{extension}")
-        artifact_path = artifact_directory / artifact_name
-        artifact_path.write_bytes(data)
-        artifact_id = str(uuid.uuid4())
-        created_at = now()
-        self.database.execute(
-            """
-            INSERT INTO platform_artifacts (
-              id, run_id, project_id, name, content_type, path, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                artifact_id,
-                run_id,
-                run["projectId"],
-                artifact_name,
-                content_type,
-                str(artifact_path),
-                created_at,
-            ),
-        )
-        return {
-            "artifact": {
-                "id": artifact_id,
-                "name": artifact_name,
-                "contentType": content_type,
-                "createdAt": created_at,
-            }
-        }
-
-    def _assertion_report_xlsx(self, report: dict[str, Any]) -> bytes:
-        import io
-
-        from openpyxl import Workbook
-        from openpyxl.styles import Font
-
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.title = "断言报告"
-        sheet.append(["序号", "步骤", "类型", "判定", "期望", "实际", "耗时(ms)", "失败截图", "Trace"])
-        for cell in sheet[1]:
-            cell.font = Font(bold=True)
-        for row in report["assertions"]:
-            sheet.append(
-                [
-                    int(row["stepIndex"]) + 1,
-                    row["title"],
-                    row["type"],
-                    "通过" if row["passed"] else "失败",
-                    row["expected"],
-                    row["actual"],
-                    int(row["durationMs"]),
-                    row["screenshotArtifactId"] or "",
-                    row["traceArtifactId"] or "",
-                ]
-            )
-        buffer = io.BytesIO()
-        workbook.save(buffer)
-        return buffer.getvalue()
-
-    def assertion_stats_for_runs(self, runs: list[dict[str, Any]]) -> dict[str, int]:
-        """跨 run 应用层聚合断言计数（口径写死：分子=含断言 run 中 passed 总数，
-        分母=含断言 run 的断言总数；无断言 run 不进分子分母）。"""
-        runs_with_assertions = 0
-        total = 0
-        passed = 0
-        for run in runs:
-            result = as_record(run.get("result"))
-            assertions = result.get("assertions") if isinstance(result, dict) else None
-            if not isinstance(assertions, list):
-                continue
-            total_this = 0
-            passed_this = 0
-            for item in assertions:
-                if isinstance(item, dict) and isinstance(item.get("passed"), bool):
-                    total_this += 1
-                    if item["passed"]:
-                        passed_this += 1
-            if total_this > 0:
-                runs_with_assertions += 1
-                total += total_this
-                passed += passed_this
-        return {
-            "runsWithAssertions": runs_with_assertions,
-            "totalAssertions": total,
-            "passedAssertions": passed,
-            "failedAssertions": total - passed,
-        }
-
-    def assertion_failures_for_runs(
-        self, runs: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """跨 run 收集失败断言明细（batch detail 的「失败明细列表」数据源）。
-
-        actual 经 redact_run_value 脱敏，与断言载荷脱敏约束一致。
-        """
-        failures: list[dict[str, Any]] = []
-        for run in runs:
-            result = as_record(run.get("result"))
-            assertions = result.get("assertions") if isinstance(result, dict) else None
-            if not isinstance(assertions, list):
-                continue
-            snapshot = as_record(run.get("snapshot"))
-            flow = as_record(snapshot.get("flow"))
-            flow_name = str(flow.get("name") or "Published flow")
-            for item in assertions:
-                if not isinstance(item, dict) or item.get("passed") is not False:
-                    continue
-                actual = self.redact_run_value(run, item.get("actual"))
-                failures.append(
-                    {
-                        "runId": str(run.get("id") or ""),
-                        "flowName": flow_name,
-                        "title": str(item.get("title") or "断言"),
-                        "type": str(item.get("type") or ""),
-                        "expected": str(item.get("expected") or ""),
-                        "actual": str(actual) if actual is not None else "",
-                    }
-                )
-        return failures
-
-    def assertion_stats(
-        self, project_id: str, window_days: int | None = None
-    ) -> dict[str, Any]:
-        """项目级断言聚合（仅统计正式终态 run，非分页口径）。
-
-        W1-6 口径修正：只纳入 `status IN ('success','failed')` 且非取消的
-        run——编辑器试跑此前直接写库并混入分子分母，导致通过率被试跑污染；
-        canceled 的半截结果同样不具统计意义。SQLite 对 JSON 列聚合不友好，
-        应用层扫描 result 累加。window_days 为 None 或 <=0 时为全量窗口。
-        返回含 windowDays。
-        """
-        params: list[Any] = [project_id]
-        window_sql = ""
-        if window_days is not None and window_days > 0:
-            window_sql = "AND created_at >= ?"
-            params.append(days_ago_iso(window_days))
-        rows = self.database.execute(
-            f"""
-            SELECT result FROM platform_runs
-            WHERE project_id = ?
-              AND status IN ('success', 'failed')
-              {window_sql}
-            """,
-            tuple(params),
-        ).fetchall()
-        runs = [{"result": parse_json(row[0], None)} for row in rows]
-        stats = self.assertion_stats_for_runs(runs)
-        stats["windowDays"] = window_days
-        return stats
-
     @staticmethod
     def _flow_secret_names(flow: Any) -> list[str]:
         """从试跑流程步骤里收集 `{{secret.X}}` 占位符对应的 secret 名。"""
@@ -1171,8 +747,8 @@ class RunServices:
         - 不写 `platform_runs` / `platform_run_events` / artifacts。
         - 服务端解析项目 secret 注入 `input.secrets`，返回前统一脱敏。
         """
-        from ..http import PlatformError
-        from ..runner import execute_browser_run
+        from ...http import PlatformError
+        from ...runner import execute_browser_run
 
         flow = as_record(input.get("flow"))
         steps = flow.get("steps") if isinstance(flow, dict) else []
