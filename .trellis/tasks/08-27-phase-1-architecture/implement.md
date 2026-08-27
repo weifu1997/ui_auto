@@ -68,12 +68,12 @@
 
 ## 阶段 D：main.py 移除模块级副作用
 
-- [ ] D1. `app = create_app()`（`main.py:436`）移除模块级执行：
-  - 提供显式 `create_platform_app()` 工厂（内部调 `create_app`）；
-  - 生产/开发入口（uvicorn `--factory` 或入口脚本）改为调用工厂；
-  - 保留 `main.py` 作为 uvicorn 目标时通过工厂暴露 `app`（入口显式构造，不随 import 触发副作用）。
-- [ ] D2. 确认所有测试 import `main` 不再触发服务初始化（检查现有 test fixture 的导入方式）。
-- [ ] D3. [gate] `npm run test:py && npm run test:startup`（生产启动契约覆盖 `POST /api/auth/register` → session → `/health` 全链路）。
+- [x] D1. `app = create_app()`（`main.py:436`）移除模块级执行：
+  - 新增显式 `create_platform_app()` 工厂（内部调 `create_app`）；
+  - `scripts/server-py.mjs`（唯一 uvicorn 入口，生产 `npm start` 亦经它）改为 `--factory autoflow.main:create_platform_app`；`__main__` 块也走工厂；
+  - 保留 `autoflow.main:app` 兼容：模块 `__getattr__` 惰性构造并缓存，import 模块零副作用（已验证：import 后无 data dir 创建）。
+- [x] D2. 确认所有测试 import `main` 不再触发服务初始化（已核实：测试仅 `from autoflow.main import create_app`，无任何地方 import 模块级 `app`；`conftest.py` docstring 同步，`PLATFORM_DATA_DIRECTORY` 重定向保留为无害安全网）。
+- [x] D3. [gate] `npm run test:py && npm run test:startup` 全绿：py 262 passed / startup 14 pass；另补工厂冒烟：import 副作用自由 + in-process TestClient `/health` 200 + `uvicorn autoflow.main:create_platform_app --factory` 真启动 `/health` 200。
 
 ## 阶段 E：MSW 测试基建
 

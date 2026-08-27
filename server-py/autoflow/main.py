@@ -433,14 +433,29 @@ async def _maintenance_loop(
             return
 
 
-app = create_app()
+def create_platform_app() -> FastAPI:
+    """显式应用工厂（阶段1-D）：生产/开发/测试入口统一走这里，import 模块不触发副作用。
+
+    uvicorn `--factory autoflow.main:create_platform_app` 与 `if __name__ == "__main__"`
+    都经此构造；`autoflow.main:app` 仍可通过模块 `__getattr__` 惰性构造（兼容手动启动）。
+    """
+    return create_app()
+
+
+def __getattr__(name: str) -> FastAPI:
+    # 兼容 `uvicorn autoflow.main:app`：首次访问才构造并缓存，import 本身零副作用。
+    if name == "app":
+        app = create_platform_app()
+        globals()["app"] = app
+        return app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        app,
+        create_platform_app(),
         host=os.environ.get("AUTOFLOW_LISTEN_HOST", "127.0.0.1"),
         port=int(os.environ.get("PORT", "8787")),
     )
