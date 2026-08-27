@@ -1719,6 +1719,53 @@
 .assertion-export .ant-btn-sm {
   font-size: var(--text-caption);
 }
+.assertion-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--text-caption);
+}
+.summary-rate {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.summary-rate span {
+  color: var(--muted);
+}
+.summary-rate strong {
+  font-size: var(--text-title3);
+  color: var(--success-strong);
+}
+.summary-counts {
+  display: inline-flex;
+  gap: 12px;
+}
+.summary-counts .passed {
+  color: var(--success-strong);
+}
+.summary-counts .failed {
+  color: var(--error);
+}
+.summary-types {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.type-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  color: var(--text-secondary);
+}
 .assertion-list {
   display: grid;
   gap: 8px;

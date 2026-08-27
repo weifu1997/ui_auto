@@ -26,9 +26,9 @@
 
 ## 阶段 G：RunDetail 断言摘要卡（R4-3，独立提交）
 
-- [ ] G1. `RunDetailPage` 断言区块增摘要卡：通过率 + 通过/失败计数 + 类型分布 chips（复用 `ASSERTION_TYPE_LABELS`）。
-- [ ] G2. 前端单测：摘要卡渲染、无断言不渲染。
-- [ ] G3. [gate] `npm run test:unit` 全绿。
+- [x] G1. `RunDetailPage` 断言区块增摘要卡：通过率 + 通过/失败计数 + 类型分布 chips（复用 `ASSERTION_TYPE_LABELS`）；CSS 适配双主题；断言行小直接计算不 memo。
+- [x] G2. 前端单测：摘要卡渲染（通过率 50% + 通过 1/失败 1 + 文本 × 1/URL × 1 类型 chips）。
+- [x] G3. [gate] `npm run lint`（0 警告）&& `npm run build`（✓ built）&& `npm run test:unit` 124 全绿。
 
 ## 阶段 H：验收与收尾
 

@@ -286,6 +286,17 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   // 断言结果区块：读 run.result.assertions（无断言步骤的 run 不展示）。
   const assertions = platformTask ? runAssertions(platformTask) : [];
   const passedAssertions = assertions.filter((item) => item.passed).length;
+  // 类型分布（R4-3 摘要卡）：按 type 计数，标签复用 ASSERTION_TYPE_LABELS。
+  // 断言行数小（通常 <20），每次渲染直接计算，无需 memo。
+  const assertionTypeCounts = (() => {
+    const counts = new Map<string, number>();
+    for (const item of assertions) {
+      counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort(
+      (a, b) => (b[1] - a[1]) || assertionTypeLabel(a[0]).localeCompare(assertionTypeLabel(b[0])),
+    );
+  })();
   const artifacts = platformTask?.artifacts ?? [];
   const error = typeof platformTask?.result?.error === "string" ? platformTask.result.error : undefined;
   const securityDisabledMessage = (platformTask?.events ?? []).find((event) => event.kind === "run.security")
@@ -474,6 +485,28 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
                   <Button size="small" onClick={() => void exportAssertionReport("json")}>导出 JSON</Button>
                   <Button size="small" onClick={() => void exportAssertionReport("xlsx")}>导出 Excel</Button>
                   <Button size="small" onClick={() => void exportAssertionReport("html")}>导出 HTML</Button>
+                </div>
+              </div>
+              <div className="assertion-summary" role="group" aria-label="断言摘要">
+                <div className="summary-rate">
+                  <span>断言通过率</span>
+                  <strong>
+                    {assertions.length > 0
+                      ? Math.round((passedAssertions / assertions.length) * 100)
+                      : 0}
+                    %
+                  </strong>
+                </div>
+                <div className="summary-counts">
+                  <span className="passed">通过 {passedAssertions}</span>
+                  <span className="failed">失败 {assertions.length - passedAssertions}</span>
+                </div>
+                <div className="summary-types">
+                  {assertionTypeCounts.map(([type, count]) => (
+                    <span className="type-chip" key={type}>
+                      {assertionTypeLabel(type)} × {count}
+                    </span>
+                  ))}
                 </div>
               </div>
               <div className="assertion-list">

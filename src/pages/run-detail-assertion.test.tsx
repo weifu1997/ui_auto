@@ -250,6 +250,27 @@ describe("RunDetailPage 断言结果区块", () => {
     click.mockRestore();
   });
 
+  it("R4-3 断言摘要卡：通过率 + 通过/失败计数 + 类型分布（含 URL）", async () => {
+    const run = makeRun({
+      result: {
+        status: "success",
+        assertions: [
+          { stepIndex: 1, stepId: "s2", title: "页面标题", type: "text", passed: true, expected: "Fixture login", actual: "Fixture login", durationMs: 31 },
+          { stepIndex: 2, stepId: "s3", title: "登录页", type: "url", passed: false, expected: "/__fixture/login", actual: "https://app.test/home", durationMs: 18 },
+        ],
+      },
+    });
+    renderRun(run);
+
+    const summary = await screen.findByRole("group", { name: "断言摘要" });
+    expect(within(summary).getByText("50%")).toBeInTheDocument();
+    expect(within(summary).getByText("通过 1")).toBeInTheDocument();
+    expect(within(summary).getByText("失败 1")).toBeInTheDocument();
+    // 类型 chips：文本 × 1、URL × 1（标签复用 ASSERTION_TYPE_LABELS）。
+    expect(within(summary).getByText("文本 × 1")).toBeInTheDocument();
+    expect(within(summary).getByText("URL × 1")).toBeInTheDocument();
+  });
+
   it("可导出 HTML 断言报告（R3-3 新增格式）", async () => {
     const run = makeRun({
       result: {
