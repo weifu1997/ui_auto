@@ -62,3 +62,11 @@
 
 - D1 技术路线：渐进增强现有 React/FastAPI/SQLite/ManagedRunner 架构；不迁移到 Vue3/Pinia/Element Plus，不默认引入 Celery/Redis/MySQL。
 - D2 交付形态：先形成一次性整体改造方案，覆盖架构、录制/执行、断言与 UI；实现按依赖关系分阶段交付，保证每阶段可验证、可回滚。
+
+## 确认的决策（2026-08-27 用户已确认）
+
+- D3 改造范围：按五阶段顺序推进——阶段0 契约与基线 → 阶段1 整体架构（含断言 schema 单源化）→ 阶段2 录制/执行稳定性 → 阶段3 断言体系 → 阶段4 编排体验 UI；每阶段独立提交、独立验收、可回滚。
+- D4 引入库按阶段引入：MSW 阶段1（测试基建，支撑 ServerWorkspaceSynchronizer 补测）、@tanstack/react-virtual 阶段2（候选/日志长列表）、recharts 阶段4（运行中心图表）；APScheduler / slowapi / deepdiff 暂缓（低优先，不做）。
+- D5 定位器自愈引擎：纯启发式 MVP（dom-to-locator 评分 + count()===1 唯一性），以 LocatorScorer 接口抽象预留可选 LLM 实现；不违反外部 AI 约束。
+- D6 录制会话状态：折中方案——会话元数据（status/currentUrl/lastSeq/计数）落库（增量迁移），浏览器 context 与登录快照保持进程内；重启后旧会话显示"已中断"终态而非 404。
+- D7 可改动边界：按方案 1.5 节三区划分通过（稳定契约区 / 可重构区 / 可扩展区），阶段0 落地时正式评审一次。

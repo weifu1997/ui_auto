@@ -19,7 +19,12 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "08-27-reliability-repair-waves"
+    "08-27-reliability-repair-waves",
+    "08-27-phase-0-contracts-baseline",
+    "08-27-phase-1-architecture",
+    "08-27-phase-2-recording-execution",
+    "08-27-phase-3-assertion",
+    "08-27-phase-4-orchestration-ui"
   ],
   "parent": null,
   "relatedFiles": [],
