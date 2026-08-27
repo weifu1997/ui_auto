@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from ...core import days_ago_iso, parse_json
 from ...resources import as_record
@@ -105,6 +106,72 @@ class _AggregationMixin:
             "passedAssertions": passed,
             "failedAssertions": total - passed,
         }
+
+    def run_trend(
+        self, project_id: str, window_days: int | None = None
+    ) -> dict[str, Any]:
+        """逐日运行/断言趋势（R4-1：编排看板数据源，纯增量端点）。
+
+        口径与 assertion_stats 一致：仅 `status IN ('success','failed')` 的终态 run，
+        无断言 run 不进断言分子分母。按 `created_at` 的 UTC 日期（YYYY-MM-DD）分桶；
+        近 window_days 天含无数据日（前端图表需要连续 x 轴）。只聚合计数，
+        不落 actual 值（无脱敏面）。window_days 为 None 或 <=0 时为全量窗口。
+        """
+        params: list[Any] = [project_id]
+        window_sql = ""
+        if window_days is not None and window_days > 0:
+            window_sql = "AND created_at >= ?"
+            params.append(days_ago_iso(window_days))
+        rows = self.database.execute(
+            f"""
+            SELECT status, created_at, result FROM platform_runs
+            WHERE project_id = ? AND status IN ('success', 'failed')
+            {window_sql}
+            """,
+            tuple(params),
+        ).fetchall()
+
+        empty: dict[str, int] = {
+            "runTotal": 0,
+            "runPassed": 0,
+            "runFailed": 0,
+            "assertionTotal": 0,
+            "assertionPassed": 0,
+        }
+        buckets: dict[str, dict[str, Any]] = {}
+        if window_days is not None and window_days > 0:
+            today = datetime.now(timezone.utc).date()
+            start = today - timedelta(days=window_days - 1)
+            for offset in range(window_days):
+                day = (start + timedelta(days=offset)).isoformat()
+                buckets[day] = {"date": day, **empty}
+
+        for status, created_at, result in rows:
+            day = created_at[:10] if created_at else None
+            if not day:
+                continue
+            bucket = buckets.get(day)
+            if bucket is None:
+                bucket = {"date": day, **empty}
+                buckets[day] = bucket
+            bucket["runTotal"] += 1
+            if status == "success":
+                bucket["runPassed"] += 1
+            else:
+                bucket["runFailed"] += 1
+            parsed = parse_json(result, None)
+            assertions = (
+                parsed.get("assertions") if isinstance(parsed, dict) else None
+            )
+            if isinstance(assertions, list):
+                for item in assertions:
+                    if isinstance(item, dict) and isinstance(item.get("passed"), bool):
+                        bucket["assertionTotal"] += 1
+                        if item["passed"]:
+                            bucket["assertionPassed"] += 1
+
+        points = [buckets[key] for key in sorted(buckets)]
+        return {"windowDays": window_days, "points": points}
 
     def assertion_failures_for_runs(
         self, runs: list[dict[str, Any]]

@@ -7,10 +7,10 @@
 
 ## 阶段 D：编排看板数据（R4-1，纯增量端点，独立提交）
 
-- [ ] D1. `_aggregation.py` 增 `run_trend(project_id, window_days)`：逐日桶（近 N 天含无数据日），口径与 `assertion_stats` 一致（仅 success/failed 终态 run；无断言 run 不进断言分子分母）；只聚合计数不落 actual。
-- [ ] D2. `handler/runs.py` 增 `GET /runs/trend` 路由（项目角色校验 403/404 沿用既有）；`window_days` 缺省/<=0 全量。
-- [ ] D3. 单测 `test_run_trend.py`：逐日聚合、窗口/全量、口径一致、空库、403/404、payload 无 actual/secret。
-- [ ] D4. [gate] `npm run test:py` 全绿。
+- [x] D1. `_aggregation.py` 增 `run_trend(project_id, window_days)`：逐日桶（近 N 天含无数据日），口径与 `assertion_stats` 一致（仅 success/failed 终态 run；无断言 run 不进断言分子分母）；只聚合计数不落 actual。
+- [x] D2. `handler/runs.py` 增 `GET /runs/trend` 路由（项目角色校验 403/404 沿用既有）；`window_days` 缺省/<=0 全量；路由鉴权矩阵增 `project.view` 策略行。
+- [x] D3. 单测 `test_run_trend.py` 5 用例：逐日聚合、窗口含空日、口径一致（无断言 run 不进分子分母、非终态不纳入）、空库、403/404、payload 无 actual/secret。
+- [x] D4. [gate] `npm run test:py` 295 全绿（290 基线 + 5 趋势用例）。
 
 ## 阶段 E：引入 recharts（R4-4，独立提交）
 

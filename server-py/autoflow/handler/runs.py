@@ -241,6 +241,26 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 200, stats)
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/runs/trend",
+        methods=["GET"],
+    )
+    async def platform_run_trend(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_role(project_id, user.id)
+        query = request.query_params
+        raw_days = _text(query.get("window_days")).strip()
+        try:
+            window_days = int(raw_days) if raw_days else None
+        except ValueError:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID") from None
+        if window_days is not None and window_days <= 0:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID")
+        trend = services.run_trend(project_id, window_days)
+        return _send(Response(), 200, trend)
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/runs/{run_id}/assertion-report",
         methods=["POST"],
     )
