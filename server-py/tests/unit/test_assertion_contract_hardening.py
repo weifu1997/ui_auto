@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from autoflow.runner import _assert_text, _run_assertion
+from autoflow.runner import _assert_text, _assert_url, _run_assertion
 
 
 class _TextLocator:
@@ -20,6 +20,20 @@ class _TextLocator:
 
     def text_content(self, timeout: int | None = None) -> str:
         return self._text
+
+
+class _UrlPage:
+    """URL 断言用的假页面：`url` 为普通属性；`broken` 时访问抛异常。"""
+
+    def __init__(self, url: str, *, broken: bool = False):
+        self._url = url
+        self._broken = broken
+
+    @property
+    def url(self) -> str:
+        if self._broken:
+            raise RuntimeError("Target page, context or browser has been closed")
+        return self._url
 
 
 def _step(**overrides) -> dict:
@@ -67,3 +81,88 @@ def test_text_compare_respects_trimcompare_false():
     )
     assert passed is False
     assert actual.endswith("\n")
+
+
+# ---------- R3-1：URL 断言（页面级，无元素） ----------
+
+
+def _url_step(**overrides) -> dict:
+    return {"action": "URL 断言", "assertMatch": "contains", **overrides}
+
+
+def test_url_assert_contains_default():
+    """缺省匹配方式为 contains：实际 URL 含期望子串即通过。"""
+    passed, expected, actual = _assert_url(
+        _UrlPage("https://app.test/__fixture/login?next=/dash"),
+        _url_step(),
+        1000,
+        "/__fixture/login",
+    )
+    assert passed is True
+    assert expected == "/__fixture/login"
+    assert actual == "https://app.test/__fixture/login?next=/dash"
+
+
+def test_url_assert_contains_fail_on_missing_substring():
+    passed, _expected, actual = _assert_url(
+        _UrlPage("https://app.test/home"),
+        _url_step(),
+        1000,
+        "/__fixture/login",
+    )
+    assert passed is False
+    assert actual == "https://app.test/home"
+
+
+def test_url_assert_exact():
+    url = "https://app.test/__fixture/login"
+    passed, expected, actual = _assert_url(
+        _UrlPage(url),
+        _url_step(assertMatch="exact"),
+        1000,
+        url,
+    )
+    assert passed is True
+    assert expected == url
+    assert actual == url
+
+
+def test_url_assert_exact_ignores_extra_query():
+    """exact 含查询串：实际多出查询参数不算命中。"""
+    passed, _expected, _actual = _assert_url(
+        _UrlPage("https://app.test/login?next=/dash"),
+        _url_step(assertMatch="exact"),
+        1000,
+        "https://app.test/login",
+    )
+    assert passed is False
+
+
+def test_url_assert_page_unavailable_does_not_raise():
+    """页面关闭/取 URL 异常：判定为不可用（不抛非预期异常）。"""
+    passed, _expected, actual = _assert_url(
+        _UrlPage("", broken=True),
+        _url_step(),
+        1000,
+        "/__fixture/login",
+    )
+    assert passed is False
+    assert actual == "not-available"
+
+
+def test_run_assertion_url_dispatch_without_locator():
+    """URL 断言经 _run_assertion 分发：无元素（locator=None）不落
+    STEP_ELEMENT_REQUIRED，type 严格来自映射（url）。"""
+    record = _run_assertion(
+        None,
+        _UrlPage("https://app.test/__fixture/login"),
+        {"action": "URL 断言", "assertMatch": "contains"},
+        1000,
+        "/__fixture/login",
+    )
+    assert record == {
+        "type": "url",
+        "passed": True,
+        "expected": "/__fixture/login",
+        "actual": "https://app.test/__fixture/login",
+    }

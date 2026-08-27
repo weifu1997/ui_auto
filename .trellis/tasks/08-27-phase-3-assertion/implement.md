@@ -15,10 +15,10 @@
 
 ## 阶段 B：URL 断言执行（R3-1 执行）
 
-- [ ] B1. `runner.py` 新增 `_assert_url(page, step, value)`：取 `page.url`，`assertMatch` exact/contains（缺省 contains），`expected == actual` / `expected in actual`；不读 locator、无 `trimCompare` 语义、无 `STEP_ELEMENT_REQUIRED`；页面未打开（about:blank / 异常）按实际值判定不抛非预期异常。
-- [ ] B2. `_run_assertion` 分发入口增 URL 断言（无元素，locator=None 走通）。
-- [ ] B3. 单测 `test_assertion_contract_hardening.py` 或新文件：`_assert_url` 判定矩阵（exact/contains/缺省 contains/查询串/异常 URL）。
-- [ ] B4. [gate] `npm run test:py` 全绿。
+- [x] B1. `runner.py` 新增 `_assert_url(page, step, timeout_ms, value)`：取 `page.url`，`assertMatch` exact/contains（缺省 contains）；不读 locator、无 `trimCompare` 语义、无 `STEP_ELEMENT_REQUIRED`；页面取 URL 异常按「不可用」判定不抛。
+- [x] B2. `_run_assertion` 分发入口增 URL 断言分支（locator=None 走通，type 严格来自映射）。
+- [x] B3. 单测 `test_assertion_contract_hardening.py` 增 6 用例：contains 缺省/子串未命中/exact/查询串/页面异常不抛/分发无 locator。
+- [x] B4. [gate] 通过：`npm run test:py` 288 全绿（282 基线 + 6 URL 用例）。
 
 ## 阶段 C：URL 断言编辑器（R3-1 编辑器）
 

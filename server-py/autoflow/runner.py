@@ -412,6 +412,30 @@ def _assert_attribute(
     return passed, expected, actual
 
 
+def _assert_url(
+    page: Any,
+    step: dict[str, Any],
+    timeout_ms: int,
+    value: str,
+) -> tuple[bool, str, str]:
+    """URL 断言：当前页面 URL 按匹配方式命中期望值（exact/contains，缺省 contains）。
+
+    页面级断言（R3-1）：不读 locator——URL 断言步骤不引用元素，也不落
+    STEP_ELEMENT_REQUIRED；无 trimCompare 语义（URL 不做空白折叠归一化）。
+    页面取 URL 异常（如已关闭）时按「不可用」判定，不抛非预期异常。
+    """
+    match = step.get("assertMatch")
+    if match not in ASSERT_MATCHES:
+        match = "contains"
+    expected = value
+    try:
+        actual = page.url
+    except Exception:
+        return False, expected, "not-available"
+    passed = actual == expected if match == "exact" else expected in actual
+    return passed, expected, actual
+
+
 def _run_assertion(
     locator: Any,
     page: Any,
@@ -419,7 +443,7 @@ def _run_assertion(
     timeout_ms: int,
     value: str,
 ) -> dict[str, Any]:
-    """按动作分发到四种断言判定，返回结构化判定 {type, passed, expected, actual}。
+    """按动作分发到断言判定，返回结构化判定 {type, passed, expected, actual}。
 
     W2-5：未知断言动作显式报 UNSUPPORTED_ACTION，不再静默落属性断言。
     """
@@ -432,6 +456,8 @@ def _run_assertion(
         passed, expected, actual = _assert_text(locator, page, step, timeout_ms, value)
     elif action == "数量断言":
         passed, expected, actual = _assert_count(locator, page, step, timeout_ms, value)
+    elif action == "URL 断言":
+        passed, expected, actual = _assert_url(page, step, timeout_ms, value)
     else:  # 属性断言（且仅属性断言会走到这里）
         passed, expected, actual = _assert_attribute(locator, page, step, timeout_ms, value)
     return {
