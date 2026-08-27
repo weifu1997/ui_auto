@@ -10,6 +10,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
+from .assertion_contract import (
+    ASSERT_MATCHES,
+    ASSERT_OPERATORS,
+    ASSERTION_TYPES,
+    ASSERT_VISIBILITIES,
+)
+
 
 def interpolate(
     value: str,
@@ -148,19 +155,6 @@ def _required(locator: Any) -> Any:
     return locator
 
 
-_ASSERT_OPERATORS = ("=", ">", "<", ">=", "<=")
-_ASSERT_MATCHES = ("exact", "contains")
-_ASSERT_VISIBILITIES = ("visible", "hidden")
-
-# 断言动作 -> 判定 type（事件/结果载荷里的统一标识）。
-_ASSERTION_TYPES = {
-    "可见性断言": "visibility",
-    "文本断言": "text",
-    "数量断言": "count",
-    "属性断言": "attribute",
-}
-
-
 def _assert_visibility(
     locator: Any,
     page: Any,
@@ -174,7 +168,7 @@ def _assert_visibility(
     报告为 not-found / hidden，便于审计定位。跨类型误值回落默认 visible。
     """
     expected = step.get("assertVisibility")
-    if expected not in _ASSERT_VISIBILITIES:
+    if expected not in ASSERT_VISIBILITIES:
         expected = "visible"
     try:
         if expected == "visible":
@@ -210,7 +204,7 @@ def _assert_text(
     才能互相匹配；期望值保留原样参与报告展示。
     """
     match = step.get("assertMatch")
-    if match not in _ASSERT_MATCHES:
+    if match not in ASSERT_MATCHES:
         match = "contains"
     expected = value
     if locator is None:
@@ -245,7 +239,7 @@ def _assert_count(
     不得让字符串与数字直接比较。
     """
     operator = step.get("assertOperator")
-    if operator not in _ASSERT_OPERATORS:
+    if operator not in ASSERT_OPERATORS:
         operator = "="
     expected = value
     try:
@@ -277,7 +271,7 @@ def _assert_attribute(
 ) -> tuple[bool, str, str]:
     """属性断言：元素某属性值按匹配方式命中期望值（缺省属性名 value）。"""
     match = step.get("assertMatch")
-    if match not in _ASSERT_MATCHES:
+    if match not in ASSERT_MATCHES:
         match = "contains"
     attribute = step.get("assertAttribute")
     if not isinstance(attribute, str) or attribute == "":
@@ -305,7 +299,7 @@ def _run_assertion(
     W2-5：未知断言动作显式报 UNSUPPORTED_ACTION，不再静默落属性断言。
     """
     action = step.get("action")
-    if action not in _ASSERTION_TYPES:
+    if action not in ASSERTION_TYPES:
         raise RuntimeError(f"UNSUPPORTED_ACTION: {action}")
     if action == "可见性断言":
         passed, expected, actual = _assert_visibility(locator, page, step, timeout_ms, value)
@@ -316,7 +310,7 @@ def _run_assertion(
     else:  # 属性断言（且仅属性断言会走到这里）
         passed, expected, actual = _assert_attribute(locator, page, step, timeout_ms, value)
     return {
-        "type": _ASSERTION_TYPES[action],
+        "type": ASSERTION_TYPES[action],
         "passed": passed,
         "expected": expected,
         "actual": actual,
@@ -461,7 +455,7 @@ def _execute_step(
                 )
                 wait_ms = cap
             page.wait_for_timeout(wait_ms)
-        elif action in _ASSERTION_TYPES:
+        elif action in ASSERTION_TYPES:
             assertion_started = time.time()
             assertion = _run_assertion(locator, page, step, timeout, value)
             duration_ms = int((time.time() - assertion_started) * 1000)

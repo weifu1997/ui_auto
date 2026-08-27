@@ -1,3 +1,5 @@
+import type { AssertMatch, AssertOperator, AssertVisibility } from "./assertions";
+
 export type Project = {
   id: string;
   name: string;
@@ -38,12 +40,13 @@ export type FlowStep = {
   outputPath?: string;
   outputPublic?: boolean;
   // 断言字段：每个字段只属于一种断言类型，枚举互斥，不得跨类型取值。
+  // 枚举/缺省由 ./assertions 单源（契约见 .trellis/spec/backend/assertion-field-contract.md）。
   /** 仅文本/属性断言：匹配方式（缺省 contains，兼容既有行为）。 */
-  assertMatch?: "exact" | "contains";
+  assertMatch?: AssertMatch;
   /** 仅可见性断言：可见/不可见（缺省 visible）。不复用 assertMatch。 */
-  assertVisibility?: "visible" | "hidden";
+  assertVisibility?: AssertVisibility;
   /** 仅数量断言：匹配元素个数与期望数的关系（缺省 =）。 */
-  assertOperator?: "=" | ">" | "<" | ">=" | "<=";
+  assertOperator?: AssertOperator;
   /** 仅属性断言：属性名（如 value / disabled / href / checked / text）。 */
   assertAttribute?: string;
   /** W2-5：文本断言比较前是否做空白归一化；缺省 true，显式 false 关闭。 */

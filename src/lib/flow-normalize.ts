@@ -1,4 +1,5 @@
 import type { Flow, FlowStep, RunStatus } from "./mock-data";
+import { isAssertMatch, isAssertOperator, isAssertVisibility } from "../domain/assertions";
 
 // Flow 资源由不同写入方产生：编排器保存的是完整格式，而模板应用写入的
 // 是快照格式（steps 为数组、缺 tags/lastStatus/updatedAt）。统一归一化成
@@ -30,16 +31,10 @@ function normalizeStep(raw: unknown): FlowStep {
     status:
       step.status === "success" || step.status === "failed" ? step.status : "pending",
     // 断言字段：仅接受各自枚举/类型内的合法值，非法数据回落 undefined（缺省语义由后端执行时兜底）。
-    assertMatch: assertMatch === "exact" || assertMatch === "contains" ? assertMatch : undefined,
-    assertVisibility:
-      assertVisibility === "visible" || assertVisibility === "hidden"
-        ? assertVisibility
-        : undefined,
-    assertOperator:
-      assertOperator === "=" || assertOperator === ">" || assertOperator === "<" ||
-      assertOperator === ">=" || assertOperator === "<="
-        ? assertOperator
-        : undefined,
+    // 枚举/守卫来自 ../domain/assertions 单源（契约见 .trellis/spec/backend/assertion-field-contract.md）。
+    assertMatch: isAssertMatch(assertMatch) ? assertMatch : undefined,
+    assertVisibility: isAssertVisibility(assertVisibility) ? assertVisibility : undefined,
+    assertOperator: isAssertOperator(assertOperator) ? assertOperator : undefined,
     assertAttribute:
       typeof assertAttribute === "string" && assertAttribute !== ""
         ? assertAttribute

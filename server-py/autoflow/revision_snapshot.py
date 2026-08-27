@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .assertion_contract import ASSERTION_KEYS
 from .core import digest
 from .resources import as_record
 
@@ -21,11 +22,7 @@ STEP_KEYS = (
     "value",
     "timeout",
     "failurePolicy",
-    "assertMatch",
-    "assertVisibility",
-    "assertOperator",
-    "assertAttribute",
-    "trimCompare",
+    *ASSERTION_KEYS,
     "output",
     "outputSource",
     "outputAttribute",

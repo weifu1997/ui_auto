@@ -25,24 +25,24 @@
 
 ### A2. 前端收敛到单一模块
 
-- [ ] A2.1 新增 `src/domain/assertions.ts`：导出 `ASSERT_MATCHES` / `ASSERT_VISIBILITIES` / `ASSERT_OPERATORS` / `ASSERT_ATTRIBUTE_DEFAULT` / `ASSERTION_ACTIONS`（动作→判定 type 映射）与类型别名（引用 `model.ts` 的 `FlowStep` 断言字段）。
-- [ ] A2.2 `src/lib/flow-normalize.ts`：把行 33-46 的内联枚举判断改为引用 `assertions.ts` 常量（非法值回落 `undefined` 的语义不变）。
-- [ ] A2.3 `src/domain/model.ts`：断言字段类型改为从 `assertions.ts` 的类型别名引用（对外类型形状不变）。
-- [ ] A2.4 [gate] `npm run lint && npm run build && npm run test:unit` 全绿。
+- [x] A2.1 新增 `src/domain/assertions.ts`：导出 `ASSERT_MATCHES` / `ASSERT_VISIBILITIES` / `ASSERT_OPERATORS` / `ASSERT_ATTRIBUTE_DEFAULT` / `ASSERTION_ACTIONS`（动作→判定 type 映射）与类型别名（引用 `model.ts` 的 `FlowStep` 断言字段）。
+- [x] A2.2 `src/lib/flow-normalize.ts`：把行 33-46 的内联枚举判断改为引用 `assertions.ts` 常量（非法值回落 `undefined` 的语义不变）。
+- [x] A2.3 `src/domain/model.ts`：断言字段类型改为从 `assertions.ts` 的类型别名引用（对外类型形状不变）。
+- [x] A2.4 [gate] `npm run lint && npm run build && npm run test:unit` 全绿。
 
 ### A3. 后端收敛到单一模块
 
-- [ ] A3.1 新增 `server-py/autoflow/assertion_contract.py`：迁移 `runner.py:151-161` 的 `_ASSERT_OPERATORS` / `_ASSERT_MATCHES` / `_ASSERT_VISIBILITIES` / `_ASSERTION_TYPES`，并导出规范字段集 `ASSERTION_KEYS`。
-- [ ] A3.2 `runner.py` 四个 `_assert_*` 与 `_run_assertion` 改为从 `assertion_contract` 导入（`step.get(...)` 缺省回落逻辑原样保留，行 176-178/212-214/247-249/279-284 的兜底不变）。
-- [ ] A3.3 `revision_snapshot.py:STEP_KEYS` 改由 `assertion_contract.ASSERTION_KEYS` 参与组装（STEP_KEYS 内容不变）。
-- [ ] A3.4 [gate] `npm run test:py` 全绿（含既有断言单测）。
+- [x] A3.1 新增 `server-py/autoflow/assertion_contract.py`：迁移 `runner.py:151-161` 的 `_ASSERT_OPERATORS` / `_ASSERT_MATCHES` / `_ASSERT_VISIBILITIES` / `_ASSERTION_TYPES`，并导出规范字段集 `ASSERTION_KEYS`。
+- [x] A3.2 `runner.py` 四个 `_assert_*` 与 `_run_assertion` 改为从 `assertion_contract` 导入（`step.get(...)` 缺省回落逻辑原样保留，行 176-178/212-214/247-249/279-284 的兜底不变）。
+- [x] A3.3 `revision_snapshot.py:STEP_KEYS` 改由 `assertion_contract.ASSERTION_KEYS` 参与组装（STEP_KEYS 内容不变，键序原位展开——checksum 依赖键序）。
+- [x] A3.4 [gate] `npm run test:py` 全绿（含既有断言单测）。
 
 ### A4. 跨层 parity（单源的机械校验）
 
-- [ ] A4.1 新增 `src/lib/assertions-contract.test.ts`：`assertions.ts` 各枚举与契约文档一致；`ASSERTION_ACTIONS` 键覆盖 `actionOptions` 全部断言动作。
-- [ ] A4.2 新增 `server-py/tests/unit/test_assertion_contract.py`：`assertion_contract` 枚举与契约文档一致；`STEP_KEYS` 包含且仅包含规范断言字段（与契约比对）。
-- [ ] A4.3 既有 e2e（`assertion-contract.spec.ts`）增补断言：`_ASSERTION_TYPES` 键 == 前端 `actionOptions` 断言动作（跨层一致）。
-- [ ] A4.4 [gate] `npm run test:unit && npm run test:py`。
+- [x] A4.1 新增 `src/lib/assertions-contract.test.ts`：`assertions.ts` 各枚举与契约文档一致；`ASSERTION_ACTIONS` 键覆盖 `actionOptions` 全部断言动作。
+- [x] A4.2 新增 `server-py/tests/unit/test_assertion_contract.py`：`assertion_contract` 枚举与契约文档一致；`STEP_KEYS` 原位内嵌规范断言字段（与契约比对）。
+- [x] A4.3 既有 e2e（`assertion-contract.spec.ts`）增补断言：后端 `step.asserted` / `result.assertions` 的 `type` 与前端 `ASSERTION_ACTIONS` 映射一致（跨层校验，引用单源常量而非字面量）。
+- [x] A4.4 [gate] `npm run test:unit && npm run test:py` 全绿。
 
 ## 阶段 B：FlowEditorPage 拆分（保留行为）
 

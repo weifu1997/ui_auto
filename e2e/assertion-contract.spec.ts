@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
+// 跨层 parity：后端 `step.asserted` / `result.assertions` 发出的 type 必须等于
+// 前端 `ASSERTION_ACTIONS` 映射（断言 schema 单源，见 .trellis/spec/backend/assertion-field-contract.md）。
+import { ASSERTION_ACTIONS } from "../src/domain/assertions";
 
 // 真实后端核心链路冒烟：不 mock 前端 API，直接对生产服务器（npm run start）
 // 建工作区/项目 → 内联 flow/environment/elements 创建发布版本 → 发起运行 →
@@ -102,14 +105,15 @@ test("文本断言经真实执行链路写入 result.assertions 与 step.asserte
   // 4. 契约断言：result.assertions 形状与内容。
   const assertions = run!.result?.assertions;
   expect(Array.isArray(assertions)).toBe(true);
+  const textType = ASSERTION_ACTIONS["文本断言"];
   const textAssertion = (assertions as Array<Record<string, unknown>>).find(
-    (item) => item.type === "text",
+    (item) => item.type === textType,
   );
   expect(textAssertion).toMatchObject({
     stepIndex: 1,
     stepId: "s2",
     title: "断言页面标题",
-    type: "text",
+    type: textType,
     passed: true,
     expected: "Fixture login",
     actual: "Fixture login",
@@ -129,7 +133,7 @@ test("文本断言经真实执行链路写入 result.assertions 与 step.asserte
   expect(assertedIndex).toBeLessThan(completedIndex);
   expect(run!.events[assertedIndex].data).toMatchObject({
     stepId: "s2",
-    type: "text",
+    type: textType,
     passed: true,
     expected: "Fixture login",
     actual: "Fixture login",
