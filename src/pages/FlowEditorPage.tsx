@@ -3,13 +3,8 @@ import { Navigate, useNavigate, useParams } from "../router";
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
-  CloseCircleFilled,
   CodeOutlined,
-  DeleteOutlined,
-  DragOutlined,
-  ExclamationCircleFilled,
   FileSearchOutlined,
-  LoadingOutlined,
   MoreOutlined,
   PartitionOutlined,
   AudioOutlined,
@@ -20,14 +15,9 @@ import {
   SearchOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { Alert, AutoComplete, Button, Checkbox, Dropdown, Drawer, Empty, Form, Input, Modal, Popover, Select, Switch, Tag, Tooltip } from "antd";
-import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import type { DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { Alert, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Tag, Tooltip } from "antd";
 import { shouldReloadEditorSteps, useFlowStore } from "../stores/flow-store";
 import { useRunStore } from "../stores/run-store";
-import { useSecretStore } from "../stores/secret-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { message, modal } from "../lib/antd-feedback";
 import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, previewPlatformRun, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
@@ -38,7 +28,7 @@ const FlowGraphView = lazy(() => import("../components/FlowGraphView"));
 import type { RecordingEvent, RecordingResult, RecordingSession } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { elementValidationLoginMessage } from "../lib/element-validation";
-import { createRunDispatchKeyStore, describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, uniqueVariableNameValidator } from "./shared";
+import { createRunDispatchKeyStore, describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey } from "./shared";
 import {
   clearStoredRecordingSession,
   isTerminalRecordingStatus,
@@ -51,8 +41,19 @@ import {
   storeRecordingSessionId,
   type RecordingImportPlan,
 } from "../lib/recording-editor-state";
-import { actionOptions } from "../lib/mock-data";
-import type { ElementAsset, Environment, Flow, FlowStep, Project, Variable } from "../lib/mock-data";
+import type { ElementAsset, Environment, Flow, Project, Variable } from "../lib/mock-data";
+import { AssertionStepPanel } from "./flow-editor/AssertionStepPanel";
+import { AssertionBatchBar } from "./flow-editor/AssertionBatchBar";
+import { StepList } from "./flow-editor/StepList";
+import { RecordingImportPanel } from "./flow-editor/RecordingImportPanel";
+import { SecretCreatorDrawer } from "./flow-editor/SecretCreatorDrawer";
+import {
+  VALIDATION_DEADLINE_MS,
+  emptyElementEdits,
+  emptyValidationResults,
+  mergeElementEdits,
+} from "./flow-editor/element-validation";
+import type { ElementEditPatch, ElementValidationResult } from "./flow-editor/element-validation";
 import { revisionInput, snapshotVariables, variableReference } from "../lib/revision-snapshot";
 
 const emptyFlows: Flow[] = [];
@@ -62,176 +63,6 @@ const emptyEnvironments: Environment[] = [];
 
 function projectById(projects: Project[], id?: string) {
   return projects.find((project) => project.id === id);
-}
-
-function suggestSecretNameFromHint(fieldHint: string, variables: Variable[], scope: Variable["scope"] = "项目"): string {
-  const lower = fieldHint.toLowerCase();
-  let base = "secret";
-  if (/密码|password|passwd|pwd/.test(lower)) base = "password";
-  else if (/token/.test(lower)) base = "api_token";
-  else if (/密钥|secret|key/.test(lower)) base = "secret_key";
-  else if (/用户名|登录|登录名|user|account|login/.test(lower)) base = "username";
-  else {
-    const cleaned = fieldHint.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, "_").replace(/^_+|_+$/g, "");
-    if (cleaned.length > 0 && cleaned.length <= 32) base = cleaned;
-  }
-  const existSet = new Set(
-    variables.filter((variable) => variable.scope === scope).map((variable) => variable.name),
-  );
-  if (!existSet.has(base)) return base;
-  let suffix = 2;
-  while (existSet.has(`${base}_${suffix}`)) suffix += 1;
-  return `${base}_${suffix}`;
-}
-
-type RecordingBinding = {
-  stepId: string;
-  fieldHint: string;
-};
-
-function SecretCreatorDrawer({
-  open,
-  project,
-  variables,
-  stepBinding,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  project: Project;
-  variables: Variable[];
-  stepBinding: RecordingBinding | null;
-  onClose: () => void;
-  onCreated: (variable: Variable) => void;
-}) {
-  const [form] = Form.useForm();
-  const scope = Form.useWatch("scope", form) ?? "项目";
-  useEffect(() => {
-    if (!open) return;
-    form.setFieldsValue({ scope: "项目", description: stepBinding?.fieldHint ?? "" });
-    // 根据 scope 和 hint 智能推断默认名称（去重）
-    const defaultScope: Variable["scope"] = "项目";
-    const defaultName = stepBinding
-      ? suggestSecretNameFromHint(stepBinding.fieldHint, variables, defaultScope)
-      : suggestSecretNameFromHint("", variables, defaultScope);
-    form.setFieldsValue({ scope: defaultScope, name: defaultName, description: stepBinding?.fieldHint ?? "" });
-  }, [form, open, stepBinding, variables]);
-  return (
-    <Drawer
-      title={stepBinding ? `为「${stepBinding.fieldHint}」新建 secret` : "新建 secret 变量"}
-      open={open}
-      size={480}
-      onClose={onClose}
-      extra={
-        <Button
-          type="primary"
-          onClick={() =>
-            form
-              .validateFields()
-              .then((values) => {
-                const id = `var-${Date.now()}`;
-                if (typeof values.value === "string" && values.value.trim()) {
-                  useSecretStore.getState().setValues(project.id, { [id]: values.value });
-                  message.info("密钥已注入当前会话（刷新后失效），不会保存到存储");
-                }
-                onCreated({
-                  id,
-                  name: values.name.trim(),
-                  description: values.description?.trim() || stepBinding?.fieldHint || "项目变量",
-                  value: "",
-                  scope: values.scope,
-                  secret: true,
-                  updatedAt: "刚刚",
-                });
-              })
-          }
-        >
-          创建并绑定
-        </Button>
-      }
-    >
-      <Form form={form} layout="vertical">
-        <Form.Item
-          name="name"
-          label="变量名"
-          dependencies={["scope"]}
-          validateTrigger={["onChange", "onBlur"]}
-          rules={[
-            { required: true, message: "请输入变量名" },
-            { validator: uniqueVariableNameValidator(variables, scope) },
-          ]}
-          extra={`引用格式：{{${scope === "环境" ? "env" : "project"}.变量名}}`}
-        >
-          <Input placeholder="例如：password" />
-        </Form.Item>
-        <Form.Item name="scope" label="作用域">
-          <Select
-            options={[
-              { value: "项目", label: "项目变量" },
-              { value: "环境", label: "环境变量" },
-            ]}
-          />
-        </Form.Item>
-        <Form.Item name="value" label="值" rules={[{ required: true, message: "请输入密钥值" }]}>
-          <Input.Password placeholder="密钥不会保存：仅注入当前会话，刷新后失效" />
-        </Form.Item>
-        <Form.Item name="description" label="描述">
-          <Input.TextArea rows={3} placeholder="说明变量的业务用途" />
-        </Form.Item>
-      </Form>
-    </Drawer>
-  );
-}
-
-type ElementValidationStatus =
-  | "pending"
-  | "running"
-  | "success"
-  | "ambiguous"
-  | "missed"
-  | "error";
-
-type ElementValidationResult = {
-  status: ElementValidationStatus;
-  count?: number;
-  errorMessage?: string;
-  /** 校验落在登录墙上：元素位于登录后才能访问的页面，需要登录态。 */
-  loginBlocked?: boolean;
-};
-
-const emptyValidationResults: Record<string, ElementValidationResult> = {};
-const emptyElementEdits: Record<string, Partial<ElementAsset>> = {};
-
-// 服务端按 workspace 串行执行校验，单个任务实测可达 ~50s，批量时按队列顺序
-// 依次完成（第 k 个约在 k×~50s）。用 7.5 分钟墙钟上限覆盖常见批次的排队耗时，
-// 避免「前端放弃轮询、服务端仍在跑」导致的假性「校验中」滞留。
-const VALIDATION_DEADLINE_MS = 7 * 60_000 + 30_000;
-
-function mergeElementEdits(
-  element: ElementAsset,
-  edits: Record<string, Partial<ElementAsset>>,
-): ElementAsset {
-  const patch = edits[element.id];
-  if (!patch) return element;
-  return { ...element, ...patch };
-}
-
-function elementValidationLabel(result: ElementValidationResult, validated: boolean) {
-  if (!validated && result.status !== "running") return "未校验，点击「校验全部」开始";
-  switch (result.status) {
-    case "pending":
-      return "等待校验";
-    case "running":
-      return "校验中";
-    case "success":
-      return "唯一命中";
-    case "ambiguous":
-      return `匹配 ${result.count ?? "多个"} 个`;
-    case "missed":
-      return "未匹配到元素";
-    case "error":
-      return result.errorMessage ?? "校验失败";
-  }
 }
 
 export default function FlowEditorPage() {
@@ -526,10 +357,29 @@ export default function FlowEditorPage() {
     [effectiveNewElements, runSingleValidation],
   );
 
-  const upsertRun = useRunStore((state) => state.upsertRun);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  // 元素编辑保存：写入编辑草稿、收起编辑行、标记已校验，并立即重校该元素。
+  // （复合回调，由 RecordingImportPanel 在「保存并重校」时上抛。）
+  const handleSaveElementEdit = useCallback(
+    (element: ElementAsset, patch: ElementEditPatch) => {
+      setElementEdits((prev) => ({
+        ...prev,
+        [element.id]: { ...(prev[element.id] ?? {}), ...patch },
+      }));
+      setExpandedElementId(null);
+      setHasValidated(true);
+      // 保存后自动重新校验
+      const merged = mergeElementEdits(element, {
+        ...elementEdits,
+        [element.id]: { ...(elementEdits[element.id] ?? {}), ...patch },
+      });
+      runSingleValidation(element.id, merged, (result) => {
+        setValidationResults((prev) => ({ ...prev, [element.id]: result }));
+      });
+    },
+    [elementEdits, runSingleValidation],
   );
+
+  const upsertRun = useRunStore((state) => state.upsertRun);
   const lastLoadedDefinition = useRef<{ flowId: string; serialized: string } | null>(null);
   useEffect(() => {
     if (!flowId) return;
@@ -904,12 +754,6 @@ export default function FlowEditorPage() {
     message.success("录制步骤已追加到流程草稿，请保存后发布");
   };
 
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    if (!over || active.id === over.id) return;
-    const from = steps.findIndex((step) => step.id === active.id);
-    const to = steps.findIndex((step) => step.id === over.id);
-    if (from >= 0 && to >= 0) moveStep(from, to);
-  };
   const goBack = () => {
     if (isDirty)
       modal.confirm({
@@ -1155,75 +999,22 @@ export default function FlowEditorPage() {
               />
             </Tooltip>
           </div>
-          {selectedStepIds.length > 0 && (
-            <div className="batch-step-bar" role="group" aria-label="批量编辑断言步骤">
-              <span>已选 {selectedStepIds.length} 个断言步骤</span>
-              <Select
-                aria-label="批量匹配方式"
-                placeholder="匹配方式"
-                size="small"
-                style={{ width: 140 }}
-                options={[
-                  { value: "contains", label: "包含匹配" },
-                  { value: "exact", label: "精确匹配" },
-                ]}
-                onChange={(value) => applyBatchMatch(value as "exact" | "contains")}
-              />
-              <Select
-                aria-label="批量失败策略"
-                placeholder="失败策略"
-                size="small"
-                style={{ width: 140 }}
-                options={["立即失败", "继续执行", "重试 1 次"].map((value) => ({
-                  value,
-                }))}
-                onChange={(value) => applyBatchFailurePolicy(value)}
-              />
-              <Button
-                size="small"
-                type="text"
-                aria-label="清除步骤选择"
-                onClick={() => setSelectedStepIds([])}
-              >
-                清除选择
-              </Button>
-            </div>
-          )}
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={steps.map((step) => step.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="step-list">
-                {steps.map((step, index) => (
-                  <SortableStep
-                    key={step.id}
-                    step={step}
-                    index={index}
-                    isSelected={step.id === selectedStep?.id}
-                    total={steps.length}
-                    selectable={step.action.includes("断言")}
-                    selected={selectedStepIds.includes(step.id)}
-                    onToggleSelection={toggleStepSelection}
-                    onSelect={() => setSelectedStep(step.id)}
-                    onMove={moveStep}
-                    onRemove={handleRemoveStep}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-          <Button
-            className="add-step"
-            icon={<PlusOutlined />}
-            onClick={() => addStep()}
-          >
-            添加步骤
-          </Button>
+          <AssertionBatchBar
+            selectedCount={selectedStepIds.length}
+            onApplyMatch={applyBatchMatch}
+            onApplyFailurePolicy={applyBatchFailurePolicy}
+            onClearSelection={() => setSelectedStepIds([])}
+          />
+          <StepList
+            steps={steps}
+            selectedStepId={selectedStep?.id}
+            selectedStepIds={selectedStepIds}
+            onSelect={setSelectedStep}
+            onToggleSelection={toggleStepSelection}
+            onMove={moveStep}
+            onRemove={handleRemoveStep}
+            onAdd={addStep}
+          />
         </section>
         <section className="step-editor">
           <div className="pane-header">
@@ -1252,7 +1043,7 @@ export default function FlowEditorPage() {
             )}
           </div>
           {selectedStep ? (
-            <StepForm
+            <AssertionStepPanel
               step={selectedStep}
               elements={elements}
               onChange={updateStep}
@@ -1444,215 +1235,31 @@ export default function FlowEditorPage() {
         ]}
       >
         {recordingResult && (
-          <div className="recording-result">
-            <p>共录制 {recordingResult.steps.length} 步，{recordingResult.elements.length} 个元素；已收到 {recordingEvents.length} 个事件。</p>
-            <ol className="recording-steps-list">
-              {recordingResult.steps.map((step, index) => (
-                <li key={String(step.id ?? index)} className="recording-step-item">
-                  <span className="recording-step-content">
-                    <span className="recording-step-index">{index + 1}.</span>
-                    <span>{String(step.title ?? step.action ?? "录制步骤")} {step.element ? ` · ${String(step.element)}` : ""}</span>
-                  </span>
-                  <Tooltip title="删除此步骤">
-                    <Button
-                      type="text"
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => deleteRecordingStep(index)}
-                    />
-                  </Tooltip>
-                </li>
-              ))}
-            </ol>
-            <ul>
-              {recordingResult.elements.map((element, index) => (
-                <li key={String(element.id ?? index)}>
-                  {String(element.name ?? `元素 ${index + 1}`)}：{String(element.method ?? "css")}={String(element.value ?? "")}
-                  {element.matchCount !== undefined ? `（匹配 ${String(element.matchCount)} 个）` : "（待校验）"}
-                </li>
-              ))}
-            </ul>
-            {draftPlan && draftPlan.generatedAssertions.length > 0 && (
-              <div className="recording-assertions">
-                <p>候选断言（含可见性，以及可挑选的文本/属性建议草稿；默认不勾选）：</p>
-                {draftPlan.generatedAssertions.map((assertion) => (
-                  <label key={assertion.id} className="recording-assertion-row">
-                    <Checkbox
-                      checked={selectedAssertionIds.has(assertion.id)}
-                      onChange={(event) =>
-                        toggleRecordingAssertion(assertion.id, event.target.checked)
-                      }
-                    >
-                      {assertion.title}
-                    </Checkbox>
-                  </label>
-                ))}
-              </div>
-            )}
-            {recordingResult.warnings.length > 0 && (
-              <ul>
-                {recordingResult.warnings.map((warning, index) => (
-                  <li key={index}>{warning}</li>
-                ))}
-              </ul>
-            )}
-            {recordingResult.requiredBindings.length > 0 && (
-              <div className="recording-bindings">
-                <p>以下敏感输入必须绑定现有 secret 变量后才能导入：</p>
-                {recordingResult.requiredBindings.map((binding) => (
-                  <label key={binding.stepId} className="recording-binding-row">
-                    <span>{binding.fieldHint}</span>
-                    <div className="recording-binding-actions">
-                      <Select
-                        aria-label={`绑定 ${binding.fieldHint}`}
-                        placeholder="搜索或选择 secret 变量"
-                        showSearch
-                        optionFilterProp="label"
-                        filterOption
-                        value={recordingSecretMap[binding.stepId]}
-                        onChange={(value) => setRecordingSecretMap((current) => ({ ...current, [binding.stepId]: value }))}
-                        options={variables
-                          .filter((variable) => variable.secret && (variable.scope === "环境" || variable.scope === "项目"))
-                          .map((variable) => ({ value: variableReference(variable), label: variable.name }))}
-                      />
-                      <Button
-                        type="dashed"
-                        icon={<PlusOutlined />}
-                        onClick={() => setSecretCreatorStepId(binding.stepId)}
-                      >
-                        新建并绑定
-                      </Button>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            )}
-            {effectiveNewElements.length > 0 && (
-              <div className="recording-bindings">
-                <p style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  新增元素定位器校验（{effectiveNewElements.length} 个）
-                  <span className="validation-summary-tags">
-                    {validationSummary.totals.success > 0 && (
-                      <Tag color="success" icon={<CheckCircleFilled />}>成功 {validationSummary.totals.success}</Tag>
-                    )}
-                    {validationSummary.totals.ambiguous > 0 && (
-                      <Tag color="warning" icon={<ExclamationCircleFilled />}>匹配多个 {validationSummary.totals.ambiguous}</Tag>
-                    )}
-                    {validationSummary.totals.missed > 0 && (
-                      <Tag color="error" icon={<CloseCircleFilled />}>未匹配 {validationSummary.totals.missed}</Tag>
-                    )}
-                    {validationSummary.totals.error > 0 && (
-                      <Tag color="error">异常 {validationSummary.totals.error}</Tag>
-                    )}
-                    {(validationSummary.totals.pending + validationSummary.totals.running) > 0 && (
-                      <Tag icon={<LoadingOutlined />}>校验中 {validationSummary.totals.pending + validationSummary.totals.running}</Tag>
-                    )}
-                  </span>
-                </p>
-                {loginValidationErrors.length > 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginBottom: "var(--space-3)" }}
-                    message={`${loginValidationErrors.length} 个元素需要登录态才能校验`}
-                    description={elementValidationLoginMessage(loginValidationErrors[0]) ?? undefined}
-                  />
-                )}
-                {effectiveNewElements.map((element) => {
-                  const result = validationResults[element.id] ?? { status: "pending" as ElementValidationStatus };
-                  const expanded = expandedElementId === element.id;
-                  const statusIcon =
-                    result.status === "success" ? (
-                      <CheckCircleFilled style={{ color: "var(--success)" }} />
-                    ) : result.status === "ambiguous" ? (
-                      <ExclamationCircleFilled style={{ color: "var(--warning)" }} />
-                    ) : result.status === "missed" || result.status === "error" ? (
-                      <CloseCircleFilled style={{ color: "var(--danger)" }} />
-                    ) : result.status === "running" ? (
-                      <LoadingOutlined />
-                    ) : (
-                      <FileSearchOutlined style={{ color: "var(--text-secondary)" }} />
-                    );
-                  return (
-                    <div key={element.id} className="element-validation-row">
-                      <div className="element-validation-main">
-                        <Tooltip title={elementValidationLabel(result, hasValidated)}>
-                          <span className="element-validation-icon">{statusIcon}</span>
-                        </Tooltip>
-                        <span className="element-validation-name">{element.name}</span>
-                        <Tag className="element-validation-method">
-                          {element.method}
-                        </Tag>
-                        <Popover
-                          content={<code style={{ whiteSpace: "pre-wrap" }}>{element.value}</code>}
-                          title="定位值"
-                          trigger="click"
-                        >
-                          <span className="element-validation-value" title={element.value}>
-                            {element.value.length > 40 ? `${element.value.slice(0, 40)}…` : element.value}
-                          </span>
-                        </Popover>
-                        <span className="element-validation-spacer" />
-                        <Tooltip title="重新校验该元素">
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<ReloadOutlined />}
-                            onClick={() => retrySingleValidation(element.id)}
-                            disabled={result.status === "running"}
-                          />
-                        </Tooltip>
-                        <Button
-                          type="text"
-                          size="small"
-                          onClick={() =>
-                            setExpandedElementId(expanded ? null : element.id)
-                          }
-                        >
-                          {expanded ? "收起" : "编辑"}
-                        </Button>
-                      </div>
-                      {expanded && (
-                        <div className="element-validation-edit">
-                          <ElementEditForm
-                            element={element}
-                            environments={environments}
-                            initialPatch={elementEdits[element.id]}
-                            onCancel={() => setExpandedElementId(null)}
-                            onSubmit={(patch) => {
-                              setElementEdits((prev) => ({
-                                ...prev,
-                                [element.id]: { ...(prev[element.id] ?? {}), ...patch },
-                              }));
-                              setExpandedElementId(null);
-                              setHasValidated(true);
-                              // 保存后自动重新校验
-                              const merged = mergeElementEdits(element, {
-                                ...elementEdits,
-                                [element.id]: { ...(elementEdits[element.id] ?? {}), ...patch },
-                              });
-                              runSingleValidation(element.id, merged, (result) => {
-                                setValidationResults((prev) => ({ ...prev, [element.id]: result }));
-                              });
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {!draftPlan && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="无法生成导入计划"
-                    description="当前录制结果与元素库或 secret 绑定不兼容，请先完成 requiredBindings 的 secret 绑定后再校验。"
-                  />
-                )}
-              </div>
-            )}
-          </div>
+          <RecordingImportPanel
+            recordingResult={recordingResult}
+            eventCount={recordingEvents.length}
+            draftPlan={draftPlan}
+            selectedAssertionIds={selectedAssertionIds}
+            effectiveNewElements={effectiveNewElements}
+            validationTotals={validationSummary.totals}
+            validationResults={validationResults}
+            hasValidated={hasValidated}
+            loginValidationErrors={loginValidationErrors}
+            elementEdits={elementEdits}
+            expandedElementId={expandedElementId}
+            variables={variables}
+            environments={environments}
+            recordingSecretMap={recordingSecretMap}
+            onDeleteStep={deleteRecordingStep}
+            onToggleAssertion={toggleRecordingAssertion}
+            onSetSecretBinding={(stepId, value) =>
+              setRecordingSecretMap((current) => ({ ...current, [stepId]: value }))
+            }
+            onCreateSecret={setSecretCreatorStepId}
+            onExpandElement={setExpandedElementId}
+            onSaveElementEdit={handleSaveElementEdit}
+            onRetryValidation={retrySingleValidation}
+          />
         )}
       </Modal>
       <Modal
@@ -1754,480 +1361,6 @@ export default function FlowEditorPage() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function ElementEditForm({
-  element,
-  environments,
-  initialPatch,
-  onCancel,
-  onSubmit,
-}: {
-  element: ElementAsset;
-  environments: Environment[];
-  initialPatch?: Partial<ElementAsset>;
-  onCancel: () => void;
-  onSubmit: (patch: { path?: string; method?: ElementAsset["method"]; value?: string; environment?: string }) => void;
-}) {
-  const [form] = Form.useForm();
-  const method = Form.useWatch("method", form);
-  const merged: ElementAsset = initialPatch ? { ...element, ...initialPatch } : element;
-  useEffect(() => {
-    form.setFieldsValue({
-      path: merged.path,
-      method: merged.method,
-      value: merged.value,
-      environment: merged.environment,
-    });
-  }, [form, merged.path, merged.method, merged.value, merged.environment]);
-  return (
-    <Form
-      form={form}
-      layout="vertical"
-      className="element-edit-form"
-      onFinish={(values) => {
-        onSubmit({
-          path: typeof values.path === "string" ? values.path.trim() : undefined,
-          method: values.method,
-          value: typeof values.value === "string" ? values.value : undefined,
-          environment: typeof values.environment === "string" ? values.environment : undefined,
-        });
-      }}
-    >
-      <div className="form-row">
-        <Form.Item
-          name="path"
-          label="页面路径"
-          rules={[{ required: true, message: "请输入路径" }]}
-          style={{ flex: 2 }}
-        >
-          <Input placeholder="/login" />
-        </Form.Item>
-        <Form.Item
-          name="environment"
-          label="默认验证环境"
-          style={{ flex: 1 }}
-        >
-          <Select
-            options={environments.map((env) => ({ value: env.id, label: env.name }))}
-          />
-        </Form.Item>
-      </div>
-      <div className="form-row">
-        <Form.Item
-          name="method"
-          label="定位方式"
-          rules={[{ required: true }]}
-          style={{ flex: 1 }}
-        >
-          <Select
-            options={["testid", "role", "label", "text", "CSS", "XPath"].map((value) => ({
-              value,
-              label: value,
-            }))}
-          />
-        </Form.Item>
-        <Form.Item
-          name="value"
-          label="定位值"
-          rules={[{ required: true, message: "请输入定位值" }]}
-          style={{ flex: 2 }}
-        >
-          <Input
-            placeholder={
-              method === "testid"
-                ? "login-submit"
-                : method === "role"
-                  ? 'button[name="登录"]'
-                  : "请输入定位值"
-            }
-          />
-        </Form.Item>
-      </div>
-      {(method === "CSS" || method === "XPath") && (
-        <Alert
-          showIcon
-          type="warning"
-          title="该定位方式稳定性较低"
-          description="优先选择 testid、role 或 label。CSS/XPath 在页面结构变化后更容易失效。"
-        />
-      )}
-      <div className="element-edit-actions">
-        <Button onClick={onCancel}>取消</Button>
-        <Button type="primary" htmlType="submit">保存并重校</Button>
-      </div>
-    </Form>
-  );
-}
-
-function SortableStep({
-  step,
-  index,
-  total,
-  isSelected,
-  selectable,
-  selected,
-  onToggleSelection,
-  onSelect,
-  onMove,
-  onRemove,
-}: {
-  step: FlowStep;
-  index: number;
-  total: number;
-  isSelected: boolean;
-  selectable: boolean;
-  selected: boolean;
-  onToggleSelection: (stepId: string, checked: boolean) => void;
-  onSelect: () => void;
-  onMove: (from: number, to: number) => void;
-  onRemove: (id: string) => void;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: step.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`step-item ${selectable ? "has-select" : ""} ${
-        isSelected ? "selected" : ""
-      } ${isDragging ? "dragging" : ""}`}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onSelect();
-      }}
-      role="button"
-      tabIndex={0}
-    >
-      {selectable && (
-        <span
-          className="step-select"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <Checkbox
-            aria-label={`选择步骤：${step.title}`}
-            checked={selected}
-            onChange={(event) => onToggleSelection(step.id, event.target.checked)}
-          />
-        </span>
-      )}
-      <span className="step-index">{index + 1}</span>
-      <button
-        className="step-drag-handle"
-        type="button"
-        aria-label={`拖拽排序：${step.title}`}
-        onClick={(event) => event.stopPropagation()}
-        {...attributes}
-        {...listeners}
-      >
-        <DragOutlined />
-      </button>
-      <span className={`step-kind ${step.status}`}>
-        <PlayCircleFilled />
-      </span>
-      <span className="step-copy">
-        <strong>{step.title}</strong>
-        <small>{step.action}</small>
-      </span>
-      <Dropdown
-        menu={{
-          items: [
-            {
-              key: "up",
-              label: "上移",
-              disabled: index === 0,
-              onClick: () => onMove(index, index - 1),
-            },
-            {
-              key: "down",
-              label: "下移",
-              disabled: index === total - 1,
-              onClick: () => onMove(index, index + 1),
-            },
-            {
-              key: "delete",
-              label: "删除步骤",
-              danger: true,
-              onClick: () => onRemove(step.id),
-            },
-          ],
-        }}
-        trigger={["click"]}
-      >
-        <Button
-          type="text"
-          icon={<MoreOutlined />}
-          aria-label={`步骤 ${step.title} 操作`}
-          onClick={(event) => event.stopPropagation()}
-        />
-      </Dropdown>
-    </div>
-  );
-}
-
-// 断言字段互斥：每个字段只属于一种断言类型。切换动作时清掉不属于新动作的字段，
-// 避免跨类型字段残留（后端跨类型误值回落默认，但编辑器不应让用户配置出这种状态）。
-const ASSERTION_FIELDS = [
-  "assertMatch",
-  "assertVisibility",
-  "assertOperator",
-  "assertAttribute",
-] as const;
-
-function staleAssertionFields(action: string): Partial<FlowStep> {
-  const clear = (name: (typeof ASSERTION_FIELDS)[number]): Partial<FlowStep> => ({
-    [name]: undefined,
-  });
-  if (action === "文本断言") {
-    // 文本断言仅保留 assertMatch。
-    return { ...clear("assertVisibility"), ...clear("assertOperator"), ...clear("assertAttribute") };
-  }
-  if (action === "属性断言") {
-    // 属性断言保留 assertMatch + assertAttribute。
-    return { ...clear("assertVisibility"), ...clear("assertOperator") };
-  }
-  if (action === "数量断言") {
-    return { ...clear("assertMatch"), ...clear("assertVisibility"), ...clear("assertAttribute") };
-  }
-  if (action === "可见性断言") {
-    return { ...clear("assertMatch"), ...clear("assertOperator"), ...clear("assertAttribute") };
-  }
-  // 非断言动作：全部清除。
-  return {
-    assertMatch: undefined,
-    assertVisibility: undefined,
-    assertOperator: undefined,
-    assertAttribute: undefined,
-  };
-}
-
-const ASSERTION_ATTRIBUTE_SUGGESTIONS = [
-  "value",
-  "id",
-  "name",
-  "class",
-  "href",
-  "src",
-  "placeholder",
-  "type",
-  "disabled",
-  "checked",
-  "title",
-  "data-testid",
-  "aria-label",
-];
-
-function StepForm({
-  step,
-  elements,
-  onChange,
-  runInFlight,
-  onRunToHere,
-}: {
-  step: FlowStep;
-  elements: ElementAsset[];
-  onChange: (patch: Partial<FlowStep>) => void;
-  runInFlight: boolean;
-  onRunToHere: () => void;
-}) {
-  const isAssertion = step.action.includes("断言");
-  return (
-    <div className="step-form">
-      <label>
-        <span>动作</span>
-        <Select
-          aria-label="步骤动作"
-          showSearch
-          optionFilterProp="label"
-          value={step.action}
-          options={actionOptions.map((value) => ({ value }))}
-          onChange={(action) =>
-            onChange({ action, title: action, ...staleAssertionFields(action) })
-          }
-        />
-      </label>
-      {!["打开页面", "等待", "截图"].includes(step.action) && (
-        <label>
-          <span>元素</span>
-          <Select
-            aria-label="步骤元素"
-            value={step.element}
-            showSearch
-            optionFilterProp="label"
-            placeholder="选择元素"
-            options={elements.map((element) => ({
-              value: element.name,
-              label: element.name,
-            }))}
-            onChange={(element) => onChange({ element })}
-          />
-        </label>
-      )}
-      {isAssertion && (
-        <div className="assert-config">
-          {step.action === "可见性断言" && (
-            <label>
-              <span>期望状态</span>
-              <Select
-                aria-label="期望状态"
-                value={step.assertVisibility ?? "visible"}
-                options={[
-                  { value: "visible", label: "可见" },
-                  { value: "hidden", label: "不可见" },
-                ]}
-                onChange={(assertVisibility) => onChange({ assertVisibility })}
-              />
-            </label>
-          )}
-          {(step.action === "文本断言" || step.action === "属性断言") && (
-            <label>
-              <span>匹配方式</span>
-              <Select
-                aria-label="匹配方式"
-                value={step.assertMatch ?? "contains"}
-                options={[
-                  { value: "contains", label: "包含" },
-                  { value: "exact", label: "完全匹配" },
-                ]}
-                onChange={(assertMatch) => onChange({ assertMatch })}
-              />
-            </label>
-          )}
-          {step.action === "数量断言" && (
-            <label>
-              <span>比较符</span>
-              <Select
-                aria-label="比较符"
-                value={step.assertOperator ?? "="}
-                options={["=", ">", "<", ">=", "<="].map((value) => ({ value }))}
-                onChange={(assertOperator) => onChange({ assertOperator })}
-              />
-            </label>
-          )}
-          {step.action === "属性断言" && (
-            <label>
-              <span>属性名</span>
-              <AutoComplete
-                aria-label="属性名"
-                value={step.assertAttribute ?? "value"}
-                options={ASSERTION_ATTRIBUTE_SUGGESTIONS.map((value) => ({
-                  value,
-                }))}
-                onChange={(assertAttribute) => onChange({ assertAttribute })}
-              />
-            </label>
-          )}
-        </div>
-      )}
-      {step.action !== "可见性断言" && (
-        <label>
-          <span>
-            {step.action === "打开页面"
-              ? "页面路径"
-              : step.action === "数量断言"
-                ? "期望数量"
-                : isAssertion
-                  ? "期望值"
-                  : step.action === "等待"
-                    ? "等待时长"
-                    : "参数"}
-          </span>
-          <Input
-            value={step.value}
-            inputMode={step.action === "数量断言" ? "numeric" : undefined}
-            onChange={(event) =>
-              onChange({
-                // W2-5：数量断言期望值只允许数字，配置期拦截非法输入。
-                value:
-                  step.action === "数量断言"
-                    ? event.target.value.replace(/[^0-9]/g, "")
-                    : event.target.value,
-              })
-            }
-            placeholder={
-              step.action === "数量断言"
-                ? "纯数字，例如 3"
-                : "支持 {{env.baseUrl}}、{{project.username}} 等变量引用"
-            }
-          />
-        </label>
-      )}
-      <div className="form-row">
-        <label>
-          <span>超时（秒）</span>
-          <Input
-            value={step.timeout}
-            type="number"
-            onChange={(event) =>
-              onChange({ timeout: Number(event.target.value) })
-            }
-          />
-        </label>
-        <label>
-          <span>失败策略</span>
-          <Select
-            aria-label="失败策略"
-            value={step.failurePolicy}
-            options={["立即失败", "继续执行", "重试 1 次"].map((value) => ({
-              value,
-            }))}
-            onChange={(failurePolicy) => onChange({ failurePolicy })}
-          />
-        </label>
-      </div>
-      <div className="step-output-config">
-        <label>
-          <span>保存流程输出</span>
-          <Switch
-            size="small"
-            checked={Boolean(step.output)}
-            onChange={(checked) => onChange(checked
-              ? { output: "output", outputSource: "text", outputPublic: false }
-              : { output: undefined, outputSource: undefined, outputAttribute: undefined, outputParameter: undefined, responseUrl: undefined, outputPath: undefined, outputPublic: undefined })}
-          />
-        </label>
-        {step.output && (
-          <>
-            <label>
-              <span>输出变量名</span>
-              <Input value={step.output} onChange={(event) => onChange({ output: event.target.value })} placeholder="例如 orderId" />
-            </label>
-            <label>
-              <span>提取来源</span>
-              <Select
-                value={step.outputSource ?? "text"}
-                options={[
-                  { value: "text", label: "元素文本" },
-                  { value: "attribute", label: "元素属性" },
-                  { value: "url", label: "当前 URL 参数" },
-                  { value: "response", label: "JSON 响应" },
-                ]}
-                onChange={(outputSource) => onChange({ outputSource })}
-              />
-            </label>
-            {step.outputSource === "attribute" && <label><span>属性名</span><Input value={step.outputAttribute ?? "value"} onChange={(event) => onChange({ outputAttribute: event.target.value })} /></label>}
-            {step.outputSource === "url" && <label><span>URL 参数名</span><Input value={step.outputParameter ?? step.output} onChange={(event) => onChange({ outputParameter: event.target.value })} /></label>}
-            {step.outputSource === "response" && <><label><span>响应地址包含</span><Input value={step.responseUrl ?? ""} onChange={(event) => onChange({ responseUrl: event.target.value })} /></label><label><span>JSON 路径</span><Input value={step.outputPath ?? step.output} onChange={(event) => onChange({ outputPath: event.target.value })} /></label></>}
-            <label>
-              <span>可在报告中显示</span>
-              <Switch size="small" checked={step.outputPublic === true} onChange={(outputPublic) => onChange({ outputPublic })} />
-            </label>
-          </>
-        )}
-      </div>
-      <div className="step-form-footer">
-        <Button icon={<PlayCircleFilled />} disabled={runInFlight} onClick={onRunToHere}>
-          运行至此步骤
-        </Button>
-        <span>在服务端直接试跑（不产生运行记录、不影响通过率统计）。</span>
-      </div>
     </div>
   );
 }

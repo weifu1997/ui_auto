@@ -48,12 +48,12 @@
 
 拆分顺序按依赖从纯函数到组件；每步保持页面可观测行为不变。
 
-- [ ] B1. 抽取「断言配置面板」：选中断言动作步骤（`action.includes("断言")`）时渲染的配置区（元素/匹配方式/期望值/超时/失败策略）→ `src/pages/flow-editor/AssertionStepPanel.tsx` + `useAssertionStepDraft` hook。校验规则与跨类型字段互斥保持（参考 `08-21` 阶段 D 语义）。
-- [ ] B2. 抽取「录制导入候选面板」：候选断言勾选、新元素编辑 → `src/pages/flow-editor/RecordingImportPanel.tsx`（纯展示 + 回调，状态仍归页面/既有 `recording-editor-state.ts`）。
-- [ ] B3. 抽取「批量编辑条」：断言步骤 rowSelection + 批量匹配方式/失败策略 → `src/pages/flow-editor/AssertionBatchBar.tsx`。
-- [ ] B4. 抽取「步骤列表渲染」：拖拽排序、步骤卡片 → `src/pages/flow-editor/StepList.tsx`（DragEnd 回调上抛）。
-- [ ] B5. `FlowEditorPage.tsx` 收窄为编排：状态、数据加载、回调接线、模块装配。
-- [ ] B6. [gate] `npm run lint && npm run build && npm run test:unit`：FlowEditorPage 既有 e2e 风格用例（`flow-editor-batch-import.test.tsx`、录制/批量编辑等）不回归。
+- [x] B1. 抽取「断言配置面板」：选中断言动作步骤（`action.includes("断言")`）时渲染的配置区（元素/匹配方式/期望值/超时/失败策略）→ `src/pages/flow-editor/AssertionStepPanel.tsx` + `useAssertionStepDraft` hook（`assertion-step-draft.ts`，集中跨类型字段互斥）。校验规则与跨类型字段互斥保持。
+- [x] B2. 抽取「录制导入候选面板」：候选断言勾选、新元素编辑 → `src/pages/flow-editor/RecordingImportPanel.tsx`（纯展示 + 回调，状态仍归页面/既有 `recording-editor-state.ts`）。同时将 `ElementEditForm`、`SecretCreatorDrawer`（`SecretCreatorDrawer.tsx`）与校验共享类型/辅助（`element-validation.ts`）一并迁出。
+- [x] B3. 抽取「批量编辑条」：断言步骤 rowSelection + 批量匹配方式/失败策略 → `src/pages/flow-editor/AssertionBatchBar.tsx`。
+- [x] B4. 抽取「步骤列表渲染」：拖拽排序、步骤卡片 → `src/pages/flow-editor/StepList.tsx`（DragEnd 回调上抛为 `onMove`）。
+- [x] B5. `FlowEditorPage.tsx` 收窄为编排：2233 → 1366 行，状态、数据加载、回调接线、模块装配。
+- [x] B6. [gate] `npm run lint && npm run build && npm run test:unit` 全绿：lint ✓ / build ✓ / unit 111（25 files）✓，FlowEditorPage 既有用例（`flow-editor-batch-import.test.tsx`、`flow-editor-assertion.test.tsx`、`flow-editor-save.test.tsx`）不回归。
 
 ## 阶段 C：runs.py 拆 mixin（保留行为）
 
