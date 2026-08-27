@@ -39,10 +39,10 @@
 
 ## 阶段 E：@tanstack/react-virtual 长列表虚拟化（R2-4）
 
-- [ ] E1. 引入 `@tanstack/react-virtual`（评估许可证/维护度后入 dependencies）；不进入后端。
-- [ ] E2. `RecordingImportPanel.tsx`：步骤列表（≤1000）/元素列表/候选断言列表虚拟化；滚动容器替换，视觉与无障碍不回归。
-- [ ] E3. `RunDetailPage.tsx`：运行日志列表（≤500）虚拟化。
-- [ ] E4. [gate] `npm run lint && npm run build && npm run test:unit`（虚拟列表相关用例）+ `npm run check:bundle`（bundle ≤ 500 kB）。
+- [x] E1. 引入 `@tanstack/react-virtual@^3.14.10`（MIT 许可证经 `npm view` 核实后入 dependencies，评估记录见阶段 PRD）；不进入后端（仅 `src/`）。
+- [x] E2. 新增 `src/components/VirtualList.tsx` 通用虚拟列表（绝对定位行 + `measureElement` 动态测量 + `role="list"`/`role="listitem"` 保无障碍）；`RecordingImportPanel.tsx` 步骤/元素/候选断言三处列表改用 `<VirtualList>`（maxHeight 320/200/200），滚动容器 `.virtual-list-scroll` + 行间距 CSS 补齐，视觉与无障碍不回归。
+- [x] E3. `RunDetailPage.tsx` 运行日志列表改用 `<VirtualList>`（estimateSize 58、maxHeight 420、`log-row ${level}` 行类保留样式）。
+- [x] E4. [gate] 通过：`npm run lint`（oxlint 0 警告）&& `npm run build`（✓ built）&& `npm run test:unit` 115 全绿（含虚拟列表相关用例；jsdom 无布局引擎致 virtual-core `outerSize===0` 不渲染，`test-setup.ts` 为 `.virtual-list-scroll` 容器补桩 offsetHeight/offsetWidth）+ `npm run check:bundle`（≤ 500 kB）通过。
 
 ## 阶段 F：D5 定位器自愈 MVP（R2-5）
 

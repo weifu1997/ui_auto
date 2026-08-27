@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "../router";
+import { VirtualList } from "../components/VirtualList";
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
@@ -517,19 +518,29 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
           <div className="log-list">
             {logs.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待 Platform 输出日志" />
-            ) : logs.map((log) => (
-              <div className={`log-row ${log.level}`} key={log.id}>
-                <time>{log.time}</time>
-                <span className="log-icon">
-                  {log.level === "success" ? <CheckCircleFilled /> : log.level === "error" ? <StopOutlined /> : <ClockCircleOutlined />}
-                </span>
-                <div>
-                  <strong>{log.step}</strong>
-                  <p>{log.message}</p>
-                </div>
-                <span className="log-duration">{log.duration}</span>
-              </div>
-            ))}
+            ) : (
+              <VirtualList
+                items={logs}
+                className="virtual-list-scroll"
+                rowClassName={(log) => `log-row ${log.level}`}
+                estimateSize={58}
+                maxHeight={420}
+                ariaLabel="执行日志"
+                renderItem={(log) => (
+                  <>
+                    <time>{log.time}</time>
+                    <span className="log-icon">
+                      {log.level === "success" ? <CheckCircleFilled /> : log.level === "error" ? <StopOutlined /> : <ClockCircleOutlined />}
+                    </span>
+                    <div>
+                      <strong>{log.step}</strong>
+                      <p>{log.message}</p>
+                    </div>
+                    <span className="log-duration">{log.duration}</span>
+                  </>
+                )}
+              />
+            )}
           </div>
         </div>
         <aside className="detail-aside">

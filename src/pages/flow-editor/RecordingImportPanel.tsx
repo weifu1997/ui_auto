@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Alert, Button, Checkbox, Form, Input, Popover, Select, Tag, Tooltip } from "antd";
+import { VirtualList } from "../../components/VirtualList";
 import {
   CheckCircleFilled,
   CloseCircleFilled,
@@ -76,9 +77,15 @@ export function RecordingImportPanel({
   return (
     <div className="recording-result">
       <p>共录制 {recordingResult.steps.length} 步，{recordingResult.elements.length} 个元素；已收到 {eventCount} 个事件。</p>
-      <ol className="recording-steps-list">
-        {recordingResult.steps.map((step, index) => (
-          <li key={String(step.id ?? index)} className="recording-step-item">
+      <VirtualList
+        items={recordingResult.steps}
+        className="recording-steps-list virtual-list-scroll"
+        rowClassName="recording-step-item"
+        estimateSize={44}
+        maxHeight={320}
+        ariaLabel="录制步骤"
+        renderItem={(step, index) => (
+          <>
             <span className="recording-step-content">
               <span className="recording-step-index">{index + 1}.</span>
               <span>{String(step.title ?? step.action ?? "录制步骤")} {step.element ? ` · ${String(step.element)}` : ""}</span>
@@ -92,32 +99,46 @@ export function RecordingImportPanel({
                 onClick={() => onDeleteStep(index)}
               />
             </Tooltip>
-          </li>
-        ))}
-      </ol>
-      <ul>
-        {recordingResult.elements.map((element, index) => (
-          <li key={String(element.id ?? index)}>
+          </>
+        )}
+      />
+      <VirtualList
+        items={recordingResult.elements}
+        className="virtual-list-scroll"
+        rowClassName="recording-element-row"
+        estimateSize={28}
+        maxHeight={200}
+        ariaLabel="录制元素"
+        renderItem={(element, index) => (
+          <span>
             {String(element.name ?? `元素 ${index + 1}`)}：{String(element.method ?? "css")}={String(element.value ?? "")}
             {element.matchCount !== undefined ? `（匹配 ${String(element.matchCount)} 个）` : "（待校验）"}
-          </li>
-        ))}
-      </ul>
+          </span>
+        )}
+      />
       {draftPlan && draftPlan.generatedAssertions.length > 0 && (
         <div className="recording-assertions">
           <p>候选断言（含可见性，以及可挑选的文本/属性建议草稿；默认不勾选）：</p>
-          {draftPlan.generatedAssertions.map((assertion) => (
-            <label key={assertion.id} className="recording-assertion-row">
-              <Checkbox
-                checked={selectedAssertionIds.has(assertion.id)}
-                onChange={(event) =>
-                  onToggleAssertion(assertion.id, event.target.checked)
-                }
-              >
-                {assertion.title}
-              </Checkbox>
-            </label>
-          ))}
+          <VirtualList
+            items={draftPlan.generatedAssertions}
+            className="virtual-list-scroll"
+            rowClassName="recording-assertion-row"
+            estimateSize={28}
+            maxHeight={200}
+            ariaLabel="候选断言"
+            renderItem={(assertion) => (
+              <label className="recording-assertion-row-inner">
+                <Checkbox
+                  checked={selectedAssertionIds.has(assertion.id)}
+                  onChange={(event) =>
+                    onToggleAssertion(assertion.id, event.target.checked)
+                  }
+                >
+                  {assertion.title}
+                </Checkbox>
+              </label>
+            )}
+          />
         </div>
       )}
       {recordingResult.warnings.length > 0 && (
