@@ -47,14 +47,15 @@
 - **E MSW 测试基建** ✅：`msw ^2.15.0` 仅 devDependency（不进生产 bundle）；`src/test/server-handlers.ts` 映射 platform-api 端点（工作区同步 endpoints 带版本有状态实现：projects/resources/settings/revisions；secrets/runs/batch/断言统计/录制会话/元素校验为最小占位形状）；vitest setup 接 `msw/node` `setupServer`（`src/test/setup-msw.ts`），未匹配 `/api/*` 显式抛错暴露覆盖缺口；**为 `ServerWorkspaceSynchronizer.tsx`（原零单测）补测 3 用例**：30s 轮询、并发刷新合并、编辑后整体 PUT 不丢模板扩展字段（`variables`/`secretNames`/未知键透传，对应 `flow-normalize.ts` W2-4）+ 保存即快照；既有 `vi.mock` 手写 mock 可共存（不阻塞迁移）。注：fake timers 下 testing-library `waitFor` 卡死，改本地 `advanceTimersByTimeAsync` 轮询。gate：`npm run test:unit && npm run check:bundle`（bundle ≤ 500 kB）。
 - **F 收尾** ✅：F1 `npm run test:all` 全绿（build/lint/unit 114/startup 14/py 262/bundle/e2e 28/windows 冒烟）；F2 回滚演练通过——全阶段 `git revert --no-commit 51f88d8^..HEAD` 干净应用（0 冲突，38 文件）+ 单提交 revert（E `175b97b`）干净应用，均 `git revert --abort` 完整还原；阶段提交链线性（A 51f88d8/B af4bcc9/C 1ee48fb/D 3b9619a/E 175b97b/F-doc 6749671），每提交 5-10 文件自包含、无数据迁移；F3 spec 同步（`architecture-boundaries.md` 拆分后路径更新为 `services/runs/` 包 + 完成态标注；`audit-governance.md` 钩子位置更新为 `runs/_lifecycle.py`；`backend/index.md` 已含断言契约）；F4 更新阶段1 PRD 验收清单（4 项全勾）。阶段2 未开工。
 
-### 阶段2 录制/执行稳定性 — ⏳ 未开工（PRD 待固化，规划草案如下）
+### 阶段2 录制/执行稳定性 — ✅ PRD 已固化（2026-08-28 确认）
 
-目标：录制会话可恢复、执行更稳、长列表可读。范围须在开工前写入 `08-27-phase-2-recording-execution/prd.md` 并过用户确认。
+范围写入 `08-27-phase-2-recording-execution/prd.md` 并经用户确认（含两项决策：D5 自愈 MVP **纳入**阶段2；**新增**录制会话列表端点）。目标：录制会话可恢复、执行更稳、长列表可读。
 
 - ② 可重构区：`recorder.py`（1305 行）拆文件；`runner.py`（849 行）抽公共启停（先确认有测试覆盖）。
-- **D6 录制会话状态折中**：会话元数据（status/currentUrl/lastSeq/计数）落库（**增量迁移**）；浏览器 context 与登录快照保持进程内；重启后旧会话显示「已中断」终态而非 404。
+- **D6 录制会话状态折中**：会话元数据（status/currentUrl/lastSeq/计数）落库（**增量迁移**）；浏览器 context 与登录快照保持进程内；重启后旧会话显示「已中断」终态而非 404；新增列表端点（已确认）。
 - **D4 引入 `@tanstack/react-virtual`**（候选/日志长列表，纯增量）。
-- **R2 吸收参考项目可落地能力**：智能录制、候选元素生成、异步任务调度、重试/恢复、执行反馈；**不引入未确认的外部 AI 服务依赖**。
+- **D5 定位器自愈 MVP（已确认纳入）**：`LocatorScorer` 接口 + 纯启发式评分（dom-to-locator + count()===1）+ 复用既有 `step.locatorFallback` 事件；无外部 AI。
+- **R2 吸收参考项目可落地能力**：候选断言有界化、会话恢复可见性；**不引入未确认的外部 AI 服务依赖**。
 - 边界：稳定契约区只读；录制事件 kind/顺序契约不动。
 - gate：每步 lint/build/unit/py；阶段验收 `npm run test:all`。
 

@@ -37,7 +37,7 @@
 - `RecordingCoordinator` 在会话创建与状态迁移（starting/recording/paused/terminal）时同步元数据到库；浏览器 context、登录快照（`RecordingSessionStateStore`，进程内）、录制结果（events/steps/elements）保持进程内（D6 折中）。
 - 重启恢复：启动时把遗留非终态会话（starting/recording/paused）标记为「已中断」终态（新增 `interrupted` 状态，两端枚举同步）；`_require_session` 对已持久化会话返回元数据而非 404。
 - 前端：`RecordingSessionStatus` 增 `"interrupted"`（platform-api.ts:1061）；`terminalStatuses`（recording-editor-state.ts:14）与后端 `_TERMINAL_STATUSES`（recorder.py:582）同步；FlowEditorPage 终态横幅（965 起）加「已中断」文案；恢复挂载（560–581）对已中断会话显示终态横幅而非继续轮询。
-- 新端点（确认项）：`GET /api/platform/projects/{project_id}/recording-sessions` 列出最近会话（含已中断），供中断可见性。
+- **列表端点（已确认纳入）**：`GET /api/platform/projects/{project_id}/recording-sessions` 返回最近会话（含已中断，分页），供中断可见性；前端最小消费——恢复挂载时若 `sessionStorage` 无 id，查询该项目最近会话以发现已中断会话并显示终态横幅（不自动重启录制）。
 
 ### R2-4 D4 @tanstack/react-virtual 长列表虚拟化（纯增量）
 
@@ -54,7 +54,7 @@
 - 纯启发式 MVP：dom-to-locator 风格评分 + `count()===1` 唯一性验证，用于 `runner.py:_locator_for`（115–149）定位失败时的候选备用定位器生成与回退。
 - 复用既有 `step.locatorFallback` 事件 kind（事件契约已预留，不新增 kind），载荷与顺序遵守现有契约（回退事件恒在 `step.failed`/`step.completed` 之前）。
 - 安全边界：自愈只作用于定位器重试，不绕过敏感字段脱敏/审计。
-- **纳入阶段2 需确认**（master-prompt 阶段2 草案未显式列入；若确认延后则移至阶段3 后独立任务）。
+- **（2026-08-28 用户确认纳入阶段2）**。
 
 ### R2-6 R2 能力差吸收（可落地项，不引入未确认外部 AI 服务）
 
@@ -70,7 +70,7 @@
 - [ ] runner.py 公共启停抽出，启停测试覆盖先行；`npm run test:py` + 既有取消/重试用例不回归。
 - [ ] 迁移 v15 上线；重启后遗留录制会话显示「已中断」终态而非 404；两端枚举同步；`test:startup` 覆盖重启恢复路径。
 - [ ] react-virtual 接入候选/日志长列表；`check:bundle` 不超预算。
-- [ ] 自愈 MVP：`LocatorScorer` 接口 + 启发式评分 + `step.locatorFallback` 复用，无外部 AI 依赖（若确认纳入）。
+- [ ] 自愈 MVP：`LocatorScorer` 接口 + 启发式评分 + `step.locatorFallback` 复用，无外部 AI 依赖。
 - [ ] `npm run test:all` 全绿（阶段完整验收门禁，e2e 录制/执行/断言 spec 不回归）。
 
 ## Non-Goals
