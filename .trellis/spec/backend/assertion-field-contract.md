@@ -11,7 +11,7 @@
 
 | 字段 | 归属断言类型 | 允许值 | 缺省 | 语义 |
 |---|---|---|---|---|
-| `assertMatch` | 文本 / 属性 | `exact` \| `contains` | `contains` | 匹配方式 |
+| `assertMatch` | 文本 / 属性 / URL | `exact` \| `contains` | `contains` | 匹配方式（URL：对 `page.url` 命中期望值） |
 | `assertVisibility` | 可见性 | `visible` \| `hidden` | `visible` | 元素可见/不可见；`hidden` 区分「不存在」(not-found) 与「存在但隐藏」 |
 | `assertOperator` | 数量 | `=` `>` `<` `>=` `<=` | `=` | 匹配元素个数与期望数的关系；期望数对 `value` 做 `int()` 强转，转换失败即断言失败，禁止字符串/数字直接比较 |
 | `assertAttribute` | 属性 | 非空字符串 | `value` | 属性名（如 value / disabled / href / checked / text） |
@@ -27,6 +27,7 @@
 | `文本断言` | `text` | `_assert_text` |
 | `数量断言` | `count` | `_assert_count` |
 | `属性断言` | `attribute` | `_assert_attribute` |
+| `URL 断言` | `url` | `_assert_url` |
 
 未知断言动作必须显式报 `UNSUPPORTED_ACTION`，不得静默落属性断言。
 

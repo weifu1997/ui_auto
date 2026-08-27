@@ -32,6 +32,7 @@ export const ASSERTION_ACTIONS = {
   "文本断言": "text",
   "数量断言": "count",
   "属性断言": "attribute",
+  "URL 断言": "url",
 } as const;
 export type AssertionType = (typeof ASSERTION_ACTIONS)[keyof typeof ASSERTION_ACTIONS];
 

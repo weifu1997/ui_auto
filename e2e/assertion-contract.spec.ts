@@ -59,6 +59,7 @@ test("文本断言经真实执行链路写入 result.assertions 与 step.asserte
       steps: [
         { id: "s1", action: "打开页面", title: "打开页面", value: "/__fixture/login", timeout: 15, failurePolicy: "立即失败" },
         { id: "s2", action: "文本断言", title: "断言页面标题", element: "contract-title", value: "Fixture login", assertMatch: "contains", timeout: 15, failurePolicy: "立即失败" },
+        { id: "s3", action: "URL 断言", title: "断言落地 URL", value: "/__fixture/login", assertMatch: "contains", timeout: 15, failurePolicy: "立即失败" },
       ],
     },
     environment: {
@@ -137,5 +138,33 @@ test("文本断言经真实执行链路写入 result.assertions 与 step.asserte
     passed: true,
     expected: "Fixture login",
     actual: "Fixture login",
+  });
+
+  // 6. URL 断言（页面级，无元素）：同样经真实执行链路写入 result.assertions 与
+  //    step.asserted，type 为 `url`（值域扩展，载荷形状不变）。
+  const urlType = ASSERTION_ACTIONS["URL 断言"];
+  const urlAssertion = (assertions as Array<Record<string, unknown>>).find(
+    (item) => item.type === urlType,
+  );
+  expect(urlAssertion).toMatchObject({
+    stepIndex: 2,
+    stepId: "s3",
+    title: "断言落地 URL",
+    type: urlType,
+    passed: true,
+    expected: "/__fixture/login",
+  });
+  const urlAssertedIndex = run!.events.findIndex(
+    (event) => event.kind === "step.asserted" && event.data.stepId === "s3",
+  );
+  const urlCompletedIndex = run!.events.findIndex(
+    (event) => event.kind === "step.completed" && event.data.stepId === "s3",
+  );
+  expect(urlAssertedIndex).toBeGreaterThanOrEqual(0);
+  expect(urlAssertedIndex).toBeLessThan(urlCompletedIndex);
+  expect(run!.events[urlAssertedIndex].data).toMatchObject({
+    stepId: "s3",
+    type: urlType,
+    passed: true,
   });
 });

@@ -27,6 +27,7 @@ ASSERTION_TYPES = {
     "文本断言": "text",
     "数量断言": "count",
     "属性断言": "attribute",
+    "URL 断言": "url",
 }
 
 # 进 revision checksum 的规范断言字段（``revision_snapshot.STEP_KEYS`` 的断言部分；

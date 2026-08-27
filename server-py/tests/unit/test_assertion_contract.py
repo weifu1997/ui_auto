@@ -34,6 +34,7 @@ def test_assertion_type_mapping_matches_contract() -> None:
         "文本断言": "text",
         "数量断言": "count",
         "属性断言": "attribute",
+        "URL 断言": "url",
     }
 
 
@@ -56,7 +57,7 @@ def test_assertion_keys_embedded_in_step_keys_in_place() -> None:
 @pytest.mark.parametrize(
     ("module_keys", "contract_keys"),
     [
-        (tuple(ASSERTION_TYPES), ("可见性断言", "文本断言", "数量断言", "属性断言")),
+        (tuple(ASSERTION_TYPES), ("可见性断言", "文本断言", "数量断言", "属性断言", "URL 断言")),
     ],
 )
 def test_mapping_keys_match_contract(module_keys: tuple[str, ...], contract_keys: tuple[str, ...]) -> None:

@@ -27,6 +27,7 @@ describe("断言字段契约（前端单源）", () => {
       "文本断言": "text",
       "数量断言": "count",
       "属性断言": "attribute",
+      "URL 断言": "url",
     });
     const assertionActions = actionOptions.filter((action) => action.includes("断言"));
     expect(Object.keys(ASSERTION_ACTIONS).sort()).toEqual([...assertionActions].sort());

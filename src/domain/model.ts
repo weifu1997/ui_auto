@@ -119,5 +119,6 @@ export const actionOptions = [
   "文本断言",
   "数量断言",
   "属性断言",
+  "URL 断言",
   "截图",
 ];

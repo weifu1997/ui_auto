@@ -1,0 +1,55 @@
+# Implement: 阶段3 断言体系（URL 断言 + 语义统一 + 报告增强）
+
+有序执行清单。每步标注可验证产物；`[gate]` 标记的验证命令必须全绿才能进入下一步。
+边界约束：① 触碰点（`actionOptions`/`ASSERTION_*`/契约文档/`AssertionRecord` union）只做**值域扩展**，独立提交可 revert；`STEP_KEYS`、`step.asserted` 载荷形状与顺序、事件 kind、错误码不变。
+
+---
+
+## 阶段 A：URL 断言契约登记（R3-1 ① 触碰点，独立提交）
+
+- [x] A1. `assertion_contract.py:ASSERTION_TYPES` 增 `"URL 断言": "url"`；`src/domain/assertions.ts:ASSERTION_ACTIONS` 增同一映射（两端同步）。
+- [x] A2. `src/domain/model.ts:actionOptions` 增 `"URL 断言"`（前端动作清单）。
+- [x] A3. 契约文档 `assertion-field-contract.md`：第 2 节动作→type 映射表增 URL 行；第 1 节字段表 `assertMatch` 归属扩展「文本 / 属性 / URL」。
+- [x] A4. parity 三件套同步：后端 `test_assertion_contract.py` 映射断言、前端 `assertions-contract.test.ts` 映射 + actionOptions 覆盖断言、e2e `assertion-contract.spec.ts` 增 URL 断言步骤（s3，无元素）走真实链路。
+- [x] A5. [gate] 通过：`npm run lint`（0 警告）&& `npm run build`（✓ built）&& `npm run test:unit` 116 全绿 && `npm run test:py` 282 全绿（parity 已含 URL 映射）。
+
+## 阶段 B：URL 断言执行（R3-1 执行）
+
+- [ ] B1. `runner.py` 新增 `_assert_url(page, step, value)`：取 `page.url`，`assertMatch` exact/contains（缺省 contains），`expected == actual` / `expected in actual`；不读 locator、无 `trimCompare` 语义、无 `STEP_ELEMENT_REQUIRED`；页面未打开（about:blank / 异常）按实际值判定不抛非预期异常。
+- [ ] B2. `_run_assertion` 分发入口增 URL 断言（无元素，locator=None 走通）。
+- [ ] B3. 单测 `test_assertion_contract_hardening.py` 或新文件：`_assert_url` 判定矩阵（exact/contains/缺省 contains/查询串/异常 URL）。
+- [ ] B4. [gate] `npm run test:py` 全绿。
+
+## 阶段 C：URL 断言编辑器（R3-1 编辑器）
+
+- [ ] C1. `AssertionStepPanel.tsx`：URL 断言分支——期望值输入 + `assertMatch` 选择（复用现有匹配方式选择器）；**不渲染元素选择**（现有元素选择器 56-64 对 URL 断言隐藏）。
+- [ ] C2. `FlowEditorPage.tsx:487` 批量「匹配方式」范围（现文本/属性）扩展含 URL；`消息.info("匹配方式仅对文本/属性断言步骤生效")` 文案同步。
+- [ ] C3. 前端单测：断言面板 URL 分支渲染（值输入 + 匹配方式 + 无元素选择）、批量匹配覆盖 URL。
+- [ ] C4. [gate] `npm run lint && npm run build && npm run test:unit` 全绿。
+
+## 阶段 D：断言语义统一收口（R3-2）
+
+- [ ] D1. `RunDetailPage.tsx`：`AssertionRecord.type` union 增 `"url"`；`ASSERTION_TYPE_LABELS` 增 `url: "URL"`。
+- [ ] D2. 端到端往返 parity：录制候选断言（含 trimCompare 文本）→ 导入 → 执行 `step.asserted` → `result.assertions` → 报告/前端渲染，字段零漂移用例（复用既有 run-detail 断言 spec + e2e URL 断言步骤）。
+- [ ] D3. `AssertionBatchBar` 批量匹配动作集与 `actionOptions` 断言子集一致（含 URL）。
+- [ ] D4. [gate] `npm run test:unit` + `npm run test:py` 全绿。
+
+## 阶段 E：HTML 断言报告（R3-3 可选）
+
+- [ ] E1. `_report.py:build_assertion_report` 增 HTML 变体（新 content type，与 XLSX/JSON 并存；产物名规则复用 `assertion-report-{run_id}.html`）。
+- [ ] E2. 敏感 run 约束：HTML 产物不写明文 secret（沿用既有脱敏）。
+- [ ] E3. `RunDetailPage` 报告导出菜单增「HTML」选项（前端）。
+- [ ] E4. [gate] `npm run test:py`（报告导出用例）+ `npm run test:unit` 全绿。
+
+## 阶段 F：验收与收尾
+
+- [ ] F1. 全量门禁 `npm run test:all`（build/lint/unit/startup/py/bundle/e2e/windows；e2e 断言/录制/执行 spec 不回归，含 URL 断言新步骤）。
+- [ ] F2. 回滚演练：契约登记独立提交可单独 revert；`STEP_KEYS` 零改动（快照 checksum 单测保持绿）。
+- [ ] F3. spec 同步：`assertion-field-contract.md` 更新（阶段 A 已登记）；`architecture-boundaries.md` ③ 区标记 URL 断言/HTML 报告完成态；阶段3 PRD 验收清单勾选。
+- [ ] F4. 收尾：阶段4（编排体验 UI）按主提示词顺序开工前先固化其 PRD。
+
+## 风险文件 / 回滚点
+
+- 高风险：`src/domain/model.ts:actionOptions` 与 `assertion_contract.py:ASSERTION_TYPES`（① 触碰）——值域扩展 + parity 三件套把关；独立提交 A 可整体 revert。
+- 中风险：`runner.py`（执行内核）——`_assert_url` 纯新增函数 + `_run_assertion` 加一个分支，不触碰既有求值路径。
+- 启动前检查：阶段2 验收已全绿（`test:all` exit 0），本阶段每一 `[gate]` 相对该基线比对。
