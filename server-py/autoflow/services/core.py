@@ -46,7 +46,11 @@ class CoreServices:
             submit=self._recording_executor.submit,
             on_failed=self._audit_recording_failed,
             on_storage_state=self.recording_session_state.remember,
+            database=self._current_database,
         )
+        # D6 重启恢复：把上次运行遗留的非终态录制会话标记为「已中断」终态，
+        # 前端据此显示终态横幅而非 404 / 继续轮询。
+        self.recording_coordinator.recover_interrupted()
         self.webhook_requests: dict[str, list[float]] = {}
         configured_secret = os.environ.get("PLATFORM_SECRET_KEY")
         if not configured_secret:

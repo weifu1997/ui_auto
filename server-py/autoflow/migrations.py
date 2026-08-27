@@ -688,6 +688,40 @@ def add_deployment_audit_events(database: sqlite3.Connection) -> None:
     )
 
 
+def add_recording_sessions(database: sqlite3.Connection) -> None:
+    """D6 (阶段2)：录制会话元数据落库表。
+
+    纯增量：只存会话元数据（status/currentUrl/lastSeq/计数/时间戳），浏览器
+    context、登录快照（RecordingSessionStateStore）与录制结果（events/steps/
+    elements）保持进程内。时间戳以 epoch 毫秒 INTEGER 存储，与
+    ``RecordingCoordinator`` 的内存表示（``now_ms``）与 API 响应（startedAt/
+    lastActivityAt）一致，往返无损。
+    """
+    exec_sql(
+        database,
+        """
+        CREATE TABLE IF NOT EXISTS recording_sessions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES platform_projects(id),
+          owner_id TEXT NOT NULL,
+          flow_id TEXT NOT NULL,
+          environment_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          current_url TEXT NOT NULL,
+          last_seq INTEGER NOT NULL DEFAULT 0,
+          event_count INTEGER NOT NULL DEFAULT 0,
+          step_count INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          last_activity_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          error_code TEXT
+        );
+        CREATE INDEX IF NOT EXISTS recording_sessions_project_activity
+          ON recording_sessions (project_id, owner_id, last_activity_at DESC);
+        """,
+    )
+
+
 def run_platform_migrations(
     database: sqlite3.Connection,
     bootstrap_schema: str,
@@ -759,6 +793,11 @@ def run_platform_migrations(
                 "version": 14,
                 "name": "scope-run-dispatch-key-uniqueness",
                 "up": scope_run_dispatch_key_uniqueness,
+            },
+            {
+                "version": 15,
+                "name": "recording-sessions-metadata",
+                "up": add_recording_sessions,
             },
         ],
     )

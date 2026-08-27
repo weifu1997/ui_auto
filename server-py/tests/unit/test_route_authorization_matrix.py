@@ -171,7 +171,7 @@ ROUTE_POLICIES = [
     *_indirect("/api/platform/projects/{project_id}/run-batches/{batch_id}", "GET", "project.view", "batch.project_id -> route project_id"),
     *_indirect("/api/platform/projects/{project_id}/run-batches/{batch_id}/cancel", "POST", "run.execute", "batch.project_id -> route project_id"),
     *_indirect("/api/platform/projects/{project_id}/run-batches/{batch_id}/retry-failed", "POST", "run.execute", "batch.project_id -> route project_id"),
-    *_project("/api/platform/projects/{project_id}/recording-sessions", "POST", "flow.edit"),
+    *_project("/api/platform/projects/{project_id}/recording-sessions", "POST GET", "flow.edit"),
     *_project("/api/platform/projects/{project_id}/recording-sessions/cancel-active", "POST", "flow.edit"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}", "GET DELETE", "flow.edit", "in-memory session owner + project_id"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/events", "GET", "flow.edit", "in-memory session owner + project_id"),

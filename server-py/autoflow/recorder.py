@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 import uuid
@@ -46,7 +47,8 @@ MAX_EVENTS = 5000
 RECORDING_IDLE_MS = 15 * 60_000
 RECORDING_MAX_MS = 2 * 60 * 60_000
 RECORDING_PUMP_INTERVAL_MS = 100
-_TERMINAL_STATUSES = {"stopped", "canceled", "expired", "failed"}
+# interrupted 为 D6 重启恢复终态：遗留非终态会话在服务重启后被置为它，不可再恢复。
+_TERMINAL_STATUSES = {"stopped", "canceled", "expired", "failed", "interrupted"}
 
 
 MAX_EVENTS = 5000
@@ -55,7 +57,7 @@ MAX_EVENTS = 5000
 RECORDING_IDLE_MS = 15 * 60_000
 RECORDING_MAX_MS = 2 * 60 * 60_000
 RECORDING_PUMP_INTERVAL_MS = 100
-_TERMINAL_STATUSES = {"stopped", "canceled", "expired", "failed"}
+_TERMINAL_STATUSES = {"stopped", "canceled", "expired", "failed", "interrupted"}
 
 
 class _RecordingOperationError(RuntimeError):
@@ -78,6 +80,7 @@ class RecordingCoordinator:
         now_ms: Callable[[], int] = lambda: int(time.time() * 1000),
         on_failed: Callable[[dict[str, Any]], None] | None = None,
         on_storage_state: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
+        database: Callable[[], sqlite3.Connection] | None = None,
     ) -> None:
         self._submit = submit
         self._launch = launch
@@ -86,6 +89,7 @@ class RecordingCoordinator:
         self._now_ms = now_ms
         self._on_failed = on_failed
         self._on_storage_state = on_storage_state
+        self._database = database
         self._lock = threading.RLock()
         self._sessions: dict[str, dict[str, Any]] = {}
 
@@ -147,6 +151,7 @@ class RecordingCoordinator:
                 "createdAt": self._now_ms(),
                 "lastActivityAt": self._now_ms(),
                 "expiresAt": self._now_ms() + self._max_ms,
+                "lastPersistedAt": 0,
                 "result": None,
                 "browserSession": None,
                 "browserFuture": None,
@@ -156,6 +161,7 @@ class RecordingCoordinator:
                 "failureNotified": False,
             }
             self._sessions[session_id] = session
+        self._persist_session(session)
         storage_state = None
         if not fresh_login and login_state_provider is not None:
             try:
@@ -180,6 +186,7 @@ class RecordingCoordinator:
             with self._lock:
                 session["status"] = "failed"
                 session["errorCode"] = code
+            self._persist_session(session)
             # A startup task may already own a browser while it is blocked in
             # initial navigation. Signal it and give the owner thread a bounded
             # opportunity to close its Playwright resources before returning.
@@ -194,16 +201,19 @@ class RecordingCoordinator:
                 code = startup_error
                 session["status"] = "failed"
                 session["errorCode"] = code
+                self._persist_session(session)
                 self._notify_failed(session)
                 from .http import PlatformError
 
                 raise PlatformError(409, code)
             if session["status"] != "starting":
                 code = session.get("errorCode") or "RECORDING_BROWSER_START_FAILED"
+                self._persist_session(session)
                 from .http import PlatformError
 
                 raise PlatformError(409, code)
             session["status"] = "recording"
+            self._persist_session(session)
         return self.session_response(session)
 
     def _run_browser_session(
@@ -290,12 +300,14 @@ class RecordingCoordinator:
                 session["startupError"] = error.code
                 session["status"] = "failed"
                 session["errorCode"] = error.code
+            self._persist_session(session)
             self._notify_failed(session)
         except Exception:
             with self._lock:
                 if session["status"] not in _TERMINAL_STATUSES:
                     session["status"] = "failed"
                     session["errorCode"] = "RECORDING_BROWSER_DISCONNECTED"
+            self._persist_session(session)
             self._notify_failed(session)
         finally:
             session["browserReady"].set()
@@ -351,6 +363,7 @@ class RecordingCoordinator:
             session["status"] = "failed"
             session["errorCode"] = code
             session["lastActivityAt"] = self._now_ms()
+        self._persist_session(session)
         # A live recording task owns Playwright resources and will observe this
         # terminal state in its bounded pump interval. Completed test doubles
         # do not have a pump, so preserve their explicit cleanup behavior.
@@ -385,19 +398,24 @@ class RecordingCoordinator:
         event = validate_recorder_event(payload)
         if event is None:
             return
+        changed = False
         with self._lock:
             if session["status"] != "recording":
                 session["lastActivityAt"] = self._now_ms()
-                return
-            if not recording_url_is_same_origin(session["baseUrl"], event["url"]):
+                changed = True
+            elif not recording_url_is_same_origin(session["baseUrl"], event["url"]):
                 self._warn_external_origin(session, event["url"])
                 session["lastActivityAt"] = self._now_ms()
-                return
-            session["lastSeq"] = session["normalizer"].append(event)
-            stored = dict(event)
-            stored["seq"] = session["lastSeq"]
-            session["events"].append(stored)
-            session["lastActivityAt"] = self._now_ms()
+                changed = True
+            else:
+                session["lastSeq"] = session["normalizer"].append(event)
+                stored = dict(event)
+                stored["seq"] = session["lastSeq"]
+                session["events"].append(stored)
+                session["lastActivityAt"] = self._now_ms()
+                changed = True
+        if changed:
+            self._maybe_persist_events(session)
 
     def _on_navigation(self, session: dict[str, Any], url: str) -> None:
         event = {
@@ -405,22 +423,27 @@ class RecordingCoordinator:
             "url": sanitize_url(url),
             "at": self._now_ms(),
         }
+        changed = False
         with self._lock:
             session["currentUrl"] = event["url"]
             # starting 阶段也会出现首次加载导航；归并器的首导航逻辑会消费该事件而不
             # 生成重复步骤。暂停/终态期间不产生业务步骤，也不推进业务事件游标。
             if session["status"] not in ("recording", "starting"):
                 session["lastActivityAt"] = self._now_ms()
-                return
-            if not recording_url_is_same_origin(session["baseUrl"], url):
+                changed = True
+            elif not recording_url_is_same_origin(session["baseUrl"], url):
                 self._warn_external_origin(session, url)
                 session["lastActivityAt"] = self._now_ms()
-                return
-            session["lastSeq"] = session["normalizer"].append(event)
-            stored = dict(event)
-            stored["seq"] = session["lastSeq"]
-            session["events"].append(stored)
-            session["lastActivityAt"] = self._now_ms()
+                changed = True
+            else:
+                session["lastSeq"] = session["normalizer"].append(event)
+                stored = dict(event)
+                stored["seq"] = session["lastSeq"]
+                session["events"].append(stored)
+                session["lastActivityAt"] = self._now_ms()
+                changed = True
+        if changed:
+            self._maybe_persist_events(session)
 
     def _warn_external_origin(self, session: dict[str, Any], url: str) -> None:
         parsed = urlsplit(url or "")
@@ -450,6 +473,7 @@ class RecordingCoordinator:
                 if isinstance(normalizer, RecorderNormalizer):
                     normalizer.flush_pending()
                 session["status"] = "paused"
+                self._persist_session(session)
         return self.session_response(session)
 
     def resume(self, session_id: str) -> dict[str, Any]:
@@ -458,6 +482,7 @@ class RecordingCoordinator:
             if session["status"] == "paused":
                 session["status"] = "recording"
                 session["lastActivityAt"] = self._now_ms()
+                self._persist_session(session)
         return self.session_response(session)
 
     def stop(self, session_id: str) -> dict[str, Any]:
@@ -466,6 +491,7 @@ class RecordingCoordinator:
             if session["status"] in _TERMINAL_STATUSES:
                 return self.session_response(session)
             session["status"] = "stopped"
+            self._persist_session(session)
         self._release_browser(session)
         with self._lock:
             self._prune_terminal_sessions()
@@ -477,6 +503,7 @@ class RecordingCoordinator:
             if session["status"] in _TERMINAL_STATUSES:
                 return self.session_response(session)
             session["status"] = "canceled"
+            self._persist_session(session)
         self._release_browser(session)
         with self._lock:
             self._prune_terminal_sessions()
@@ -554,30 +581,15 @@ class RecordingCoordinator:
         with self._lock:
             session = self._sessions.get(session_id)
         if session is None:
+            # 重启后内存无此会话：从持久化元数据还原（仅元数据，无浏览器/归并器）。
+            session = self._load_session(session_id)
+        if session is None:
             raise PlatformError(404, "RECORDING_SESSION_NOT_FOUND")
         return session
 
     def session_response(self, session: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            normalizer = session.get("normalizer")
-            recorded_step_count = (
-                normalizer.step_count() if isinstance(normalizer, RecorderNormalizer) else 0
-            )
-            response = {
-                "id": session["id"],
-                "projectId": session["projectId"],
-                "flowId": session["flowId"],
-                "environmentId": session["environmentId"],
-                "status": session["status"],
-                "currentUrl": session["currentUrl"],
-                "lastSeq": session["lastSeq"],
-                "recordedStepCount": recorded_step_count,
-                "startedAt": session["createdAt"],
-                "lastActivityAt": session["lastActivityAt"],
-            }
-            if session.get("errorCode"):
-                response["errorCode"] = session["errorCode"]
-            return response
+            return self._to_response(session)
 
     def session_result(self, session_id: str) -> dict[str, Any]:
         session = self._require_session(session_id)
@@ -586,10 +598,226 @@ class RecordingCoordinator:
 
             raise PlatformError(409, "RECORDING_SESSION_ACTIVE")
         if session.get("result") is None:
-            session["result"] = session["normalizer"].result()
+            normalizer = session.get("normalizer")
+            if isinstance(normalizer, RecorderNormalizer):
+                session["result"] = normalizer.result()
+            else:
+                # 重启后无归并器：结果只可能来自持久化的已停会话，返回空结果。
+                session["result"] = {}
         return {
             "session": self.session_response(session),
             "result": session["result"],
+        }
+
+    # -- D6 元数据持久化 ---------------------------------------------------
+
+    def _db(self) -> sqlite3.Connection | None:
+        provider = self._database
+        if provider is None:
+            return None
+        try:
+            return provider()
+        except Exception:
+            return None
+
+    def _persist_session(self, session: dict[str, Any]) -> None:
+        """把会话元数据 UPSERT 进 recording_sessions（尽力而为）。
+
+        不持久化浏览器 context / 登录快照 / events / result（D6 折中）。失败静默：
+        录制主流程不因元数据落库失败而中断。调用方应持有/重入 ``self._lock``。
+        """
+        db = self._db()
+        if db is None:
+            return
+        normalizer = session.get("normalizer")
+        step_count = (
+            normalizer.step_count()
+            if isinstance(normalizer, RecorderNormalizer)
+            else int(session.get("stepCount") or 0)
+        )
+        try:
+            db.execute(
+                """
+                INSERT INTO recording_sessions (
+                    id, project_id, owner_id, flow_id, environment_id, status,
+                    current_url, last_seq, event_count, step_count,
+                    created_at, last_activity_at, expires_at, error_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status,
+                    current_url = excluded.current_url,
+                    last_seq = excluded.last_seq,
+                    event_count = excluded.event_count,
+                    step_count = excluded.step_count,
+                    last_activity_at = excluded.last_activity_at,
+                    expires_at = excluded.expires_at,
+                    error_code = excluded.error_code
+                """,
+                (
+                    session["id"],
+                    session["projectId"],
+                    session.get("ownerId") or "",
+                    session["flowId"],
+                    session["environmentId"],
+                    session["status"],
+                    session["currentUrl"],
+                    session["lastSeq"],
+                    len(session["events"]),
+                    step_count,
+                    session["createdAt"],
+                    session["lastActivityAt"],
+                    session["expiresAt"],
+                    session.get("errorCode"),
+                ),
+            )
+        except Exception:
+            # 元数据持久化是尽力而为：失败不得影响录制/指令主流程。
+            pass
+
+    def _maybe_persist_events(self, session: dict[str, Any]) -> None:
+        """事件级元数据（lastSeq/currentUrl/计数）限频落库：每会话 ≥1s 一次。
+
+        状态迁移走无条件 ``_persist_session``；这里只兜事件高频路径，避免每
+        事件一次 SQLite 写（WAL 下每次 commit 的同步开销）拖慢录制线程。
+        """
+        now = self._now_ms()
+        if now - session.get("lastPersistedAt", 0) < 1000:
+            return
+        self._persist_session(session)
+        session["lastPersistedAt"] = now
+
+    @staticmethod
+    def _row_to_session(row: Any) -> dict[str, Any]:
+        return {
+            "id": row[0],
+            "projectId": row[1],
+            "ownerId": row[2],
+            "flowId": row[3],
+            "environmentId": row[4],
+            "status": row[5],
+            "currentUrl": row[6],
+            "lastSeq": row[7],
+            "eventCount": row[8],
+            "stepCount": row[9],
+            "createdAt": row[10],
+            "lastActivityAt": row[11],
+            "expiresAt": row[12],
+            "errorCode": row[13],
+            "normalizer": None,
+            "events": deque(maxlen=MAX_EVENTS),
+            "externalOriginsWarned": set(),
+            "result": None,
+            "browserSession": None,
+            "browserFuture": None,
+            "browserReady": threading.Event(),
+            "failureNotified": True,
+        }
+
+    def _load_session(self, session_id: str) -> dict[str, Any] | None:
+        db = self._db()
+        if db is None:
+            return None
+        try:
+            row = db.execute(
+                """
+                SELECT id, project_id, owner_id, flow_id, environment_id, status,
+                       current_url, last_seq, event_count, step_count,
+                       created_at, last_activity_at, expires_at, error_code
+                FROM recording_sessions
+                WHERE id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        return self._row_to_session(row) if row is not None else None
+
+    def _to_response(self, session: dict[str, Any]) -> dict[str, Any]:
+        normalizer = session.get("normalizer")
+        if isinstance(normalizer, RecorderNormalizer):
+            recorded_step_count = normalizer.step_count()
+        else:
+            # 重启后无归并器：用持久化的 step_count。
+            recorded_step_count = int(session.get("stepCount") or 0)
+        response = {
+            "id": session["id"],
+            "projectId": session["projectId"],
+            "flowId": session["flowId"],
+            "environmentId": session["environmentId"],
+            "status": session["status"],
+            "currentUrl": session["currentUrl"],
+            "lastSeq": session["lastSeq"],
+            "recordedStepCount": recorded_step_count,
+            "startedAt": session["createdAt"],
+            "lastActivityAt": session["lastActivityAt"],
+        }
+        if session.get("errorCode"):
+            response["errorCode"] = session["errorCode"]
+        return response
+
+    def recover_interrupted(self) -> int:
+        """重启恢复：把遗留非终态会话标记为 interrupted 终态。
+
+        返回受影响行数；无数据库提供者或失败时返回 0（尽力而为）。
+        """
+        db = self._db()
+        if db is None:
+            return 0
+        try:
+            rows = db.execute(
+                """
+                UPDATE recording_sessions
+                SET status = 'interrupted',
+                    error_code = COALESCE(error_code, 'SERVICE_RESTARTED')
+                WHERE status NOT IN (
+                    'stopped', 'canceled', 'expired', 'failed', 'interrupted'
+                )
+                """
+            ).rowcount
+            return rows or 0
+        except Exception:
+            return 0
+
+    def list_sessions(
+        self, project_id: str, owner_id: str, page: int, page_size: int
+    ) -> dict[str, Any]:
+        """项目内最近会话（含已中断/已结束），按最近活动倒序分页。"""
+        db = self._db()
+        empty = {
+            "sessions": [],
+            "total": 0,
+            "page": page,
+            "pageSize": page_size,
+        }
+        if db is None:
+            return empty
+        try:
+            total = db.execute(
+                """
+                SELECT COUNT(*) FROM recording_sessions
+                WHERE project_id = ? AND owner_id = ?
+                """,
+                (project_id, owner_id),
+            ).fetchone()[0]
+            rows = db.execute(
+                """
+                SELECT id, project_id, owner_id, flow_id, environment_id, status,
+                       current_url, last_seq, event_count, step_count,
+                       created_at, last_activity_at, expires_at, error_code
+                FROM recording_sessions
+                WHERE project_id = ? AND owner_id = ?
+                ORDER BY last_activity_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (project_id, owner_id, page_size, (page - 1) * page_size),
+            ).fetchall()
+        except Exception:
+            return empty
+        return {
+            "sessions": [self._to_response(self._row_to_session(row)) for row in rows],
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
         }
 
     def events_after(self, session_id: str, after_seq: int, limit: int = 100) -> dict[str, Any]:
@@ -644,6 +872,7 @@ class RecordingCoordinator:
         for session_id in expired:
             session = self._sessions.get(session_id)
             if session is not None:
+                self._persist_session(session)
                 self._release_browser(session)
         with self._lock:
             self._prune_terminal_sessions()
@@ -659,4 +888,5 @@ class RecordingCoordinator:
             for session in sessions:
                 session["status"] = "expired"
         for session in sessions:
+            self._persist_session(session)
             self._release_browser(session)

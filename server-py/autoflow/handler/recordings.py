@@ -69,6 +69,29 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 201, {"session": session})
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions",
+        methods=["GET"],
+    )
+    async def recording_session_list(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "flow.edit")
+        query = request.query_params
+        try:
+            page = max(1, int(query.get("page", "1") or "1"))
+            page_size = min(100, max(1, int(query.get("pageSize", "20") or "20")))
+        except ValueError:
+            raise PlatformError(400, "PAGINATION_INVALID") from None
+        return _send(
+            Response(),
+            200,
+            services.recording_coordinator.list_sessions(
+                project_id, user.id, page, page_size
+            ),
+        )
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/recording-sessions/cancel-active",
         methods=["POST"],
     )

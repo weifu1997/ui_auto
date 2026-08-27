@@ -24,11 +24,11 @@
 
 ## 阶段 C：D6 后端 — 会话元数据落库 + 重启「已中断」+ 列表端点（R2-3 后端）
 
-- [ ] C1. 增量迁移 v15：新增 `recording_sessions` 表（id/project_id/owner_id/flow_id/environment_id/status/current_url/last_seq/event_count/step_count/created_at/last_activity_at/expires_at/error_code）。
-- [ ] C2. `RecordingCoordinator` 在会话创建/状态迁移时同步元数据到库（start/update/terminal）；浏览器 context、登录快照（`RecordingSessionStateStore`）、录制结果保持进程内（D6 折中）。
-- [ ] C3. 重启恢复：启动时把遗留非终态会话标记 `interrupted`；`_require_session` 对已持久化会话返回元数据而非 404；`_TERMINAL_STATUSES` 增 `interrupted`。
-- [ ] C4. 新端点 `GET /api/platform/projects/{project_id}/recording-sessions`（分页，含已中断）→ `handler/recordings.py`；owner/scope 走 `_recording_session_for_owner` 模式。
-- [ ] C5. [gate] `npm run test:py` 全绿（迁移/协调器持久化/恢复/列表端点）+ `npm run test:startup`（重启恢复路径覆盖）。
+- [x] C1. 增量迁移 v15：`add_recording_sessions`（`migrations.py`）建 `recording_sessions` 表 + `recording_sessions_project_activity` 索引；`test_migration_v15_creates_recording_sessions_table`；`test_migrations.py` 版本清单补 `(15, "recording-sessions-metadata")`。
+- [x] C2. `RecordingCoordinator(database=…)`：`_persist_session` UPSERT（尽力而为、失败静默）+ `_maybe_persist_events`（每会话 ≥1s 限频）在 创建/启动/pause/resume/stop/cancel/sweep/close_all/事件/导航 同步元数据；浏览器 context、登录快照（`RecordingSessionStateStore`）、事件流、录制结果保持进程内。`test_create_and_transitions_persist_metadata`、`test_events_persist_throttled_last_seq_and_counts`、`test_without_database_provider_persists_nothing`（无提供者=no-op）。
+- [x] C3. `_TERMINAL_STATUSES` 增 `interrupted`；`recover_interrupted()` 启动时把遗留非终态标记 `interrupted` + `COALESCE(error_code,'SERVICE_RESTARTED')`（`services/core.py` 构造后立即调用）；`_require_session` 内存缺失时 `_load_session` DB 回退（非 404）；`session_result` 无归并器返回 `{"result": {}}`。`test_recover_interrupted_marks_leftover_and_keeps_terminal`、`test_require_session_falls_back_to_persisted_metadata`、重启后 reload 校验。
+- [x] C4. 新端点 `GET /api/platform/projects/{project_id}/recording-sessions`（分页 page/pageSize，`PAGINATION_INVALID`，含已中断）→ `handler/recordings.py`，owner 经 `require_project_capability(project_id, user.id, "flow.edit")` 作用域（auth 矩阵 `POST GET` 行）；`test_get_recording_sessions_endpoint_returns_persisted` + `test_list_sessions_owner_scoped_paginated_newest_first`。
+- [x] C5. [gate] `npm run test:py` 276 全绿（268 基线 + 8 持久化/端点用例；迁移/协调器持久化/恢复/列表端点）+ `npm run test:startup` 14 通过。
 
 ## 阶段 D：D6 前端 — interrupted 状态 + 列表端点消费（R2-3 前端）
 
