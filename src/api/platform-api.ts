@@ -1058,7 +1058,7 @@ export function createPlatformAssertionReport(
   );
 }
 
-export type RecordingSessionStatus = "starting" | "recording" | "paused" | "stopped" | "canceled" | "expired" | "failed";
+export type RecordingSessionStatus = "starting" | "recording" | "paused" | "stopped" | "canceled" | "expired" | "failed" | "interrupted";
 
 export type RecordingSession = {
   id: string;
@@ -1168,7 +1168,7 @@ function likelySensitiveRecordedStep(step: RecordedStep) {
 function decodeRecordingSession(value: unknown): RecordingSession {
   const source = asRecordingObject(value);
   const status = requiredRecordingString(source.status);
-  if (!(["starting", "recording", "paused", "stopped", "canceled", "expired", "failed"] as string[]).includes(status)) {
+  if (!(["starting", "recording", "paused", "stopped", "canceled", "expired", "failed", "interrupted"] as string[]).includes(status)) {
     throw recordingContractError();
   }
   return {
@@ -1287,6 +1287,29 @@ export function cancelActiveRecordingSession(token: string, projectId: string, e
     { method: "POST", body: JSON.stringify({ environmentId }) },
     token,
   ).then((response) => ({ canceled: response.canceled === true }));
+}
+
+export function listRecordingSessions(
+  token: string,
+  projectId: string,
+  page = 1,
+  pageSize = 20,
+): Promise<{ sessions: RecordingSession[]; total: number; page: number; pageSize: number }> {
+  const query = `?page=${encodeURIComponent(String(page))}&pageSize=${encodeURIComponent(String(pageSize))}`;
+  return request<unknown>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions${query}`,
+    {},
+    token,
+  ).then((response) => {
+    const body = asRecordingObject(response);
+    const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+    return {
+      sessions: sessions.map(decodeRecordingSession),
+      total: recordingNumber(body.total),
+      page: recordingNumber(body.page),
+      pageSize: recordingNumber(body.pageSize),
+    };
+  });
 }
 
 export function getRecordingSession(token: string, projectId: string, sessionId: string) {

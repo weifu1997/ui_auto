@@ -20,7 +20,7 @@ import { shouldReloadEditorSteps, useFlowStore } from "../stores/flow-store";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { message, modal } from "../lib/antd-feedback";
-import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, pauseRecordingSession, previewPlatformRun, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, listRecordingSessions, pauseRecordingSession, previewPlatformRun, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
 import type { PlatformPreviewRun } from "../api/platform-api";
 
 // W3 试点：只读流程图懒加载为独立 chunk（React Flow 体积较大，避免进主包）。
@@ -58,6 +58,15 @@ import { revisionInput, snapshotVariables, variableReference } from "../lib/revi
 
 const emptyFlows: Flow[] = [];
 const emptyElements: ElementAsset[] = [];
+
+// 终态横幅文案：仅被 isTerminalRecordingStatus 门控后使用（stopped/canceled/expired/failed/interrupted）。
+const terminalRecordingStatusLabel: Record<string, string> = {
+  stopped: "已停止",
+  canceled: "已取消",
+  expired: "已过期",
+  failed: "失败",
+  interrupted: "已中断",
+};
 const emptyVariables: Variable[] = [];
 const emptyEnvironments: Environment[] = [];
 
@@ -558,9 +567,22 @@ export default function FlowEditorPage() {
 
   useEffect(() => {
     if (!platformContext || !recordingStorageKey || recordingSession || recordingRestoreInFlightRef.current) return;
-    const recoveredId = readStoredRecordingSession(window.sessionStorage, recordingStorageKey);
-    if (!recoveredId) return;
     recordingRestoreInFlightRef.current = true;
+    const recoveredId = readStoredRecordingSession(window.sessionStorage, recordingStorageKey);
+    if (!recoveredId) {
+      // D6 恢复：sessionStorage 无会话 id（页面刷新/跨标签）时，查询最近会话
+      // 发现「已中断」的遗留录制并仅显示终态横幅；不自动重启录制、不轮询。
+      listRecordingSessions(platformContext.session.token, platformContext.projectId, 1, 5)
+        .then((page) => {
+          const interrupted = page.sessions.find((item) => item.status === "interrupted");
+          if (interrupted) setRecordingSession(interrupted);
+        })
+        .catch(() => {})
+        .finally(() => {
+          recordingRestoreInFlightRef.current = false;
+        });
+      return;
+    }
     void getRecordingSession(
       platformContext.session.token,
       platformContext.projectId,
@@ -964,7 +986,7 @@ export default function FlowEditorPage() {
           ) : null}
           {recordingSession && isTerminalRecordingStatus(recordingSession.status) && (
             <span className="recording-status" aria-live="polite">
-              录制{recordingSession.status === "stopped" ? "已停止" : recordingSession.status === "expired" ? "已过期" : recordingSession.status === "failed" ? "失败" : "已取消"}
+              录制{terminalRecordingStatusLabel[recordingSession.status] ?? "已取消"}
               {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
               {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
               {recordingSession.errorCode ? ` · ${recordingSession.errorCode}` : ""}

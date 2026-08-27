@@ -32,10 +32,10 @@
 
 ## 阶段 D：D6 前端 — interrupted 状态 + 列表端点消费（R2-3 前端）
 
-- [ ] D1. `RecordingSessionStatus` 增 `"interrupted"`（platform-api.ts:1061）；`decodeRecordingSession` 兼容；新增 `listRecordingSessions` API 函数。
-- [ ] D2. `terminalStatuses`（recording-editor-state.ts:14）增 `interrupted`；`isTerminalRecordingStatus` 覆盖；FlowEditorPage 终态横幅加「已中断」文案（965 起）。
-- [ ] D3. 恢复挂载（560–581）：sessionStorage 无 id 时查询最近会话发现已中断会话并显示终态横幅（不自动重启录制）。
-- [ ] D4. [gate] `npm run lint && npm run build && npm run test:unit` 全绿（recording-editor-state 既有用例 + 新增）。
+- [x] D1. `RecordingSessionStatus` 增 `"interrupted"`（platform-api.ts）；`decodeRecordingSession` 白名单兼容；新增 `listRecordingSessions(token, projectId, page, pageSize)` 返回 `{sessions, total, page, pageSize}`（复用 `decodeRecordingSession`）。
+- [x] D2. `terminalStatuses` 增 `interrupted`；`isTerminalRecordingStatus` 覆盖；FlowEditorPage 终态横幅改用 `terminalRecordingStatusLabel` 映射（含「已中断」）。
+- [x] D3. 恢复挂载：sessionStorage 无 id 时 `listRecordingSessions(…,1,5)` 发现最近「已中断」会话并 `setRecordingSession` 显示终态横幅；不启动轮询、不自动重启录制。
+- [x] D4. [gate] `npm run lint`（oxlint 0 警告）&& `npm run build`（✓ built）&& `npm run test:unit` 115 全绿（editor-state `interrupted` 终态 + platform-api list 解码/脱敏用例；MSW handler 补 GET 列表 mock）。
 
 ## 阶段 E：@tanstack/react-virtual 长列表虚拟化（R2-4）
 

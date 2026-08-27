@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getRecordingEvents, stopRecordingSession } from "./platform-api";
+import { getRecordingEvents, listRecordingSessions, stopRecordingSession } from "./platform-api";
 
 const session = {
   id: "recording-1",
@@ -67,5 +67,25 @@ describe("recording API boundary", () => {
     expect(response.result.requiredBindings).toEqual([{ stepId: "password", fieldHint: "password field" }]);
     expect(response.result.steps[0].value).toBeNull();
     expect(JSON.stringify(response)).not.toContain("plain-text-password");
+  });
+
+  it("decodes an interrupted session from the recent-sessions list without leaking query strings", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      sessions: [
+        { ...session, id: "interrupted-1", status: "interrupted", currentUrl: "https://example.test/dashboard?token=discarded#fragment", errorCode: "SERVICE_RESTARTED", recordedStepCount: 4 },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 5,
+    }), { status: 200 })));
+
+    const page = await listRecordingSessions("token", "project-1", 1, 5);
+
+    expect(page.total).toBe(1);
+    expect(page.sessions[0].status).toBe("interrupted");
+    expect(page.sessions[0].errorCode).toBe("SERVICE_RESTARTED");
+    expect(page.sessions[0].recordedStepCount).toBe(4);
+    expect(page.sessions[0].currentUrl).toBe("https://example.test/dashboard");
+    expect(JSON.stringify(page)).not.toContain("token=discarded");
   });
 });

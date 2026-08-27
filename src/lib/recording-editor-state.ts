@@ -11,6 +11,7 @@ const terminalStatuses = new Set<RecordingSessionStatus>([
   "canceled",
   "expired",
   "failed",
+  "interrupted",
 ]);
 
 export function isTerminalRecordingStatus(status: RecordingSessionStatus) {

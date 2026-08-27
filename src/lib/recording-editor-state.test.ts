@@ -63,6 +63,7 @@ describe("recording editor state", () => {
     expect(sessionStorage.getItem(key)).toBe("recording-session-1");
     expect(JSON.stringify(sessionStorage)).not.toContain("plain-text-password");
     expect(isTerminalRecordingStatus("failed")).toBe(true);
+    expect(isTerminalRecordingStatus("interrupted")).toBe(true);
     expect(isTerminalRecordingStatus("paused")).toBe(false);
 
     clearStoredRecordingSession(sessionStorage, key);

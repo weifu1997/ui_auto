@@ -310,6 +310,9 @@ export const platformHandlers = [
       session: { id: "session-1", status: "recording", projectId: String(params.projectId), events: [] },
     }),
   ),
+  http.get("/api/platform/projects/:projectId/recording-sessions", () =>
+    HttpResponse.json({ sessions: [], total: 0, page: 1, pageSize: 20 }),
+  ),
   http.get("/api/platform/projects/:projectId/recording-sessions/:sessionId", () =>
     HttpResponse.json({ session: { id: "session-1", status: "recording" } }),
   ),
