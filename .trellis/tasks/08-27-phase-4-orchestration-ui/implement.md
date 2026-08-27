@@ -32,9 +32,9 @@
 
 ## 阶段 H：验收与收尾
 
-- [ ] H1. 全量门禁 `npm run test:all`（含 `check:bundle`；e2e 断言/录制/执行 spec 不回归）。
-- [ ] H2. 回滚演练：五个提交各自独立可 revert；① 区零改动。
-- [ ] H3. spec 同步：`architecture-boundaries.md` ③ 区标记 recharts 编排看板/摘要卡完成态；阶段4 PRD 验收清单勾选。
+- [x] H1. 全量门禁 `npm run test:all`（含 `check:bundle`；e2e 断言/录制/执行 spec 不回归）——EXIT=0：后端 295 passed、bundle ≤500KB、e2e 28 passed、Windows 冒烟通过。
+- [x] H2. 回滚演练：四功能提交（趋势端点/recharts/看板/摘要卡）自当前 HEAD 逆补丁全绿——独立 `git revert` 干净；PRD 文档提交按序列回滚（先 revert 功能提交恢复 `implement.md` 原态，再 revert 文档提交，与阶段3 同构）；五提交全路径扫描 ① 区零改动。
+- [x] H3. spec 同步：`architecture-boundaries.md` ③ 区标记 recharts 编排看板/摘要卡完成态；阶段4 PRD 验收清单勾选。
 
 ## 风险文件 / 回滚点
 

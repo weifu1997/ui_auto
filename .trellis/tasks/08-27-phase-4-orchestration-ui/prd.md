@@ -42,10 +42,10 @@
 
 ## Acceptance Criteria
 
-- [ ] 趋势端点单测绿：逐日聚合（含窗口/全量）、口径一致（无断言 run 不进分子分母）、空库返回空 points、403/404 鉴权、实际值不落 payload。
-- [ ] RunsPage 看板：有数据渲染双图表；空态不渲染；窗口切换触发重新拉取（含 `window_days` 参数）。
-- [ ] RunDetail 摘要卡：通过率/计数/类型分布渲染；无断言 run 不渲染。
-- [ ] `npm run test:all` 全绿（含 `check:bundle`，recharts 独立 chunk ≤ 500KB；e2e 断言/录制/执行 spec 不回归）。
+- [x] 趋势端点单测绿：逐日聚合（含窗口/全量）、口径一致（无断言 run 不进分子分母）、空库返回空 points、403/404 鉴权、实际值不落 payload。
+- [x] RunsPage 看板：有数据渲染双图表；空态不渲染；窗口切换触发重新拉取（含 `window_days` 参数）。
+- [x] RunDetail 摘要卡：通过率/计数/类型分布渲染；无断言 run 不渲染。
+- [x] `npm run test:all` 全绿（含 `check:bundle`，recharts 独立 chunk ≤ 500KB；e2e 断言/录制/执行 spec 不回归）。
 
 ## Non-Goals
 

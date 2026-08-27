@@ -59,6 +59,8 @@
 
 - ✅ **URL 断言**（阶段3 已完成：复用 `value`+`assertMatch` 零新字段，`STEP_KEYS` 不变；`_assert_url` 页面级，无 `STEP_ELEMENT_REQUIRED`）
 - ✅ **HTML 断言报告**（阶段3 已完成：`build_assertion_report` 增 html 变体，自包含转义 + 沿既有脱敏）
+- ✅ **recharts 编排看板**（阶段4 已完成：`GET /runs/trend` 逐日 run/断言聚合端点 + `OrchestrationDashboard` AreaChart/BarChart，零触碰 ① 区；recharts@^3.10.1 MIT/React 19 兼容已评估，独立 vendor chunk 136K）
+- ✅ **RunDetail 断言摘要卡**（阶段4 已完成：通过率 + 通过/失败计数 + 类型分布 chips，复用 `ASSERTION_TYPE_LABELS`）
 - 新断言类型（网络响应/API 断言等，需新基建的另起任务）
 - 定位器自愈引擎（`LocatorScorer` 接口预留可选 LLM 实现；D5 自愈 MVP 已完成）
 - 新端点 / 新表（增量迁移）
