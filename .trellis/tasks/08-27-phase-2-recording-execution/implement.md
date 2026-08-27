@@ -9,18 +9,18 @@
 
 唯一外部导入 `services/core.py:14 from ..recorder import RecordingCoordinator`；测试导入 `RecorderNormalizer`/`validate_recorder_event`/`recording_target_url` 等。`recorder.py` 保留 shim re-export，import 路径零变化。
 
-- [ ] A1. 拆出 `recorder_capture.py`：`RECORDER_INIT_SCRIPT_TEMPLATE` + `RECORDER_INIT_SCRIPT`（现 38–247，注入脚本常量，零 Python 逻辑）。
-- [ ] A2. 拆出 `recorder_normalizer.py`：`RecorderNormalizer` + `_element_key` + 归一化常量（现 269–566，纯状态机，无 Playwright 依赖；docstring 声明保持）。
-- [ ] A3. 拆出 `recorder_validation.py`：`sanitize_url`/`url_path`/`recording_target_url`/`recording_url_is_same_origin`/`_bounded_text`/`validate_recorder_event`/`is_sensitive_field`（现 250–709）。
-- [ ] A4. `recorder.py` 收窄为 `RecordingCoordinator` + `_RecordingOperationError` + 协调器常量（现 585–1305）+ shim re-export 上述符号。
-- [ ] A5. [gate] `npm run test:py` 全绿（录制相关：normalizer/coordinator/事件校验/URL 守卫）+ `npm run lint && npm run build && npm run test:unit` 不回归。
+- [x] A1. 拆出 `recorder_capture.py`：`RECORDER_INIT_SCRIPT_TEMPLATE` + `RECORDER_INIT_SCRIPT`（注入脚本常量，零 Python 逻辑）。
+- [x] A2. 拆出 `recorder_normalizer.py`：`RecorderNormalizer` + `_element_key` + 归一化常量（纯状态机，无 Playwright 依赖；docstring 声明保持）。
+- [x] A3. 拆出 `recorder_validation.py`：`sanitize_url`/`url_path`/`recording_target_url`/`recording_url_is_same_origin`/`_bounded_text`/`validate_recorder_event`/`is_sensitive_field`/`BROWSER_EVENT_KINDS`。
+- [x] A4. `recorder.py` 收窄为 `RecordingCoordinator` + `_RecordingOperationError` + 协调器常量（1305→662 行）+ shim re-export 全部符号（`services/core.py` 与测试 import 路径零变化）。
+- [x] A5. [gate] 通过：`npm run test:py` 262 全绿（含录制 34 用例）+ lint / build / test:unit 114 不回归。提交 `fa355c9`。
 
 ## 阶段 B：runner.py 抽公共启停（R2-2，先确认测试覆盖）
 
-- [ ] B1. 确认/补测启停路径：为 `execute_browser_run` 与 `execute_element_validation` 的启动/teardown（`sync_playwright` + launch + `new_context(locale="zh-CN")` + `hooks["browser"]` 注册与 `(None,None)` 清理 + context/browser close）补单测（当前覆盖集中在断言求值）。
-- [ ] B2. 抽 `RunBrowserSession` context manager（或 finally-safe 等价辅助）：统一启动/teardown/取消判定（`signal.is_set() or error == "RUN_CANCELED"`）；`hooks["browser"]` 回调与 `tracing_started` 为唯一差异参数。两入口改为使用。
-- [ ] B3. `ManagedRunner._close_browser`（managed_runner.py:144–156）视情况复用（不强制）。
-- [ ] B4. [gate] `npm run test:py` 全绿（断言/取消/重试用例不回归）。
+- [x] B1. 补测启停路径：新增 `tests/unit/test_runner_lifecycle.py`（6 用例，假 Playwright 栈，含 CM 协议），拆分前对原代码全绿（基线）。
+- [x] B2. 抽 `_BrowserSession` context manager + `_is_canceled` + `_close_quietly`（`hooks["browser"]` 回调与 `storage_state` 为唯一差异参数；`tracing_started` 留在调用方 inner finally）：两入口改为使用，拆后 6 用例保持全绿。
+- [x] B3. `ManagedRunner._close_browser` 复用 `_close_quietly`（行为等价：逐项 try/except 关闭）。
+- [x] B4. [gate] 通过：`npm run test:py` 268 全绿（262 基线 + 6 启停用例；断言/取消/重试/并发不回归）。提交 `081bfab`。
 
 ## 阶段 C：D6 后端 — 会话元数据落库 + 重启「已中断」+ 列表端点（R2-3 后端）
 

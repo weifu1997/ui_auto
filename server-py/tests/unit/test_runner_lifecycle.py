@@ -1,0 +1,312 @@
+"""阶段2-B：runner 启停路径单测（拆分前建立基线，拆分后保持全绿）。
+
+覆盖 ``execute_browser_run`` / ``execute_element_validation`` 的浏览器启动序列、
+teardown（hooks 清理 + context/browser close）、取消判定与失败路径，用假
+Playwright 驱动，不启动真实浏览器。
+"""
+
+from __future__ import annotations
+
+import threading
+
+import pytest
+
+from autoflow.runner import execute_browser_run, execute_element_validation
+
+
+# ---------- 假 Playwright 栈 ----------
+
+
+class _FakeTracing:
+    def __init__(self) -> None:
+        self.started = False
+
+    def start(self, **kwargs: object) -> None:
+        self.started = True
+
+    def stop(self, **kwargs: object) -> None:
+        pass
+
+
+class _FakeLocator:
+    def __init__(self, count: int = 2) -> None:
+        self._count = count
+        self.first = self
+
+    def wait_for(self, **kwargs: object) -> None:
+        pass
+
+    def count(self) -> int:
+        return self._count
+
+    def evaluate(self, script: str) -> str:
+        return "<html data-test>…</html>"
+
+
+class _FakePage:
+    def __init__(self, fail_screenshot: bool = False) -> None:
+        self._fail_screenshot = fail_screenshot
+
+    def screenshot(self, **kwargs: object) -> None:
+        if self._fail_screenshot:
+            raise RuntimeError("screenshot boom")
+
+    def goto(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def evaluate(self, script: str) -> object:
+        return False
+
+    def locator(self, value: str) -> _FakeLocator:
+        return _FakeLocator()
+
+    def get_by_label(self, value: str) -> _FakeLocator:
+        return _FakeLocator()
+
+    def get_by_text(self, value: str, **kwargs: object) -> _FakeLocator:
+        return _FakeLocator()
+
+    def get_by_role(self, role: str, **kwargs: object) -> _FakeLocator:
+        return _FakeLocator()
+
+
+class _FakeContext:
+    def __init__(self) -> None:
+        self.pages: list[_FakePage] = []
+        self.closed = False
+        self.new_context_kwargs: dict[str, object] | None = None
+        self.tracing = _FakeTracing()
+        self._fail_screenshot = False
+
+    def new_page(self) -> _FakePage:
+        page = _FakePage(fail_screenshot=self._fail_screenshot)
+        self.pages.append(page)
+        return page
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self) -> None:
+        self.contexts: list[_FakeContext] = []
+        self.closed = False
+
+    def new_context(self, **kwargs: object) -> _FakeContext:
+        context = _FakeContext()
+        context.new_context_kwargs = dict(kwargs)
+        self.contexts.append(context)
+        return context
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeChromium:
+    def __init__(self) -> None:
+        self.launches: list[dict[str, object]] = []
+
+    def launch(self, headless: object = None) -> _FakeBrowser:
+        browser = _FakeBrowser()
+        self.launches.append({"headless": headless, "browser": browser})
+        return browser
+
+
+class _FakePlaywright:
+    def __init__(self) -> None:
+        self.chromium = _FakeChromium()
+        self.stopped = False
+
+    # 与真实 sync_playwright() 的 CM 协议一致：with sync_playwright() as pw
+    def __enter__(self) -> "_FakePlaywright":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        self.stop()
+        return False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _make_hooks(
+    recorder: list[tuple[str, object]],
+    signal: threading.Event | None = None,
+) -> dict[str, object]:
+    return {
+        "browser": lambda browser, context: recorder.append(
+            ("browser", "register" if browser is not None else "clear")
+        ),
+        "event": lambda kind, payload: recorder.append(("event", kind)),
+        "artifact_path": lambda name, ext: f"/tmp/{name}.{ext}",
+        "artifact": lambda artifact: recorder.append(("artifact", artifact["name"])),
+        "signal": signal,
+    }
+
+
+# ---------- execute_browser_run ----------
+
+
+def test_browser_run_start_sequence_and_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setenv("MANAGED_RUNNER_HEADLESS", "1")
+    recorder: list[tuple[str, object]] = []
+    hooks = _make_hooks(recorder)
+
+    result = execute_browser_run(
+        {
+            "environment": {"baseUrl": "https://app.test"},
+            "flow": {"steps": []},
+            "secrets": {},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert result["completedSteps"] == 0
+    # 启动：chromium.launch 缺省 headless=True（env 无 headless + 环境变量 "1"）
+    assert len(fake_pw.chromium.launches) == 1
+    assert fake_pw.chromium.launches[0]["headless"] is True
+    browser = fake_pw.chromium.launches[0]["browser"]
+    assert len(browser.contexts) == 1
+    assert browser.contexts[0].new_context_kwargs == {"locale": "zh-CN"}
+    context = browser.contexts[0]
+    assert len(context.pages) == 1
+    assert context.tracing.started  # 非敏感 run 开启 Trace
+    # 注册顺序：browser(context, browser) 先 register，teardown 后 clear
+    assert ("browser", "register") in recorder
+    assert recorder[-1] == ("browser", "clear")
+    # teardown：context/browser close + playwright.stop
+    assert context.closed and browser.closed and fake_pw.stopped
+
+
+def test_browser_run_headless_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    recorder: list[tuple[str, object]] = []
+    hooks = _make_hooks(recorder)
+
+    execute_browser_run(
+        {
+            "environment": {"baseUrl": "https://app.test", "headless": False},
+            "flow": {"steps": []},
+            "secrets": {},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert fake_pw.chromium.launches[0]["headless"] is False
+
+
+def test_browser_run_cancel_runs_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    recorder: list[tuple[str, object]] = []
+    signal = threading.Event()
+    signal.set()
+    hooks = _make_hooks(recorder, signal=signal)
+
+    result = execute_browser_run(
+        {
+            "environment": {"baseUrl": "https://app.test"},
+            "flow": {"steps": [{"id": "s1", "action": "点击", "title": "Click"}]},
+            "secrets": {},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "canceled"
+    assert result["error"] == "RUN_CANCELED"
+    browser = fake_pw.chromium.launches[0]["browser"]
+    context = browser.contexts[0]
+    # 原 finally 顺序：先 hooks clear，再停 trace（记录 artifact），故用成员判断
+    assert ("browser", "clear") in recorder
+    assert context.closed and browser.closed and fake_pw.stopped
+
+
+def test_browser_run_step_failure_runs_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    # fake page.screenshot 抛错：截图步骤失败 → 非继续执行 → run failed
+    monkeypatch.setattr(
+        _FakeContext,
+        "new_page",
+        lambda self: _FakePage(fail_screenshot=True),
+    )
+    recorder: list[tuple[str, object]] = []
+    hooks = _make_hooks(recorder)
+
+    result = execute_browser_run(
+        {
+            "environment": {"baseUrl": "https://app.test"},
+            "flow": {"steps": [{"id": "s1", "action": "截图", "title": "Shot"}]},
+            "secrets": {},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failed"
+    assert "screenshot boom" in result["error"]
+    browser = fake_pw.chromium.launches[0]["browser"]
+    context = browser.contexts[0]
+    # 原 finally 顺序：先 hooks clear，再停 trace（记录 artifact），故用成员判断
+    assert ("browser", "clear") in recorder
+    assert context.closed and browser.closed and fake_pw.stopped
+
+
+# ---------- execute_element_validation ----------
+
+
+def test_validation_start_sequence_and_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setenv("MANAGED_RUNNER_HEADLESS", "1")
+    recorder: list[tuple[str, object]] = []
+    hooks = _make_hooks(recorder)
+
+    result = execute_element_validation(
+        {
+            "environment": {"baseUrl": "https://app.test", "testIdAttribute": "data-testid"},
+            "element": {"path": "/login", "method": "css", "value": "#email"},
+            "storage_state": {"cookies": []},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert result["count"] == 2
+    browser = fake_pw.chromium.launches[0]["browser"]
+    context = browser.contexts[0]
+    # 校验路径：new_context 透传 storage_state
+    assert context.new_context_kwargs == {
+        "locale": "zh-CN",
+        "storage_state": {"cookies": []},
+    }
+    assert recorder[-1] == ("browser", "clear")
+    assert context.closed and browser.closed and fake_pw.stopped
+
+
+def test_validation_cancel_runs_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    recorder: list[tuple[str, object]] = []
+    signal = threading.Event()
+    signal.set()
+    hooks = _make_hooks(recorder, signal=signal)
+
+    result = execute_element_validation(
+        {
+            "environment": {"baseUrl": "https://app.test", "testIdAttribute": "data-testid"},
+            "element": {"path": "/login", "method": "css", "value": "#email"},
+            "storage_state": None,
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "canceled"
+    assert result["error"] == "VALIDATION_CANCELED"
+    browser = fake_pw.chromium.launches[0]["browser"]
+    context = browser.contexts[0]
+    assert recorder[-1] == ("browser", "clear")
+    assert context.closed and browser.closed and fake_pw.stopped

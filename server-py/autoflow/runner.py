@@ -511,12 +511,88 @@ def _artifact_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", name).strip("._") or "artifact"
 
 
+def _close_quietly(call: Callable[[], None]) -> None:
+    """Close a Playwright resource, ignoring cleanup-only errors."""
+    try:
+        call()
+    except Exception:
+        pass
+
+
+def _is_canceled(hooks: dict[str, Any], error: BaseException) -> bool:
+    """共享取消判定：signal 已置位或错误即 RUN_CANCELED。"""
+    return bool(hooks.get("signal") and hooks["signal"].is_set()) or str(
+        error
+    ) == "RUN_CANCELED"
+
+
+class _BrowserSession:
+    """统一 Playwright 浏览器启停（阶段2-B：runner.py 抽公共启停）。
+
+    启动：``sync_playwright`` + ``chromium.launch``（headless 缺省取环境变量
+    ``MANAGED_RUNNER_HEADLESS``）+ ``new_context(locale="zh-CN"[, storage_state])``，
+    并把 ``(browser, context)`` 注册到 ``hooks["browser"]``（ManagedRunner 取消时
+    据此关浏览器）。退出：先 ``hooks["browser"](None, None)`` 清理引用，再安全关闭
+    context/browser 与 playwright。
+
+    Trace 归调用方负责（须在 ``__exit__`` 前停止，保证 context 仍打开）。
+    """
+
+    def __init__(
+        self,
+        hooks: dict[str, Any],
+        environment: dict[str, Any] | None = None,
+        *,
+        storage_state: dict[str, Any] | None = None,
+    ) -> None:
+        self._hooks = hooks
+        self._environment = environment or {}
+        self._storage_state = storage_state
+        self._playwright_cm: Any = None
+        self.browser: Any = None
+        self.context: Any = None
+
+    def __enter__(self) -> Any:
+        from playwright.sync_api import sync_playwright
+
+        self._playwright_cm = sync_playwright()
+        playwright = self._playwright_cm.__enter__()
+        try:
+            environment = self._environment
+            headless = environment.get("headless")
+            if headless is None:
+                headless = os.environ.get("MANAGED_RUNNER_HEADLESS", "1") != "0"
+            self.browser = playwright.chromium.launch(headless=bool(headless))
+            context_kwargs: dict[str, Any] = {"locale": "zh-CN"}
+            if self._storage_state is not None:
+                context_kwargs["storage_state"] = self._storage_state
+            self.context = self.browser.new_context(**context_kwargs)
+        except BaseException:
+            # 启动中途失败时释放 playwright driver，等价原 `with sync_playwright()` 的清理。
+            try:
+                self._playwright_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+            raise
+        self._hooks["browser"](self.browser, self.context)
+        return self.context
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        self._hooks["browser"](None, None)
+        if self.context is not None:
+            _close_quietly(self.context.close)
+        if self.browser is not None:
+            _close_quietly(self.browser.close)
+        if self._playwright_cm is not None:
+            # 与原 `with sync_playwright()` 一致：driver 停止失败向上传播。
+            self._playwright_cm.__exit__(exc_type, exc, tb)
+        return False
+
+
 def execute_browser_run(
     input: dict[str, Any],
     hooks: dict[str, Any],
 ) -> dict[str, Any]:
-    from playwright.sync_api import sync_playwright
-
     sensitive = len(input.get("secrets", {})) > 0
     outputs: dict[str, str] = {}
     steps = input.get("flow", {}).get("steps", [])
@@ -539,17 +615,8 @@ def execute_browser_run(
     tracing_started = False
     started = time.time()
     assertions: list[dict[str, Any]] = []
-    browser = None
-    context = None
     try:
-        with sync_playwright() as playwright:
-            environment = input.get("environment", {})
-            headless = environment.get("headless")
-            if headless is None:
-                headless = os.environ.get("MANAGED_RUNNER_HEADLESS", "1") != "0"
-            browser = playwright.chromium.launch(headless=bool(headless))
-            context = browser.new_context(locale="zh-CN")
-            hooks["browser"](browser, context)
+        with _BrowserSession(hooks, input.get("environment", {})) as context:
             page = context.new_page()
             if not sensitive:
                 context.tracing.start(screenshots=True, snapshots=True)
@@ -558,128 +625,141 @@ def execute_browser_run(
                 hooks["event"](
                     "run.security", {"message": "Sensitive run disabled screenshots and Trace"}
                 )
-            for index, step in enumerate(steps):
-                if hooks.get("signal") and hooks["signal"].is_set():
-                    raise RuntimeError("RUN_CANCELED")
-                # W0-4 心跳：每步开始即上报进度，watchdog 依据其新鲜度判定，
-                # 长跑但健康的 run 不再因 updated_at 停滞被误杀。
-                progress = hooks.get("progress")
-                if callable(progress):
-                    progress(index)
-                step_started = time.time()
-                hooks["event"](
-                    "step.started",
-                    {"index": index, "stepId": step.get("id"), "title": step.get("title")},
-                )
-                attempts = 2 if step.get("failurePolicy") == "重试 1 次" else 1
-                failure: Exception | None = None
-                assertion_record: dict[str, Any] | None = None
-                for attempt in range(1, attempts + 1):
-                    try:
-                        if step.get("action") == "截图":
-                            if not sensitive:
-                                path = hooks["artifact_path"](
-                                    _artifact_name(str(step.get("title", "screenshot"))),
-                                    "png",
+            try:
+                for index, step in enumerate(steps):
+                    if hooks.get("signal") and hooks["signal"].is_set():
+                        raise RuntimeError("RUN_CANCELED")
+                    # W0-4 心跳：每步开始即上报进度，watchdog 依据其新鲜度判定，
+                    # 长跑但健康的 run 不再因 updated_at 停滞被误杀。
+                    progress = hooks.get("progress")
+                    if callable(progress):
+                        progress(index)
+                    step_started = time.time()
+                    hooks["event"](
+                        "step.started",
+                        {"index": index, "stepId": step.get("id"), "title": step.get("title")},
+                    )
+                    attempts = 2 if step.get("failurePolicy") == "重试 1 次" else 1
+                    failure: Exception | None = None
+                    assertion_record: dict[str, Any] | None = None
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            if step.get("action") == "截图":
+                                if not sensitive:
+                                    path = hooks["artifact_path"](
+                                        _artifact_name(str(step.get("title", "screenshot"))),
+                                        "png",
+                                    )
+                                    page.screenshot(path=path, full_page=True)
+                                    hooks["artifact"](
+                                        {
+                                            "name": f"{step.get('title')}.png",
+                                            "contentType": "image/png",
+                                            "path": path,
+                                        }
+                                    )
+                            else:
+                                step_result = _execute_step(
+                                    page, step, input, outputs, hooks, index
                                 )
+                                if isinstance(step_result, dict):
+                                    assertion_record = step_result
+                            failure = None
+                            break
+                        except _AssertionFailure as error:
+                            assertion_record = error.record
+                            failure = error
+                            if attempt < attempts:
+                                hooks["event"](
+                                    "step.retrying",
+                                    {"index": index, "stepId": step.get("id"), "attempt": attempt},
+                                )
+                        except Exception as error:
+                            failure = error
+                            if attempt < attempts:
+                                hooks["event"](
+                                    "step.retrying",
+                                    {"index": index, "stepId": step.get("id"), "attempt": attempt},
+                                )
+                    if failure:
+                        error_text = str(failure)
+                        if not sensitive:
+                            path = hooks["artifact_path"](f"failure-step-{index + 1}", "png")
+                            try:
                                 page.screenshot(path=path, full_page=True)
                                 hooks["artifact"](
                                     {
-                                        "name": f"{step.get('title')}.png",
+                                        "name": f"failure-step-{index + 1}.png",
                                         "contentType": "image/png",
                                         "path": path,
                                     }
                                 )
-                        else:
-                            step_result = _execute_step(
-                                page, step, input, outputs, hooks, index
-                            )
-                            if isinstance(step_result, dict):
-                                assertion_record = step_result
-                        failure = None
-                        break
-                    except _AssertionFailure as error:
-                        assertion_record = error.record
-                        failure = error
-                        if attempt < attempts:
-                            hooks["event"](
-                                "step.retrying",
-                                {"index": index, "stepId": step.get("id"), "attempt": attempt},
-                            )
-                    except Exception as error:
-                        failure = error
-                        if attempt < attempts:
-                            hooks["event"](
-                                "step.retrying",
-                                {"index": index, "stepId": step.get("id"), "attempt": attempt},
-                            )
-                if failure:
-                    error_text = str(failure)
-                    if not sensitive:
-                        path = hooks["artifact_path"](f"failure-step-{index + 1}", "png")
-                        try:
-                            page.screenshot(path=path, full_page=True)
-                            hooks["artifact"](
-                                {
-                                    "name": f"failure-step-{index + 1}.png",
-                                    "contentType": "image/png",
-                                    "path": path,
-                                }
-                            )
-                        except Exception:
-                            pass
-                    hooks["event"](
-                        "step.failed",
-                        {
+                            except Exception:
+                                pass
+                        hooks["event"](
+                            "step.failed",
+                            {
+                                "index": index,
+                                "stepId": step.get("id"),
+                                "title": step.get("title"),
+                                "error": error_text,
+                                "durationMs": int((time.time() - step_started) * 1000),
+                            },
+                        )
+                        if assertion_record is not None:
+                            assertions.append(assertion_record)
+                        if step.get("failurePolicy") != "继续执行":
+                            raise failure
+                    else:
+                        completed_steps += 1
+                        step_duration_ms = int((time.time() - step_started) * 1000)
+                        event_data = {
                             "index": index,
                             "stepId": step.get("id"),
                             "title": step.get("title"),
-                            "error": error_text,
-                            "durationMs": int((time.time() - step_started) * 1000),
-                        },
+                            "message": f"{step.get('title') or 'Step'} completed",
+                            "durationMs": step_duration_ms,
+                        }
+                        hooks["event"]("step.completed", event_data)
+                        # 兼容：同时写旧事件名「step.succeeded」，以便历史代码路径和外部工具在过渡期读取。
+                        hooks["event"]("step.succeeded", event_data)
+                        if assertion_record is not None:
+                            assertions.append(assertion_record)
+                if context and not sensitive:
+                    path = hooks["artifact_path"]("trace", "zip")
+                    context.tracing.stop(path=path)
+                    tracing_started = False
+                    hooks["artifact"](
+                        {
+                            "name": "trace.zip",
+                            "contentType": "application/zip",
+                            "path": path,
+                        }
                     )
-                    if assertion_record is not None:
-                        assertions.append(assertion_record)
-                    if step.get("failurePolicy") != "继续执行":
-                        raise failure
-                else:
-                    completed_steps += 1
-                    step_duration_ms = int((time.time() - step_started) * 1000)
-                    event_data = {
-                        "index": index,
-                        "stepId": step.get("id"),
-                        "title": step.get("title"),
-                        "message": f"{step.get('title') or 'Step'} completed",
-                        "durationMs": step_duration_ms,
-                    }
-                    hooks["event"]("step.completed", event_data)
-                    # 兼容：同时写旧事件名「step.succeeded」，以便历史代码路径和外部工具在过渡期读取。
-                    hooks["event"]("step.succeeded", event_data)
-                    if assertion_record is not None:
-                        assertions.append(assertion_record)
-            if context and not sensitive:
-                path = hooks["artifact_path"]("trace", "zip")
-                context.tracing.stop(path=path)
-                tracing_started = False
-                hooks["artifact"](
-                    {
-                        "name": "trace.zip",
-                        "contentType": "application/zip",
-                        "path": path,
-                    }
-                )
-            return {
-                "status": "success",
-                "completedSteps": completed_steps,
-                "totalSteps": len(steps),
-                "elapsedMs": int((time.time() - started) * 1000),
-                "flowOutputs": outputs,
-                "assertions": assertions,
-            }
+                return {
+                    "status": "success",
+                    "completedSteps": completed_steps,
+                    "totalSteps": len(steps),
+                    "elapsedMs": int((time.time() - started) * 1000),
+                    "flowOutputs": outputs,
+                    "assertions": assertions,
+                }
+            finally:
+                if context and tracing_started:
+                    try:
+                        path = hooks["artifact_path"]("trace", "zip")
+                        context.tracing.stop(path=path)
+                        hooks["artifact"](
+                            {
+                                "name": "trace.zip",
+                                "contentType": "application/zip",
+                                "path": path,
+                            }
+                        )
+                    except Exception:
+                        pass
     except Exception as error:
-        canceled = bool(
-            hooks.get("signal") and hooks["signal"].is_set()
-        ) or str(error) == "RUN_CANCELED"
+        canceled = _is_canceled(hooks, error)
         return {
             "status": "canceled" if canceled else "failed",
             "completedSteps": completed_steps,
@@ -689,31 +769,6 @@ def execute_browser_run(
             "flowOutputs": outputs,
             "assertions": assertions,
         }
-    finally:
-        hooks["browser"](None, None)
-        if context and tracing_started:
-            try:
-                path = hooks["artifact_path"]("trace", "zip")
-                context.tracing.stop(path=path)
-                hooks["artifact"](
-                    {
-                        "name": "trace.zip",
-                        "contentType": "application/zip",
-                        "path": path,
-                    }
-                )
-            except Exception:
-                pass
-        if context is not None:
-            try:
-                context.close()
-            except Exception:
-                pass
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
 
 
 def _element_validation_login_error(
@@ -743,24 +798,15 @@ def execute_element_validation(
     input: dict[str, Any],
     hooks: dict[str, Any],
 ) -> dict[str, Any]:
-    from playwright.sync_api import sync_playwright
-
     environment = input.get("environment", {})
     element = input.get("element", {})
     started = time.time()
-    browser = None
-    context = None
     try:
-        with sync_playwright() as playwright:
-            headless = environment.get("headless")
-            if headless is None:
-                headless = os.environ.get("MANAGED_RUNNER_HEADLESS", "1") != "0"
-            browser = playwright.chromium.launch(headless=bool(headless))
-            context = browser.new_context(
-                locale="zh-CN",
-                storage_state=input.get("storage_state"),
-            )
-            hooks["browser"](browser, context)
+        with _BrowserSession(
+            hooks,
+            environment,
+            storage_state=input.get("storage_state"),
+        ) as context:
             page = context.new_page()
             page.goto(
                 _target_url(
@@ -820,24 +866,10 @@ def execute_element_validation(
                 "elapsedMs": int((time.time() - started) * 1000),
             }
     except Exception as error:
-        canceled = bool(
-            hooks.get("signal") and hooks["signal"].is_set()
-        ) or str(error) == "RUN_CANCELED"
+        canceled = _is_canceled(hooks, error)
         return {
             "status": "canceled" if canceled else "failed",
             "count": 0,
             "elapsedMs": int((time.time() - started) * 1000),
             "error": "VALIDATION_CANCELED" if canceled else str(error),
         }
-    finally:
-        hooks["browser"](None, None)
-        if context is not None:
-            try:
-                context.close()
-            except Exception:
-                pass
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass

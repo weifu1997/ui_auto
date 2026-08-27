@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .runner import execute_browser_run, execute_element_validation
+from .runner import _close_quietly, execute_browser_run, execute_element_validation
 
 
 class ManagedRunner:
@@ -144,16 +144,10 @@ class ManagedRunner:
     def _close_browser(self, item: dict[str, Any]) -> None:
         context = item.get("context")
         if context is not None:
-            try:
-                context.close()
-            except Exception:
-                pass
+            _close_quietly(context.close)
         browser = item.get("browser")
         if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
+            _close_quietly(browser.close)
 
     def _run(self) -> None:
         while True:
