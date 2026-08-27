@@ -101,7 +101,7 @@ type AssertionRecord = {
   stepIndex: number;
   stepId: string;
   title: string;
-  type: "visibility" | "text" | "count" | "attribute";
+  type: "visibility" | "text" | "count" | "attribute" | "url";
   passed: boolean;
   expected: string;
   actual: string;
@@ -112,6 +112,7 @@ const ASSERTION_TYPE_LABELS: Record<string, string> = {
   text: "文本",
   count: "数量",
   attribute: "属性",
+  url: "URL",
 };
 
 function assertionTypeLabel(type: string) {

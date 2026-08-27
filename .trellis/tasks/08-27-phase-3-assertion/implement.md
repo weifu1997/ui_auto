@@ -29,10 +29,10 @@
 
 ## 阶段 D：断言语义统一收口（R3-2）
 
-- [ ] D1. `RunDetailPage.tsx`：`AssertionRecord.type` union 增 `"url"`；`ASSERTION_TYPE_LABELS` 增 `url: "URL"`。
-- [ ] D2. 端到端往返 parity：录制候选断言（含 trimCompare 文本）→ 导入 → 执行 `step.asserted` → `result.assertions` → 报告/前端渲染，字段零漂移用例（复用既有 run-detail 断言 spec + e2e URL 断言步骤）。
-- [ ] D3. `AssertionBatchBar` 批量匹配动作集与 `actionOptions` 断言子集一致（含 URL）。
-- [ ] D4. [gate] `npm run test:unit` + `npm run test:py` 全绿。
+- [x] D1. `RunDetailPage.tsx`：`AssertionRecord.type` union 增 `"url"`；`ASSERTION_TYPE_LABELS` 增 `url: "URL"`。
+- [x] D2. 端到端往返 parity：run-detail 断言 spec 增 URL 用例——`step.asserted`（type=url）与 `result.assertions` 同源载荷 → 前端渲染「URL断言」标签 + 期望/实际 code + 时间线判定行，字段零漂移（配合 e2e `assertion-contract.spec.ts` URL 步骤 s3）。
+- [x] D3. `AssertionBatchBar` 批量匹配动作集与 `actionOptions` 断言子集一致（含 URL）：`applyBatchMatch` 目标已扩至文本/属性/URL，匹配选项复用 contains/exact。
+- [x] D4. [gate] `npm run test:unit` 119 全绿 + `npm run test:py` 288 全绿。
 
 ## 阶段 E：HTML 断言报告（R3-3 可选）
 

@@ -172,6 +172,38 @@ describe("RunDetailPage 断言结果区块", () => {
     expect(screen.getByText("断言失败：期望 3，实际 2")).toBeInTheDocument();
   });
 
+  it("URL 断言：type=url 渲染 URL 标签，时间线判定行含期望/实际（往返字段零漂移）", async () => {
+    // R3-2 语义统一收口：step.asserted 载荷（type=url/expected/actual）与
+    // result.assertions 同源；前端按 label 映射渲染为「URL断言」。
+    const run = makeRun({
+      result: {
+        status: "success",
+        assertions: [
+          { stepIndex: 1, stepId: "s2", title: "登录页", type: "url", passed: true, expected: "/__fixture/login", actual: "https://app.test/__fixture/login?next=/dash", durationMs: 18 },
+        ],
+      },
+      events: [
+        { id: 1, kind: "run.started", data: {}, at: "2026-08-23T00:00:00.100Z" },
+        { id: 2, kind: "step.started", data: { index: 1, stepId: "s2", title: "登录页" }, at: "2026-08-23T00:00:00.400Z" },
+        { id: 3, kind: "step.asserted", data: { index: 1, stepId: "s2", title: "登录页", type: "url", passed: true, expected: "/__fixture/login", actual: "https://app.test/__fixture/login?next=/dash", durationMs: 18 }, at: "2026-08-23T00:00:00.500Z" },
+        { id: 4, kind: "step.completed", data: { index: 1, stepId: "s2", title: "登录页", durationMs: 25 }, at: "2026-08-23T00:00:00.600Z" },
+        { id: 5, kind: "run.complete", data: { status: "success", result: {} }, at: "2026-08-23T00:00:01.000Z" },
+      ],
+    });
+    renderRun(run);
+
+    expect(await screen.findByText("断言结果")).toBeInTheDocument();
+    const row = screen.getByText("登录页").closest(".assertion-row") as HTMLElement;
+    expect(within(row).getByText("URL断言")).toBeInTheDocument();
+    // 期望值 / 实际值各一列 code（expected ≠ actual 时各出现一次）。
+    expect(within(row).getByText("/__fixture/login", { selector: "code" })).toBeInTheDocument();
+    expect(within(row).getByText("https://app.test/__fixture/login?next=/dash", { selector: "code" })).toBeInTheDocument();
+    expect(within(row).getByText("通过", { exact: true })).toBeInTheDocument();
+
+    // 时间线：step.asserted 判定行（URL 载荷透传 expected/actual）。
+    expect(screen.getByText("断言通过：期望 /__fixture/login，实际 https://app.test/__fixture/login?next=/dash")).toBeInTheDocument();
+  });
+
   it("无断言：不渲染断言结果区块", async () => {
     const run = makeRun({
       result: { status: "success" },
