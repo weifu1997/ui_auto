@@ -16,6 +16,7 @@ from .assertion_contract import (
     ASSERTION_TYPES,
     ASSERT_VISIBILITIES,
 )
+from .locator_score import HeuristicLocatorScorer, LocatorScorer
 
 
 def interpolate(
@@ -73,6 +74,13 @@ _NAVIGATE_WAIT_UNTIL = "commit"
 # 导致 SPA 应用、远程部署机网络抖动等情况频繁超时。导航阶段至少给 30s；
 # 点击/输入等元素级操作仍然严格按用户环境配置。
 _NAVIGATE_TIMEOUT_FLOOR_MS = 30_000
+
+# 需要元素定位的动作：D5 自愈仅对这些动作的定位失败做备用定位器回退，
+# 不碰导航/等待/键盘/断言等无需元素定位的路径。
+_ELEMENT_ACTIONS = frozenset({"点击", "填写", "清空填写", "选择下拉项", "勾选"})
+
+# 默认启发式评分器（无外部依赖）；未来可选 LLM 实现替换该模块级引用。
+_DEFAULT_LOCATOR_SCORER: LocatorScorer = HeuristicLocatorScorer()
 
 
 def _navigate_timeout_ms(environment_or_step: dict[str, Any], default_seconds: int = 30) -> int:
@@ -147,6 +155,123 @@ def _locator_for(
     if method == "XPath":
         return page.locator(f"xpath={value}")
     return page.locator(value)
+
+
+# D5 定位器自愈：由原定位确定性派生候选备用定位器，交由评分器以 count()===1
+# 唯一性把关后回退。候选规格统一为 ``(kind, value, name)``，由
+# ``_locator_from_spec`` 构建真实 Playwright 定位器。
+_TEXT_ROLES = ("button", "link", "heading", "checkbox", "radio", "textbox", "option")
+
+
+def _fallback_candidates(element: dict[str, Any]) -> list[tuple[str, str, str | None]]:
+    """由原定位派生候选备用定位器（确定性、有界）。
+
+    dom-to-locator 风格：对原定位做「退化 / 换技术」变换。CSS/XPath 的结构
+    漂移无可派生信息，返回空；其余技术给出少量候选，最终采纳仍由评分器以
+    ``count()===1`` 把关。
+    """
+    method = element.get("method")
+    value = str(element.get("value", ""))
+    if not value:
+        return []
+    if method == "text":
+        # W0-2 已把 exact→substring 作为主定位；D5 追加：按常见 role 用可访问名
+        # 匹配——按钮/链接的可访问名通常等于其文本，即使 DOM 文本漂移也能唯一命中。
+        return [("role", role, value) for role in _TEXT_ROLES]
+    if method == "testid":
+        # 属性子串匹配：录制 testid 前后缀漂移（login-submit → login-submit-mobile）。
+        return [("testidPartial", value, None)]
+    if method == "label":
+        return [("label", value, None)]
+    if method == "role":
+        # 去掉 name 约束的 role 退化；仅当该 role 在页面唯一（count()===1）时采纳。
+        match = re.match(r"^([\w-]+)", value)
+        if match:
+            return [("role", match.group(1), None)]
+        return []
+    return []
+
+
+# 候选技术 → 评分权重使用的「基础技术名」（testidPartial 按 testid 权重）。
+_SCORE_METHOD: dict[str, str] = {
+    "testid": "testid",
+    "testidPartial": "testid",
+    "role": "role",
+    "label": "label",
+    "text": "text",
+}
+
+
+def _locator_from_spec(
+    page: Any,
+    kind: str,
+    value: str,
+    test_id_attribute: str,
+    name: str | None = None,
+) -> Any:
+    """按候选规格构建 Playwright 定位器，并标注来源技术供评分器取稳定性权重。"""
+    if kind == "role":
+        locator = (
+            page.get_by_role(value, name=name)
+            if name
+            else page.get_by_role(value)
+        )
+    elif kind == "testid":
+        locator = page.locator(f"[{test_id_attribute}={json.dumps(value)}]")
+    elif kind == "testidPartial":
+        locator = page.locator(f"[{test_id_attribute}*={json.dumps(value)}]")
+    elif kind == "label":
+        locator = page.get_by_label(value, exact=False)
+    elif kind == "text":
+        locator = page.get_by_text(value, exact=False)
+    else:
+        locator = page.locator(value)
+    try:
+        locator._autoflow_method = _SCORE_METHOD.get(kind, kind)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return locator
+
+
+def _heal_locator(
+    page: Any,
+    element: dict[str, Any],
+    test_id_attribute: str,
+    scorer: LocatorScorer,
+) -> tuple[Any, str, str] | None:
+    """生成候选备用定位器，启发式评分后返回唯一命中的最佳者。
+
+    返回 ``(locator, method, value)``；无候选或候选都不唯一命中时返回 None。
+    评分实现（``HeuristicLocatorScorer``）自行吸收 ``count()`` 异常，候选
+    生成与打分都只读不写，失败即视为不可用。
+    """
+    best: tuple[Any, str, str] | None = None
+    best_score = float("-inf")
+    for kind, value, name in _fallback_candidates(element):
+        candidate = _locator_from_spec(page, kind, value, test_id_attribute, name)
+        score = scorer.score(candidate, page)
+        if score > best_score:
+            best_score = score
+            best = (candidate, kind, value)
+    return best
+
+
+def _run_element_action(action: str, locator: Any, value: str, timeout: int) -> None:
+    """执行需要元素定位的动作（点击/填写/清空填写/选择下拉项/勾选）。
+
+    Playwright 的自动等待保证动作要么完成要么超时（超时不产生副作用），
+    因此 D5 自愈在失败后以备用定位器重试一次是安全的。
+    """
+    if action == "点击":
+        _required(locator).click(timeout=timeout)
+    elif action == "填写":
+        _required(locator).fill(value, timeout=timeout)
+    elif action == "清空填写":
+        _required(locator).fill("", timeout=timeout)
+    elif action == "选择下拉项":
+        _required(locator).select_option(value, timeout=timeout)
+    elif action == "勾选":
+        _required(locator).check(timeout=timeout)
 
 
 def _required(locator: Any) -> Any:
@@ -421,16 +546,8 @@ def _execute_step(
                 wait_until=_NAVIGATE_WAIT_UNTIL,
                 timeout=_navigate_timeout_ms(step),
             )
-        elif action == "点击":
-            _required(locator).click(timeout=timeout)
-        elif action == "填写":
-            _required(locator).fill(value, timeout=timeout)
-        elif action == "清空填写":
-            _required(locator).fill("", timeout=timeout)
-        elif action == "选择下拉项":
-            _required(locator).select_option(value, timeout=timeout)
-        elif action == "勾选":
-            _required(locator).check(timeout=timeout)
+        elif action in _ELEMENT_ACTIONS:
+            _run_element_action(action, locator, value, timeout)
         elif action == "键盘按键":
             if locator:
                 locator.press(value, timeout=timeout)
@@ -490,17 +607,48 @@ def _execute_step(
     except _AssertionFailure:
         raise
     except Exception as error:
-        if (
-            action != "打开页面"
-            and isinstance(error, Exception)
-            and "Timeout" in str(error)
-        ):
-            raise RuntimeError(
-                f"步骤「{action}」超时（{timeout / 1000}s）。当前页面：{page.url}。"
-                f"请确认流程已通过「打开页面」步骤打开目标页面，且元素定位与页面内容一致。"
-                f"原始错误：{error}"
-            ) from error
-        raise
+        # D5 自愈：元素级动作定位失败时，生成候选备用定位器回退重试一次。
+        # 仅在唯一命中（count()===1）时采纳，防止误点/误填；备用定位器仍失败
+        # 则回到原有超时/错误处理。回退事件恒在 step.completed/step.failed 之前。
+        healed: tuple[Any, str, str] | None = None
+        if action in _ELEMENT_ACTIONS and element is not None:
+            healed = _heal_locator(
+                page,
+                element,
+                str(input.get("environment", {}).get("testIdAttribute", "data-testid")),
+                _DEFAULT_LOCATOR_SCORER,
+            )
+        if healed is not None:
+            healed_locator, healed_method, healed_value = healed
+            hooks["event"](
+                "step.locatorFallback",
+                {
+                    "index": index,
+                    "stepId": step.get("id"),
+                    "title": step.get("title"),
+                    "method": healed_method,
+                    "value": str(healed_value)[:200],
+                    "reason": f"{type(error).__name__}: {error}"[:200],
+                },
+            )
+            try:
+                _run_element_action(action, healed_locator, value, timeout)
+            except Exception:
+                healed = None  # 备用定位器仍失败 → 以原错误继续处理
+            else:
+                locator = healed_locator  # 输出捕获等后续逻辑用自愈后的定位器
+        if healed is None:
+            if (
+                action != "打开页面"
+                and isinstance(error, Exception)
+                and "Timeout" in str(error)
+            ):
+                raise RuntimeError(
+                    f"步骤「{action}」超时（{timeout / 1000}s）。当前页面：{page.url}。"
+                    f"请确认流程已通过「打开页面」步骤打开目标页面，且元素定位与页面内容一致。"
+                    f"原始错误：{error}"
+                ) from error
+            raise
     output = _capture_output(page, step, locator)
     if step.get("output") and output is not None:
         outputs[step["output"]] = output

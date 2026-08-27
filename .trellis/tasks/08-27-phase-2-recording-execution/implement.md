@@ -46,10 +46,10 @@
 
 ## 阶段 F：D5 定位器自愈 MVP（R2-5）
 
-- [ ] F1. 新增 `server-py/autoflow/locator_score.py`：`LocatorScorer` 接口（`score(locator, page) -> float` 预留可选 LLM 实现）+ 纯启发式实现（dom-to-locator 风格评分 + `count()===1` 唯一性）。
-- [ ] F2. `runner.py:_locator_for`（115–149）定位失败时：生成候选备用定位器 → 启发式评分 → 选唯一命中者回退；发射既有 `step.locatorFallback` 事件（载荷遵守现有契约，恒在 `step.failed`/`step.completed` 之前）。
-- [ ] F3. 安全边界：自愈不绕过敏感字段脱敏/审计；仅作用于定位器重试。
-- [ ] F4. [gate] `npm run test:py`（自愈单测）+ 既有取消/重试 e2e 不回归。
+- [x] F1. 新增 `server-py/autoflow/locator_score.py`：`LocatorScorer` Protocol（`score(locator, page) -> float`，预留可选 LLM 实现，**不引入外部 AI 依赖**）+ `HeuristicLocatorScorer`（dom-to-locator 风格稳定性权重 testid>role>label>text>css/XPath，`count()===1` 唯一性把关，count!=1 返回负无穷）。
+- [x] F2. `runner.py`：`_fallback_candidates`（text→常见 role 可访问名、testid→属性子串 `[*=]`、label→`exact=False`、role→去 name）+ `_locator_from_spec`（候选构建并标注来源技术供评分取权重）+ `_heal_locator`（评分取最佳唯一命中者）；`_execute_step` 元素动作（点击/填写/清空填写/选择下拉项/勾选，抽 `_run_element_action`）定位失败时自愈重试一次，发射既有 `step.locatorFallback`（载荷 method/value/reason，恒在 step.completed/step.failed 之前）；主定位正常路径零额外开销（count 校验仅在失败后）。
+- [x] F3. 安全边界：自愈仅作用于元素定位重试，不触达 secrets/敏感字段；敏感 run 仍禁 Trace/截图（`run.security` 事件、无 trace 产物），自愈照常生效。
+- [x] F4. [gate] 通过：`npm run test:py` 282 全绿（276 基线 + 6 自愈单测：评分唯一性/稳定性、testidPartial 回退与事件顺序、label 子串回退、无唯一命中保持失败、敏感 run 边界）+ 既有取消/重试 e2e 不回归（e2e 为 MSW mock 前端 spec，不触达 Python runner）。
 
 ## 阶段 G：R2-6 候选断言有界化
 
