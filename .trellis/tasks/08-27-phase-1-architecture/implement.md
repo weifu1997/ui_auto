@@ -77,12 +77,12 @@
 
 ## 阶段 E：MSW 测试基建
 
-- [ ] E1. 新增 `msw`（devDependency，仅测试）。确认不进入生产 bundle：应用入口无 import。
-- [ ] E2. 新增 `src/test/server-handlers.ts`：映射 `platform-api.ts` 端点（revisions / secrets / runs / batch / 断言统计 / 录制会话 / 元素校验 / 工作区同步），按真实响应形状返回。
-- [ ] E3. vitest setup 接入 `msw/node` `setupServer`（`src/test/setup-msw.ts`），默认无未匹配 handler 时显式 404（暴露 mock 覆盖缺口）。
-- [ ] E4. 为 `ServerWorkspaceSynchronizer.tsx`（当前零单测）补测：30s 轮询拉取、并发刷新合并、编辑后整体 PUT 不丢模板扩展字段（`variables`/`secretNames`/未知键透传，对应 `flow-normalize.ts` W2-4 语义）。
-- [ ] E5. 渐进替换 `vi.mock("../api/platform-api")` 手写 mock：新组件测试优先走 MSW handler；既有用例迁移不阻塞（可共存）。
-- [ ] E6. [gate] `npm run test:unit && npm run check:bundle`（bundle ≤ 500 kB）。
+- [x] E1. 新增 `msw`（devDependency `^2.15.0`，仅测试）。确认不进入生产 bundle：应用入口无 import，`check:bundle` 通过（bundle ≤ 500 kB）。
+- [x] E2. 新增 `src/test/server-handlers.ts`：映射 `platform-api.ts` 端点，按真实响应形状返回。工作区同步端点（projects / resources 四类 / settings / revisions）为带版本的有状态实现（创建 version=1、更新校验 expectedVersion→409 版本冲突、DELETE 归档）；secrets / runs / batch / assertion-stats / recording-sessions / element-validations 为最小占位形状。附测试辅助：`seedPlatformServer` / `resetPlatformServer` / `updatePlatformProjectMeta` / `updatePlatformResourceData` / `platformCapturedUpdates` / `platformRevisionCount`。
+- [x] E3. vitest setup 接入 `msw/node` `setupServer`（`src/test/setup-msw.ts`），未匹配 `/api/*` 请求显式抛错（暴露 mock 覆盖缺口）；非 `/api` 请求放行。已接入 `vitest.config.ts` `setupFiles`。
+- [x] E4. 为 `ServerWorkspaceSynchronizer.tsx`（此前零单测）补测 `ServerWorkspaceSynchronizer.test.tsx`（3 用例）：① 30s 轮询拉取远端项目变更并合并进本地；② 并发加载多项目后刷新合并，只更新被远端改动的项目、其余保持；③ 编辑后整体 PUT 不丢模板扩展字段（`variables`/`secretNames`/未知键 `customMetadata` 透传，对应 `flow-normalize.ts` W2-4 语义），并验证「保存即快照」自动创建版本。注：fake timers 下 testing-library `waitFor` 因内部 setTimeout 亦被伪造而卡死，改用本地 `advanceTimersByTimeAsync` 轮询 `waitForState`。
+- [x] E5. 新组件测试优先走 MSW handler；既有 `vi.mock("../api/platform-api")` 手写 mock 用例未迁移但可共存（全部 26 文件 / 114 用例通过）。
+- [x] E6. [gate] `npm run test:unit && npm run check:bundle` 全绿：unit 114 passed（26 files）/ bundle ≤ 500 kB 通过。`npm run lint` 与 `npm run build` 亦全绿。
 
 ## 阶段 F：验收与收尾
 
