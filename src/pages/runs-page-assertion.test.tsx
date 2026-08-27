@@ -34,6 +34,7 @@ const mockGetPlatformAssertionStats = vi.fn();
 const mockGetPlatformRuns = vi.fn();
 const mockGetPlatformRunBatches = vi.fn();
 const mockGetPlatformRunBatch = vi.fn();
+const mockGetPlatformRunTrend = vi.fn();
 
 vi.mock("../api/platform-api", async (importOriginal) => {
   const actual = await importOriginal<any>();
@@ -43,6 +44,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
     getPlatformRuns: (...args: any[]) => (mockGetPlatformRuns as any)(...args),
     getPlatformRunBatches: (...args: any[]) => (mockGetPlatformRunBatches as any)(...args),
     getPlatformRunBatch: (...args: any[]) => (mockGetPlatformRunBatch as any)(...args),
+    getPlatformRunTrend: (...args: any[]) => (mockGetPlatformRunTrend as any)(...args),
   };
 });
 
@@ -94,6 +96,8 @@ describe("RunsPage 断言聚合展示", () => {
       failedAssertions: 1,
       windowDays: 30,
     });
+    // 编排看板数据：空趋势 → 看板不渲染，既有断言统计断言不受影响。
+    mockGetPlatformRunTrend.mockResolvedValue({ windowDays: 14, points: [] });
   });
 
   it("全项目断言通过率来自独立端点（含窗口说明）", async () => {

@@ -1799,6 +1799,37 @@
   margin-left: auto;
   color: var(--muted);
 }
+.orchestration-dashboard {
+  margin-bottom: 16px;
+  padding: 16px;
+}
+.dashboard-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.dashboard-heading h3 {
+  margin: 0;
+  font-size: var(--text-emphasis);
+}
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.chart-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--surface);
+}
+.chart-card h4 {
+  margin: 0 0 8px;
+  font-size: var(--text-footnote);
+  color: var(--muted);
+  font-weight: 600;
+}
 .batch-detail {
   display: grid;
   gap: 10px;

@@ -8,6 +8,7 @@ import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { FilterBar, FilterItem, PageHeading, canUseCapability, createRunDispatchKeyStore, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
+import { OrchestrationDashboard } from "./OrchestrationDashboard";
 import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
@@ -56,6 +57,8 @@ export function RunsPage({ project }: { project: Project }) {
   const [batchDeleting, setBatchDeleting] = useState(false);
   // 断言聚合（全项目口径，独立端点）：RunsPage 通过率 + batch detail 汇总。
   const [assertionStats, setAssertionStats] = useState<AssertionStats | null>(null);
+  // 编排看板刷新键：列表每次成功刷新自增，看板趋势随之重拉。
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [batchAssertions, setBatchAssertions] = useState<Record<string, { stats: AssertionStats; failures: AssertionFailure[] }>>({});
   useEffect(() => {
     if (platformSession && legacyPlatformProjectId && !platformProjectId) {
@@ -79,6 +82,8 @@ export function RunsPage({ project }: { project: Project }) {
       setPlatformPageRuns(pageRuns);
       setPlatformTotal(response.total);
       pageRuns.forEach((run) => upsertRun(project.id, run));
+      // 编排看板随列表刷新重拉趋势（同源平台会话，避免两套轮询）。
+      setDashboardRefreshKey((key) => key + 1);
     } catch {
       message.error("平台运行列表加载失败，请稍后重试");
     }
@@ -623,6 +628,11 @@ export function RunsPage({ project }: { project: Project }) {
           <Input type="date" aria-label="结束日期" value={toFilter} onChange={(event) => { setPage(1); setToFilter(event.target.value); }} />
         </FilterItem>
       </FilterBar>
+      <OrchestrationDashboard
+        platformSession={platformSession}
+        platformProjectId={remotePlatformProjectId}
+        refreshKey={dashboardRefreshKey}
+      />
       {batches.length > 0 && (
         <section className="surface" style={{ marginBottom: 16 }}>
           <Table

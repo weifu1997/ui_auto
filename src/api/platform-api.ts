@@ -942,6 +942,20 @@ export type AssertionFailure = {
   actual: string;
 };
 
+export type RunTrendPoint = {
+  date: string;
+  runTotal: number;
+  runPassed: number;
+  runFailed: number;
+  assertionTotal: number;
+  assertionPassed: number;
+};
+
+export type RunTrend = {
+  windowDays?: number | null;
+  points: RunTrendPoint[];
+};
+
 export function createPlatformRunBatch(token: string, projectId: string, input: { flowIds: string[]; environmentId: string; clientRequestId: string }) {
   return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/run-batches`,
@@ -980,6 +994,15 @@ export function getPlatformAssertionStats(token: string, projectId: string, wind
   const suffix = windowDays !== undefined && windowDays > 0 ? `?windowDays=${windowDays}` : "";
   return request<AssertionStats>(
     `/platform/projects/${encodeURIComponent(projectId)}/assertion-stats${suffix}`,
+    {},
+    token,
+  );
+}
+
+export function getPlatformRunTrend(token: string, projectId: string, windowDays?: number) {
+  const suffix = windowDays !== undefined && windowDays > 0 ? `?window_days=${windowDays}` : "";
+  return request<RunTrend>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/trend${suffix}`,
     {},
     token,
   );

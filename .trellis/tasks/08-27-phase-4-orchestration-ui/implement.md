@@ -19,10 +19,10 @@
 
 ## 阶段 F：RunsPage 编排看板（R4-2，独立提交）
 
-- [ ] F1. `platform-api.ts` 增 `getPlatformRunTrend(token, pid, windowDays)`。
-- [ ] F2. `RunsPage` 顶部「编排看板」区块：断言通过率 AreaChart + 运行状态堆叠 BarChart；窗口切换 7/14/30/全部触发重新拉取；`points` 全零/空不渲染。
-- [ ] F3. 前端单测：有数据渲染双图表、空态不渲染、窗口切换传 `window_days`。
-- [ ] F4. [gate] `npm run lint && npm run build && npm run test:unit` 全绿。
+- [x] F1. `platform-api.ts` 增 `getPlatformRunTrend(token, pid, windowDays)`（`window_days` 参数）+ `RunTrendPoint`/`RunTrend` 类型。
+- [x] F2. 新增 `OrchestrationDashboard.tsx`：断言通过率 AreaChart + 运行状态堆叠 BarChart；窗口 7/14/30/全部切换触发重拉；`points` 无数据整块不渲染；CSS 变量适配双主题；RunsPage 顶部接入（列表刷新自增 refreshKey 联动）。
+- [x] F3. 前端单测 `orchestration-dashboard.test.tsx` +3：双图表渲染、空态不渲染、窗口切换传 `window_days=7`；既有 runs-page 断言测试 mock 趋势空数据防干扰。
+- [x] F4. [gate] `npm run lint`（0 警告）&& `npm run build`（✓ built）&& `check:bundle`（recharts 独立 vendor chunk 136K ≤ 500KB）&& `npm run test:unit` 123 全绿。
 
 ## 阶段 G：RunDetail 断言摘要卡（R4-3，独立提交）
 
