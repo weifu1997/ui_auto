@@ -50,21 +50,24 @@
 - `GET /health` 为进程 liveness；`GET /ready` 返回 `ready` + `maintenance`。
 - 边界：仪表盘与告警阈值（Grafana/Prometheus alert）属运维基础设施，尚未实现。
 
-## 质量门禁与依赖（QA-01 / REL-01）
+## 质量门禁与依赖（QA-01）
 
 - 前端单测开启 v8 覆盖率基线：lines/functions/statements 50%、branches 40%
   （`npm run test:coverage`）。阈值是保守起点，应随覆盖增长上调。
-- CI 的 `security-scan` job 运行 `npm audit --audit-level=high`、`pip-audit` 与
-  `bandit`。
-- Python 依赖使用 `server-py/requirements.lock` 锁定（`setup-py.mjs` 优先读取），
-  用 `python scripts/verify-lock.py server-py/requirements.lock` 校验安装版本。
+- CI 的 `security-scan` job 运行 `npm audit --audit-level=high`、`uvx pip-audit`
+  与 `uvx bandit`。
+- Python 依赖由 uv 管理：`server-py/pyproject.toml` 声明直接依赖，
+  `server-py/uv.lock` 跨平台精确锁定（含 platform marker，Windows 不装 uvloop）。
+  `npm run setup:py` 执行 `uv sync` 按锁安装到 `server-py/.venv`；CI 用
+  `uv lock --check` 防止锁漂移。生产部署在 Windows 脚本内用 `pip install uv`
+  引导，按 `uv sync --no-dev --locked` 安装到 `app\venv`。
 - 边界：不可变版本包、校验和/SBOM、staging 迁移检查与回滚证据需真实发布流水线。
 
 ## 升级与回滚
 
 1. 记录目标提交 SHA、`/ready`、`/metrics` 基线。
 2. 先运行 `scripts/ops/backup.ps1`，确认 `manifest.json` 校验通过。
-3. 替换应用包后运行 `npm run setup:py`（使用锁文件）并启动。
+3. 替换应用包后运行 `npm run setup:py`（`uv sync` 按 `uv.lock` 安装）并启动。
 4. 验证 `/ready`、`/metrics` 与一次受控 run/流程录制。
 5. 回滚：停止服务，用 `scripts/ops/restore.ps1` 恢复匹配的旧数据库与旧应用包；数据库
    迁移不向后兼容时以恢复旧包 + 旧库为准。

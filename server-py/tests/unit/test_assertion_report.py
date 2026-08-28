@@ -222,7 +222,7 @@ def test_assertion_report_json_assembles_assets(tmp_path):
         body = json.loads(response.body)
         artifact = body["artifact"]
         assert artifact["contentType"] == "application/json"
-        assert artifact["name"].startswith(f"assertion-report-{RUN_ID}.")
+        assert artifact["name"].startswith(f"assertion-report-{RUN_ID}-")
         assert artifact["name"].endswith(".json")
 
         report = _report_from_artifact(services, artifact["id"])
@@ -383,7 +383,7 @@ def test_assertion_report_html_layout(tmp_path):
         body = json.loads(response.body)
         artifact = body["artifact"]
         assert artifact["contentType"] == "text/html; charset=utf-8"
-        assert artifact["name"].startswith(f"assertion-report-{RUN_ID}.")
+        assert artifact["name"].startswith(f"assertion-report-{RUN_ID}-")
         assert artifact["name"].endswith(".html")
 
         document = _artifact_bytes(services, artifact["id"]).decode("utf-8")

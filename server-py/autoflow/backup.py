@@ -36,15 +36,37 @@ def write_manifest(directory: Path) -> dict[str, Any]:
     return manifest
 
 
+REQUIRED_BACKUP_FILES = ("platform.sqlite",)
+
+
+def _contained_file(directory: Path, rel: str) -> Path | None:
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return None
+    path = (directory / rel).resolve()
+    try:
+        path.relative_to(directory.resolve())
+    except ValueError:
+        return None
+    return path
+
+
 def verify_manifest(directory: Path) -> bool:
     manifest_path = directory / "manifest.json"
     if not manifest_path.is_file():
         return False
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        for rel, meta in manifest.get("files", {}).items():
-            path = directory / rel
-            if not path.is_file():
+        if manifest.get("version") != 1:
+            return False
+        files = manifest.get("files")
+        if not isinstance(files, dict):
+            return False
+        for required in REQUIRED_BACKUP_FILES:
+            if required not in files:
+                return False
+        for rel, meta in files.items():
+            path = _contained_file(directory, rel)
+            if path is None or not path.is_file():
                 return False
             if path.stat().st_size != meta.get("size"):
                 return False

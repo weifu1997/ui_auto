@@ -13,6 +13,11 @@
 
 ## Local checks
 
+`npm run setup:py` requires [uv](https://docs.astral.sh/uv/) on PATH (CI provides
+it via `astral-sh/setup-uv`). Install it once with the official installer:
+`curl -LsSf https://astral.sh/uv/install.sh | sh` (Windows PowerShell:
+`irm https://astral.sh/uv/install.ps1 | iex`).
+
 ```bash
 npm ci
 npm run setup:py

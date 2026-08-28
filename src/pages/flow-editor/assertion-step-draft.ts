@@ -8,6 +8,7 @@ const ASSERTION_FIELDS = [
   "assertVisibility",
   "assertOperator",
   "assertAttribute",
+  "trimCompare",
 ] as const;
 
 export function staleAssertionFields(action: string): Partial<FlowStep> {
@@ -15,22 +16,37 @@ export function staleAssertionFields(action: string): Partial<FlowStep> {
     [name]: undefined,
   });
   if (action === "文本断言") {
-    // 文本断言仅保留 assertMatch。
+    // 文本断言保留 assertMatch + trimCompare。
     return { ...clear("assertVisibility"), ...clear("assertOperator"), ...clear("assertAttribute") };
   }
   if (action === "属性断言") {
     // 属性断言保留 assertMatch + assertAttribute。
-    return { ...clear("assertVisibility"), ...clear("assertOperator") };
+    return { ...clear("assertVisibility"), ...clear("assertOperator"), ...clear("trimCompare") };
   }
   if (action === "数量断言") {
-    return { ...clear("assertMatch"), ...clear("assertVisibility"), ...clear("assertAttribute") };
+    return {
+      ...clear("assertMatch"),
+      ...clear("assertVisibility"),
+      ...clear("assertAttribute"),
+      ...clear("trimCompare"),
+    };
   }
   if (action === "可见性断言") {
-    return { ...clear("assertMatch"), ...clear("assertOperator"), ...clear("assertAttribute") };
+    return {
+      ...clear("assertMatch"),
+      ...clear("assertOperator"),
+      ...clear("assertAttribute"),
+      ...clear("trimCompare"),
+    };
   }
   if (action === "URL 断言") {
     // URL 断言保留 assertMatch（页面级，仅期望值 + 匹配方式；不引用元素）。
-    return { ...clear("assertVisibility"), ...clear("assertOperator"), ...clear("assertAttribute") };
+    return {
+      ...clear("assertVisibility"),
+      ...clear("assertOperator"),
+      ...clear("assertAttribute"),
+      ...clear("trimCompare"),
+    };
   }
   // 非断言动作：全部清除。
   return {
@@ -38,6 +54,7 @@ export function staleAssertionFields(action: string): Partial<FlowStep> {
     assertVisibility: undefined,
     assertOperator: undefined,
     assertAttribute: undefined,
+    trimCompare: undefined,
   };
 }
 

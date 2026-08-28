@@ -11,6 +11,7 @@ Phase 0 结束前仍不能作出以下声明：已完成 TLS、受保护分支�
 ## 启动前检查
 
 - 使用 Node.js `>=20.12`。Windows CI 使用 Node 22 是因为部署 smoke 的 `node:sqlite` 依赖，不改变产品启动最低版本。
+- `npm run setup:py` 依赖 [uv](https://docs.astral.sh/uv/)，CI 通过 `astral-sh/setup-uv` 自动提供；本地首次运行前需安装 uv。Windows 生产部署 `scripts/ops/install.ps1` 会在脚本内用 `pip install uv` 自行引导，无需预装。Python 依赖在 `server-py/pyproject.toml` 声明，由 `server-py/uv.lock` 跨平台锁定。
 - 设置非空的 `PLATFORM_SECRET_KEY`；在 Linux/WSL 中，若使用配置文件，文件必须由当前用户拥有且权限为 `0600`。
 - 运行 `npm run build`，确认 `dist/index.html` 存在。
 - 使用 `npm run start` 作为唯一支持的服务入口。`npm run server` 是兼容别名；`npm run server:py` 不是部署入口。

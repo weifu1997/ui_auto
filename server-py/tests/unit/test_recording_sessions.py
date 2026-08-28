@@ -652,3 +652,53 @@ def test_coordinator_real_browser_pumps_idle_binding_events(fixture_server):
         if coordinator is not None and created is not None:
             coordinator.cancel(created["id"])
         submitter.shutdown(wait=True)
+
+
+def test_create_session_fails_fast_when_global_recording_slots_are_full():
+    launched = []
+
+    def launch(headless, storage_state):
+        session = _stub_launch(storage_state)
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(
+        submit=_ImmediateSubmit(),
+        launch=launch,
+        idle_ms=1000,
+        max_ms=100_000,
+        now_ms=lambda: 1_000_000,
+        max_concurrent=1,
+    )
+    first = coordinator.create_session(
+        "project-1", "flow-1", ENVIRONMENT, "/login", headless=True
+    )
+    assert first["status"] == "recording"
+    other_env = {**ENVIRONMENT, "id": "env-2"}
+    with pytest.raises(PlatformError) as error:
+        coordinator.create_session(
+            "project-1", "flow-2", other_env, "/login", owner_id="other", headless=True
+        )
+    assert error.value.code == "RECORDING_BUSY"
+
+
+def test_create_session_init_script_uses_environment_testid_attribute():
+    launched = []
+
+    def launch(headless, storage_state):
+        session = _stub_launch(storage_state)
+        launched.append(session)
+        return session
+
+    coordinator = RecordingCoordinator(
+        submit=_ImmediateSubmit(),
+        launch=launch,
+        idle_ms=1000,
+        max_ms=100_000,
+        now_ms=lambda: 1_000_000,
+    )
+    env = {**ENVIRONMENT, "testIdAttribute": "data-cy"}
+    coordinator.create_session("project-1", "flow-1", env, "/login", headless=True)
+    script = launched[0]["context"].init_scripts[0]
+    assert 'getAttribute("data-cy")' in script
+    assert 'getAttribute("data-testid")' not in script

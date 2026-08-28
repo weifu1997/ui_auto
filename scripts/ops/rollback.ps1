@@ -1,5 +1,7 @@
+[CmdletBinding(SupportsShouldProcess=$true)]
 param([string]$Root = "D:\AutoFlow")
 $ErrorActionPreference = "Stop"
+if (-not $PSCmdlet.ShouldProcess($Root, "Rollback AutoFlow app")) { return }
 $previous = Get-ChildItem -LiteralPath $Root -Directory -Filter "app-previous-*" | Sort-Object Name -Descending | Select-Object -First 1
 if (-not $previous) { throw "No previous AutoFlow version found" }
 $service = Join-Path $Root "AutoFlow.exe"; & $service stop

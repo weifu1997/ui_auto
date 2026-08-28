@@ -4,8 +4,8 @@
 - 终态 UPDATE、flowOutputs、run.complete 事件、审计与投递登记在同一
   BEGIN IMMEDIATE 内提交；任一环节抛错则整体回滚，run 仍停留在原状态，
   不会出现「账面已结束但输出/事件丢失」的半完成账；
-- 投递网络发送发生在事务提交之后（``queue_run_deliveries(..., flush=False)``
-  只入队），lock 持有时间与外网无关。
+- 投递只入队（``queue_run_deliveries(..., flush=False)``），网络发送由维护循环
+  执行，不占用 ManagedRunner worker。
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ def test_finalize_commits_terminal_state_outputs_events_and_flush(
         ).fetchall()
         assert outputs == [("alpha", "captured-value")]
         assert "run.complete" in _event_kinds(services, run_id)
-        assert len(flushed) == 1  # 提交后触发一次投递发送
+        assert flushed == []  # worker 只入队，发送交给维护循环
     finally:
         services.close()
 

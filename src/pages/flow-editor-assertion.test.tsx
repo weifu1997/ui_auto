@@ -71,6 +71,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
     createRecordingSession: vi.fn(),
     getRecordingEvents: vi.fn(),
     getRecordingSession: vi.fn(),
+    getRecordingSessionResult: vi.fn(),
     pauseRecordingSession: vi.fn(),
     resumeRecordingSession: vi.fn(),
     stopRecordingSession: vi.fn(),

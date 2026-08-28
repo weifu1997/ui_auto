@@ -22,7 +22,11 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from .browser_session import close_browser_session, launch_browser_session
-from .recorder_capture import RECORDER_INIT_SCRIPT, RECORDER_INIT_SCRIPT_TEMPLATE
+from .recorder_capture import (
+    RECORDER_INIT_SCRIPT,
+    RECORDER_INIT_SCRIPT_TEMPLATE,
+    recorder_init_script,
+)
 from .recorder_normalizer import (
     CLICK_SUPPRESSION_MS,
     MAX_LOGICAL_STEPS,
@@ -81,6 +85,7 @@ class RecordingCoordinator:
         on_failed: Callable[[dict[str, Any]], None] | None = None,
         on_storage_state: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         database: Callable[[], sqlite3.Connection] | None = None,
+        max_concurrent: int = 4,
     ) -> None:
         self._submit = submit
         self._launch = launch
@@ -90,6 +95,7 @@ class RecordingCoordinator:
         self._on_failed = on_failed
         self._on_storage_state = on_storage_state
         self._database = database
+        self._max_concurrent = max(1, int(max_concurrent))
         self._lock = threading.RLock()
         self._sessions: dict[str, dict[str, Any]] = {}
 
@@ -131,6 +137,13 @@ class RecordingCoordinator:
                 raise PlatformError(
                     409, "RECORDING_SESSION_ACTIVE", {"sessionId": active["id"]}
                 )
+            busy = sum(
+                1
+                for session in self._sessions.values()
+                if session["status"] not in _TERMINAL_STATUSES
+            )
+            if busy >= self._max_concurrent:
+                raise PlatformError(409, "RECORDING_BUSY")
             session_id = f"rec_{uuid.uuid4()}"
             # 先占位 starting，避免并发创建同一项目/环境多个浏览器。
             session = {
@@ -239,7 +252,11 @@ class RecordingCoordinator:
             context = browser_session["context"]
             page = browser_session["page"]
             try:
-                context.add_init_script(RECORDER_INIT_SCRIPT)
+                context.add_init_script(
+                    recorder_init_script(
+                        str(session.get("testIdAttribute") or "data-testid")
+                    )
+                )
                 context.expose_binding(
                     "__autoflowRecorderEvent",
                     lambda _source, payload: self._on_browser_event(session, payload),
@@ -602,8 +619,14 @@ class RecordingCoordinator:
             if isinstance(normalizer, RecorderNormalizer):
                 session["result"] = normalizer.result()
             else:
-                # 重启后无归并器：结果只可能来自持久化的已停会话，返回空结果。
-                session["result"] = {}
+                # 重启后无归并器：返回与 normalizer.result() 同形的空结果。
+                session["result"] = {
+                    "steps": [],
+                    "elements": [],
+                    "requiredBindings": [],
+                    "warnings": [],
+                    "lastSeq": 0,
+                }
         return {
             "session": self.session_response(session),
             "result": session["result"],

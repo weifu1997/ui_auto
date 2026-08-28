@@ -138,6 +138,45 @@ def test_url_assert_exact_ignores_extra_query():
     assert passed is False
 
 
+class _WaitingUrlPage:
+    def __init__(self, urls: list[str]):
+        self._urls = list(urls)
+        self.wait_calls = 0
+
+    @property
+    def url(self) -> str:
+        return self._urls[-1]
+
+    def wait_for_url(self, predicate, timeout: int = 0) -> None:
+        self.wait_calls += 1
+        for candidate in self._urls:
+            if predicate(candidate):
+                self._urls = [candidate]
+                return
+        raise TimeoutError(f"Timeout {timeout}ms exceeded waiting for url")
+
+
+def test_url_assert_waits_until_match():
+    page = _WaitingUrlPage(["https://app.test/old", "https://app.test/login"])
+    passed, expected, actual = _assert_url(
+        page, _url_step(), 5_000, "/login"
+    )
+    assert passed is True
+    assert expected == "/login"
+    assert actual == "https://app.test/login"
+    assert page.wait_calls == 1
+
+
+def test_url_assert_wait_timeout_returns_current_url():
+    page = _WaitingUrlPage(["https://app.test/old"])
+    passed, _expected, actual = _assert_url(
+        page, _url_step(), 50, "/login"
+    )
+    assert passed is False
+    assert actual == "https://app.test/old"
+    assert page.wait_calls == 1
+
+
 def test_url_assert_page_unavailable_does_not_raise():
     """页面关闭/取 URL 异常：判定为不可用（不抛非预期异常）。"""
     passed, _expected, actual = _assert_url(

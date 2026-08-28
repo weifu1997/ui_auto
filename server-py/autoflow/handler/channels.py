@@ -9,6 +9,7 @@ from ..core import json, now
 from ..http import PlatformError
 from ..resources import as_record
 from ..services import PlatformServices
+from ..services._shared import notification_client_error
 from ._shared import (
     _send,
     _text,
@@ -297,11 +298,7 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         except PlatformError:
             raise
         except Exception as exc:
-            error = (
-                "NOTIFICATION_TIMEOUT"
-                if isinstance(exc, TimeoutError)
-                else str(exc)[:200]
-            )
+            error = notification_client_error(exc)
             services.audit(
                 workspace_id,
                 {"type": "user", "id": user.id},

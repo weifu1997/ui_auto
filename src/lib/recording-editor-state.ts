@@ -22,6 +22,14 @@ export function isTerminalRecordingStatus(status: RecordingSessionStatus) {
   return terminalStatuses.has(status);
 }
 
+export function isImportableRecordingStatus(status: RecordingSessionStatus) {
+  return status === "stopped" || status === "failed" || status === "expired" || status === "interrupted";
+}
+
+export function recordingResultHasSteps(result: RecordingResult | null | undefined) {
+  return Boolean(result && result.steps.length > 0);
+}
+
 export function mergeRecordingEvents(
   current: RecordingEvent[],
   incoming: RecordingEvent[],

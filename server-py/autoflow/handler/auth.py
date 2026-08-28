@@ -38,9 +38,17 @@ def register(router: APIRouter, services: PlatformServices) -> None:
             if timestamp > cutoff
         ]
         if len(hits) >= LOGIN_RATE_LIMIT_PER_MINUTE:
+            login_rate_windows[ip] = hits
             raise PlatformError(429, "RATE_LIMITED")
         hits.append(now_ms)
         login_rate_windows[ip] = hits
+        stale = [
+            key
+            for key, stamps in login_rate_windows.items()
+            if key != ip and all(stamp <= cutoff for stamp in stamps)
+        ]
+        for key in stale:
+            login_rate_windows.pop(key, None)
 
         body = await request.json()
         if not isinstance(body, dict):

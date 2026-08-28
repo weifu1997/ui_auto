@@ -388,6 +388,13 @@ def _post_notification(
         connection.close()
 
 
+def notification_client_error(exc: BaseException) -> str:
+    """Stable client/audit code for notification failures. Do not return str(exc)."""
+    if isinstance(exc, TimeoutError):
+        return "NOTIFICATION_TIMEOUT"
+    return "NOTIFICATION_DELIVERY_FAILED"
+
+
 def _iso_add_seconds(seconds: int) -> str:
     return (
         datetime.now(timezone.utc) + timedelta(seconds=seconds)

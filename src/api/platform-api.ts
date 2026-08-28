@@ -1374,6 +1374,20 @@ export function resumeRecordingSession(token: string, projectId: string, session
   ).then((response) => ({ session: decodeRecordingSession(asRecordingObject(response).session) }));
 }
 
+export function getRecordingSessionResult(token: string, projectId: string, sessionId: string) {
+  return request<unknown>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/result`,
+    {},
+    token,
+  ).then((response) => {
+    const body = asRecordingObject(response);
+    return {
+      session: decodeRecordingSession(body.session),
+      result: decodeRecordingResult(body.result),
+    };
+  });
+}
+
 export function stopRecordingSession(token: string, projectId: string, sessionId: string) {
   return request<unknown>(
     `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions/${encodeURIComponent(sessionId)}/stop`,

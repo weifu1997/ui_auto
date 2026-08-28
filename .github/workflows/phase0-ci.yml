@@ -37,8 +37,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
       - name: Install locked Node dependencies
         run: npm ci
+
+      - name: Check Python lockfile freshness
+        run: uv lock --check --project server-py
 
       - name: Set up Python test environment
         run: npm run setup:py
@@ -98,8 +106,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
       - name: Install locked Node dependencies
         run: npm ci
+
+      - name: Check Python lockfile freshness
+        run: uv lock --check --project server-py
 
       - name: Set up Python test environment
         run: npm run setup:py
@@ -132,6 +148,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
       - name: Install locked Node dependencies
         run: npm ci
 
@@ -140,10 +161,9 @@ jobs:
 
       - name: Audit Python dependencies
         run: |
-          python -m pip install --upgrade pip-audit
-          pip-audit -r server-py/requirements.txt
+          uv export --project server-py --no-hashes --frozen --output-file /tmp/server-py-requirements.txt
+          uvx pip-audit --disable-pip --no-deps -r /tmp/server-py-requirements.txt
 
       - name: Static security scan (Python)
         run: |
-          python -m pip install bandit
-          bandit -c .bandit -r server-py/autoflow -q -ll
+          uvx bandit -c .bandit -r server-py/autoflow -q -ll

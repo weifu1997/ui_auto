@@ -102,6 +102,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
     createRecordingSession: vi.fn(async () => ({ session: recordingSession })),
     getRecordingEvents: vi.fn(async () => ({ events: [], lastSeq: 0, hasMore: false })),
     getRecordingSession: vi.fn(async () => ({ session: recordingSession })),
+    getRecordingSessionResult: vi.fn(async () => ({ session: recordingSession, result: recordingResult })),
     pauseRecordingSession: vi.fn(async () => ({ session: { ...recordingSession, status: "paused" } })),
     resumeRecordingSession: vi.fn(async () => ({ session: recordingSession })),
     stopRecordingSession: vi.fn(async () => ({

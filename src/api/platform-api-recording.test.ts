@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getRecordingEvents, listRecordingSessions, stopRecordingSession } from "./platform-api";
+import { getRecordingEvents, getRecordingSessionResult, listRecordingSessions, stopRecordingSession } from "./platform-api";
 
 const session = {
   id: "recording-1",
@@ -87,5 +87,24 @@ describe("recording API boundary", () => {
     expect(page.sessions[0].recordedStepCount).toBe(4);
     expect(page.sessions[0].currentUrl).toBe("https://example.test/dashboard");
     expect(JSON.stringify(page)).not.toContain("token=discarded");
+  });
+
+  it("loads a terminal recording result without leaking bound values", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: { ...session, status: "failed" },
+      result: {
+        steps: [{ id: "password", title: "Password", action: "填写", element: "Password", value: "plain-text-password" }],
+        elements: [{ id: "password-element", name: "Password", path: "/login", method: "testid", value: "password" }],
+        requiredBindings: [{ stepId: "password", fieldHint: "password" }],
+        warnings: [],
+        lastSeq: 2,
+      },
+    }), { status: 200 })));
+
+    const response = await getRecordingSessionResult("token", "project-1", "recording-1");
+
+    expect(response.session.status).toBe("failed");
+    expect(response.result.steps[0].value).toBeNull();
+    expect(JSON.stringify(response)).not.toContain("plain-text-password");
   });
 });

@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .runner import _close_quietly, execute_browser_run, execute_element_validation
+from .runner import execute_browser_run, execute_element_validation
 
 
 class ManagedRunner:
@@ -75,8 +75,10 @@ class ManagedRunner:
                 return True
             active = self._active.get(item_id)
             if active is not None:
+                # Signal only. Closing Playwright from this thread (and while
+                # holding the condition) is unsafe; the worker checks the
+                # signal at step boundaries and closes its own browser.
                 active["signal"].set()
-                self._close_browser(active)
                 return True
         return False
 
@@ -95,6 +97,8 @@ class ManagedRunner:
     def stop(self) -> None:
         with self._condition:
             self._stopped = True
+            for item in self._active.values():
+                item["signal"].set()
             self._condition.notify_all()
         for thread in self._threads:
             thread.join(timeout=5)
@@ -141,14 +145,6 @@ class ManagedRunner:
                 }
             )
 
-    def _close_browser(self, item: dict[str, Any]) -> None:
-        context = item.get("context")
-        if context is not None:
-            _close_quietly(context.close)
-        browser = item.get("browser")
-        if browser is not None:
-            _close_quietly(browser.close)
-
     def _run(self) -> None:
         while True:
             with self._condition:
@@ -164,22 +160,31 @@ class ManagedRunner:
 
     def _execute(self, item: dict[str, Any]) -> None:
         callbacks = item["callbacks"]
-        callbacks["started"]()
-        self.artifact_directory.mkdir(parents=True, exist_ok=True)
-        hooks = {
-            "signal": item["signal"],
-            "artifact_path": lambda _name, extension: str(
-                self.artifact_directory / f"artifact_{uuid.uuid4()}.{extension}"
-            ),
-            "artifact": callbacks["artifact"],
-            "event": callbacks["event"] if item["kind"] == "run" else (lambda *_args: None),
-            # W0-4：步骤级心跳回调；未提供 progress 的入队方（如元素校验）安全降级。
-            "progress": callbacks.get("progress") or (lambda *_args: None),
-            "browser": lambda browser, context: self._set_active_browser(
-                item["id"], browser, context
-            ),
-        }
         try:
+            started = callbacks.get("started")
+            if callable(started):
+                try:
+                    accepted = started()
+                except Exception:
+                    accepted = False
+                if accepted is False:
+                    # Cancel/watchdog already finalized the row. Do not execute
+                    # and do not call completed(); still drop the active slot.
+                    return
+            self.artifact_directory.mkdir(parents=True, exist_ok=True)
+            hooks = {
+                "signal": item["signal"],
+                "artifact_path": lambda _name, extension: str(
+                    self.artifact_directory / f"artifact_{uuid.uuid4()}.{extension}"
+                ),
+                "artifact": callbacks["artifact"],
+                "event": callbacks["event"] if item["kind"] == "run" else (lambda *_args: None),
+                # W0-4：步骤级心跳回调；未提供 progress 的入队方（如元素校验）安全降级。
+                "progress": callbacks.get("progress") or (lambda *_args: None),
+                "browser": lambda browser, context: self._set_active_browser(
+                    item["id"], browser, context
+                ),
+            }
             if item["kind"] == "run":
                 result = execute_browser_run(item["input"], hooks)
             else:

@@ -137,6 +137,7 @@ delete_project_runs(project_id, deletable_ids)
 - `POST /api/platform/projects/{project_id}/recording-sessions` with `{ flowId, environmentId, startUrl, freshLogin? }`.
 - `GET /api/platform/projects/{project_id}/recording-sessions` list, paginated `page`/`pageSize` (R2-3, includes `interrupted` sessions).
 - `GET /api/platform/projects/{project_id}/recording-sessions/{session_id}` and `/events?afterSeq=&limit=`.
+- `GET /api/platform/projects/{project_id}/recording-sessions/{session_id}/result` for a terminal session's in-memory import payload (`409 RECORDING_SESSION_ACTIVE` while recording).
 - `POST` pause, resume, and stop endpoints below the session; `DELETE` cancels it.
 - Service owner: `RecordingCoordinator.create_session`, `events_after`, `pause`, `resume`, `stop`, `cancel`, and `list_sessions` (list endpoint).
 

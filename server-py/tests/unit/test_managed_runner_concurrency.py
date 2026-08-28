@@ -94,3 +94,55 @@ def test_global_concurrency_caps_cross_workspace_runs(tmp_path, monkeypatch):
     finally:
         release.set()
         runner.stop()
+
+
+def test_started_false_skips_browser_execution(tmp_path, monkeypatch):
+    executed: list[str] = []
+    completed: list[str] = []
+
+    def fake_execute(input, _hooks):
+        executed.append(input.get("name") or "run")
+        return {
+            "status": "success",
+            "completedSteps": 0,
+            "totalSteps": 0,
+            "elapsedMs": 0,
+            "flowOutputs": {},
+        }
+
+    monkeypatch.setattr(module, "execute_browser_run", fake_execute)
+    runner = ManagedRunner(str(tmp_path), global_concurrency=1, workspace_concurrency=1)
+    try:
+        runner.enqueue(
+            "skip",
+            {"name": "skip"},
+            {
+                "started": lambda: False,
+                "event": lambda *_args: None,
+                "artifact": lambda *_args: None,
+                "completed": lambda _result: completed.append("skip"),
+            },
+            "run",
+            workspace_id="w1",
+        )
+        assert _wait_until(lambda: not runner.is_busy)
+        assert executed == []
+        assert completed == []
+
+        # The skipped item must release the global slot so a later run can start.
+        runner.enqueue(
+            "next",
+            {"name": "next"},
+            {
+                "started": lambda: True,
+                "event": lambda *_args: None,
+                "artifact": lambda *_args: None,
+                "completed": lambda _result: completed.append("next"),
+            },
+            "run",
+            workspace_id="w1",
+        )
+        assert _wait_until(lambda: completed == ["next"])
+        assert executed == ["next"]
+    finally:
+        runner.stop()

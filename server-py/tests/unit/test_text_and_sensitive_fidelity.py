@@ -161,6 +161,13 @@ def test_injected_script_embeds_shared_word_list():
         assert word in RECORDER_INIT_SCRIPT, f"missing {word} in init script"
     assert "new RegExp" in RECORDER_INIT_SCRIPT
     assert "@@AUTOFLOW_SENSITIVE@@" not in RECORDER_INIT_SCRIPT
+    assert "@@AUTOFLOW_TESTID@@" not in RECORDER_INIT_SCRIPT
+    assert 'getAttribute("data-testid")' in RECORDER_INIT_SCRIPT
+    from autoflow.recorder_capture import recorder_init_script
+
+    custom = recorder_init_script("data-cy")
+    assert 'getAttribute("data-cy")' in custom
+    assert 'getAttribute("data-testid")' not in custom
 
 
 def test_is_sensitive_field_covers_chinese_labels():

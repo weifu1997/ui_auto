@@ -94,7 +94,9 @@ class _ReportMixin:
 
         artifact_directory = self.managed_runner.artifact_directory
         artifact_directory.mkdir(parents=True, exist_ok=True)
-        artifact_name = safe_artifact_name(f"assertion-report-{run_id}.{extension}")
+        artifact_name = safe_artifact_name(
+            f"assertion-report-{run_id}-{uuid.uuid4().hex[:8]}.{extension}"
+        )
         artifact_path = artifact_directory / artifact_name
         artifact_path.write_bytes(data)
         artifact_id = str(uuid.uuid4())

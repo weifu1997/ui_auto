@@ -341,7 +341,13 @@ def test_require_session_falls_back_to_persisted_metadata():
     assert response["recordedStepCount"] == 2
     result = restarted.session_result("rec-persisted")
     assert result["session"]["status"] == "interrupted"
-    assert result["result"] == {}
+    assert result["result"] == {
+        "steps": [],
+        "elements": [],
+        "requiredBindings": [],
+        "warnings": [],
+        "lastSeq": 0,
+    }
 
 
 # ---------- 列表端点（协调器层） ----------

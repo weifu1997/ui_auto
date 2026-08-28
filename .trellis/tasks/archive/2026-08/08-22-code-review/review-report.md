@@ -232,3 +232,153 @@ useEffect(() => {
 | `npm run test:py` | 定向通过：全量排除 R-W6 已知卡死的 `test_identity_membership_lifecycle.py` 后 167 通过（含新增 3 用例）；全量门禁仍被 R-W6 阻塞 |
 | `npm run test:startup` / `test:windows` | 通过（14/14；smoke ok） |
 | `npm run test:e2e` | 未执行：需真实服务且 R-W6 未解；e2e 键位已适配待后续验证 |
+
+---
+
+## 当前 HEAD 复审（2026-08-28，`b2f2f7c`）
+
+范围：整个产品代码库（`src/`、`server-py/`、`scripts/`、`deployment/`、测试配置），对照 `.trellis/spec` 与阶段 1–4 / uv 迁移后的增量。历史 CRITICAL（C-1/C-2/C-3、R-C1）与已修 WARNING（F-W1/F-W2、B-W4/B-W5、S-W1/S-W4/S-W5、R-W1/R-W2）在当前 HEAD **未复现**。本节只列仍存在或新引入的问题。审查不修改产品代码。
+
+### 质量门禁
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过（0 warnings / 0 errors，120 files） |
+| `npm run build` | 通过 |
+| `npm run test:unit` | 通过（27 文件 / 124 用例） |
+| `npm run test:py` | 通过（**295 passed**，含 `test_identity_membership_lifecycle.py` 5 条；1 条 Starlette/httpx deprecation warning） |
+| `npm run test:startup` | 通过（14/14） |
+| `npm run check:bundle` | 通过（≤500 kB） |
+| `npm run test:e2e` / `test:windows` | 未执行：本轮以静态审查 + 单元/集成门禁为主 |
+
+R-W6（TestClient 卡死）在本机 **未复现**：身份生命周期测试已纳入全量 `test:py` 并在 58s 内通过。锁文件已切到 `uv.lock`。残留风险是 anyio 4.14.2 / Starlette 1.6.0 组合仍在 lock 中，且 `TestClient` 已标 deprecation；不把卡死列为当前缺陷。
+
+### CRITICAL（已验证）
+
+#### N-C1【后端】录制 create/stop/cancel 在 FastAPI 事件循环上同步阻塞
+
+- `server-py/autoflow/handler/recordings.py:22-56`：`async def recording_session_create` 直接调用 `recording_coordinator.create_session`。
+- `server-py/autoflow/recorder.py:182`：`session["browserReady"].wait(timeout=120)` 最长阻塞 120s。
+- stop/cancel 路径同样同步：`handler/recordings.py:228` → `coordinator.stop` → `_release_browser` 的 `future.result(timeout=30)`。
+- 同进程里唯一用 `run_in_threadpool` 的 Playwright 入口是 preview（`handler/runs.py:32`），录制未同等处理。
+
+影响：一次「开始录制」可冻结该 worker 上全部 HTTP（登录、健康检查、运行轮询、其他录制）最长约 2 分钟。uvicorn 默认每进程一条事件循环。
+
+建议：create/stop/cancel 走 `await run_in_threadpool(...)`（或 `asyncio.to_thread`）；浏览器未就绪时立即 `RECORDING_BUSY`，不要在事件循环上 `wait(120)`。
+
+#### N-C2【部署】默认 WinSW HTTPS 使 `upgrade.ps1` 健康检查必失败并回滚
+
+- `deployment/AutoFlow.xml:9`：`AUTOFLOW_REQUIRE_HTTPS=1`。
+- `server-py/autoflow/transport.py:17-36`：loopback 明文 HTTP **不**算 HTTPS（需 `x-forwarded-proto: https` 且 peer 匹配可信代理）；`test_secure_transport.py` 覆盖此行为。
+- `scripts/ops/upgrade.ps1:19`：`Invoke-RestMethod http://127.0.0.1:8787/ready` 会收到 426 `HTTPS_REQUIRED`，进入 catch，停服务、删新 `app`、还原 `app-previous-*`。
+
+影响：按默认 XML 安装后，成功的包替换也会被健康检查判定失败并整包回滚。`soak-test.ps1` 使用同一 HTTP URL。
+
+建议：loopback 探测豁免 HTTPS 中间件，或升级脚本走 TLS 代理 / 带转发头；不要对强制 HTTPS 的生产实例打明文 `/ready`。
+
+### WARNING（已验证）
+
+#### 后端 / 执行
+
+| # | 问题 | 位置 | 影响 / 建议 |
+| --- | --- | --- | --- |
+| N-W1 | URL 断言忽略 `timeout_ms`，只读一次 `page.url` | `runner.py:415-436` | SPA/延迟跳转上一步「URL 断言」易误失败，超时字段无效。用 `wait_for_url` / `expect(page).to_have_url(..., timeout=timeout_ms)` |
+| N-W2 | 定位自愈对元素动作的**任意**异常回退；role 回退丢掉 accessible name | `runner.py:186-191, 635-665` | 原定位已命中但被遮挡/禁用时，可能 click/fill 页面上另一个 `count()===1` 的控件。仅在 not-found / strict-mode 时自愈；role 回退保留 name |
+| N-W3 | 心跳只在每步开始刷新；watchdog 按 `updated_at` 判死 | `runner.py:806-810`、`_lifecycle.py:881-896`、`main.py` 维护循环 | 单步 timeout 大于 watchdog 窗口（默认 20 分钟，下限 5）的 click/goto 会被 `MANAGED_RUN_WATCHDOG_TIMEOUT` 杀掉。步内定时心跳，或 staleness = max(watchdog, step timeout + slack) |
+| N-W4 | `started()` 忽略 0 行 UPDATE，仍写 `run.started` 并继续执行 | `_lifecycle.py:657-665`；cancel 在 `handler/runs.py:328-330` | queued 已被置 canceled 时 worker 仍可能跑完整流程；`finalize_completed_run` 对 canceled 不 absorb 迟到 success。0 行则跳过执行或立即 set signal |
+| N-W5 | `finalize_run_as_interrupted` 非事务，且 `flush=True` 同步投递 | `_lifecycle.py:969-985` | 崩溃可留下 `failed` 无事件/通知；watchdog 线程还会同步 HTTP 投递。对齐 `finalize_completed_run` 的 `BEGIN IMMEDIATE` + `flush=False` |
+| N-W6 | 断言报告文件名按 `assertion-report-{run_id}.{ext}` 固定 | `_report.py:95-117` | 再次导出覆盖同一路径，两条 artifact 行共享文件；删一条会让另一条 404。文件名加 UUID/时间戳 |
+| N-W7 | `redact_run_value` 失败时返回字符串 `"***"` | `_base.py:12-41` → `_lifecycle.py:907,932` | 解密/DB 异常时 `persist_flow_outputs` 对 str 调 `.get` 抛 AttributeError，事务回滚，run 卡在 running 直到 watchdog。失败应返回同类型空结构 |
+| N-W8 | `run_trend` SQL 窗口（now−N×24h）与日历桶（今天往前 N 天）不一致 | `_aggregation.py:120-174` | 视时刻可能多出第 N+1 个点。按日历日截断，或忽略未预播种的日期 |
+| N-W9 | 录制全局 `ThreadPoolExecutor(max_workers=1)` + 120s wait | `services/core.py:41-43`、`recorder.py:182` | 第二用户/项目的 create 会空等 120s 再 409，且（叠加 N-C1）堵事件循环。每会话一线程，或槽满立即 `RECORDING_BUSY` |
+| N-W10 | 采集脚本写死 `data-testid`，忽略环境 `testIdAttribute` | `recorder_capture.py:69` vs `recorder.py:116-144` | `data-cy`/`data-test` 环境录不到最强定位，回放更易失败。按 `@@TOKEN@@` 注入属性名 |
+| N-W11 | `ManagedRunner.cancel` 持 `_condition` 跨线程关 Playwright | `managed_runner.py:66-80,144-150` | Playwright sync 非线程安全；close 阻塞时 enqueue/其他 cancel 全部卡住。锁内只 set signal，由 worker 关浏览器 |
+| R-W8 | run 完成仍在 ManagedRunner worker 上同步投递（最多 20×10s） | `_lifecycle.py:939-949`、`notifications.py:106` | 事务拆分已做，网络发送未移走。worker 路径一律 `flush=False`，交给维护循环 |
+| R-W9 | 非 `NODE_ENV=production` 时静默使用公开默认密钥 | `crypto.py:13-17`、`services/core.py:65-68` | 直接起 Python 或误配环境时，能读库即可解密 secret。缺密钥默认拒绝，仅显式 dev opt-in |
+| R-W10 | 通道测试 / 投递 / 模板应用把 `str(exc)` 返回客户端 | `handler/channels.py:299-315`、`notifications.py:173-178`、`handler/templates.py:830` | 泄漏主机名/TLS/SQLite 细节。对外稳定错误码，原文只进服务端日志 |
+| R-W11 | 登录限流按 socket peer IP，键不回收；可信代理未用于 XFF | `handler/auth.py:21-43`、`handler/_shared.py:176-179` | 反代后全员共享 10 次/分钟桶。可信代理时解析转发地址并清理过期键 |
+
+#### 前端
+
+| # | 问题 | 位置 | 影响 / 建议 |
+| --- | --- | --- | --- |
+| N-W12 | 录制进入终态（关窗/超时/interrupted）只清存储，不取结果；Stop 在终态隐藏 | `FlowEditorPage.tsx:554-557, 595-597, 932` | 进程内仍有 `normalizer.result()`，UI 丢草稿。终态提供 GET result 或允许对 failed/expired 再 stop 一次导入 |
+| N-W13 | `staleAssertionFields` / `ASSERTION_FIELDS` 不含 `trimCompare` | `assertion-step-draft.ts:6-41` | 从文本断言切走后 `trimCompare` 残留进 checksum（`STEP_KEYS` 含该字段）。切换动作时按契约清掉 |
+
+#### 脚本 / CI / uv 迁移
+
+| # | 问题 | 位置 | 影响 / 建议 |
+| --- | --- | --- | --- |
+| N-W14 | Python Chromium 安装时未带 `PLAYWRIGHT_BROWSERS_PATH` | `install.ps1:42-50`、`upgrade.ps1:16` vs `AutoFlow.xml:14` | 运行时看 `%BASE%\browsers`，uv 的 `playwright install` 打到用户缓存。upgrade 甚至不跑 Node 安装。安装步骤必须带同一环境变量 |
+| N-W15 | 生产不钉 `app\venv`；`resolvePython()` 优先 `server-py/.venv` | `python-env.mjs:21-61`、`install.ps1:40,47-49`、`AutoFlow.xml` 无 `AUTOFLOW_PYTHON` | 叠加 R-W4：robocopy 拷入的开发 venv 会盖过 `app\venv`。XML 设 `AUTOFLOW_PYTHON=%BASE%\app\venv\Scripts\python.exe` 并排除 `.venv*` |
+| N-W16 | CI `uv lock --check` 在未冻结的 `uv sync` **之后** | `phase0-ci.yml:48-52`、`setup-py.mjs:48-52` | sync 可改写 lock，随后 check 必绿。check 放在 setup 前，或 CI 用 `uv sync --frozen` |
+| R-W3 | manifest verify 不要求 `platform.sqlite` 条目 | `backup-manifest.py:37-53`、`restore.ps1:8-13` | 删掉 manifest 中该条目后 verify 仍 ok，可覆盖生产库。强制 schema + 必有主库条目 |
+| R-W4 / S-W3 | robocopy 不排除 `.env`、venv、`.trellis` | `install.ps1:40` | 开发密钥可覆盖 WinSW key file（`start-production.mjs` 缺进程环境时读 `$app/.env`，且直接 `PLATFORM_SECRET_KEY` 优先于 FILE） |
+| R-W5 | restore 不检查 `AutoFlow.exe stop` 退出码 | `restore.ps1:11` | 服务仍在写库时覆盖 SQLite。检查 `$LASTEXITCODE` 并等待已停止 |
+| S-W2 | install/upgrade 的 npm/uv/WinSW 原生命令不查退出码 | `install.ps1:44-54`、`upgrade.ps1:11-16` | 构建失败仍启动陈旧/半安装服务 |
+| S-W6 | `process.once(signal)` 二次 Ctrl+C 可留下孤儿 uvicorn | `start-production.mjs:216-220`、`server-py.mjs:34-38` | 改 `process.on` + 超时 SIGKILL |
+| S-W7 | retention/restore/rollback/upgrade 无 `-WhatIf`；restore 无预快照 | 各 `scripts/ops/*.ps1` | 误传 `-Root` 即删错目录 |
+| S-W8 | `upgrade.ps1` 的 move/expand/npm/uv 在 try 外 | `upgrade.ps1:3-18` | npm/uv 失败留下半部署且服务已停 |
+
+### INFO（不阻塞，择要）
+
+- 契约文档仍写「断言动作 4 个 / `_ASSERTION_TYPES`」（`assertion-field-contract.md:51`），代码与 parity 测试已是 5 个（含 URL）；`src/domain/model.ts:44` 注释仍写 assertMatch「仅文本/属性」。
+- 统计端点 `?windowDays=`，趋势端点 `?window_days=`（前端已分别对齐）；调错参数会静默变成全量窗口。
+- HTML 报告 `@@TOKEN@@` 顺序替换：流程名若为 `@@ROWS@@` 会把表格 HTML 打进 `<h1>`（单元格已 escape，非脚本 XSS）。
+- `/metrics` 无鉴权（默认绑 127.0.0.1）；LIKE 过滤未转义 `%`/`_`；数据集 base64 先解码后限长。
+- `setup-py.mjs` 用 `server-py/.browsers` 判断是否跳过安装，实际 `playwright install` 未传入该 `PLAYWRIGHT_BROWSERS_PATH`。
+- `project.edit` 能力未在任何 handler 使用。
+- 录制 login snapshot 与 normalizer warnings 无上限。
+- CI 仍只监听 `python_3.1`（文档已写明为集成分支）；对 `master`/`v3.2_flow_assertion` 的 push 不跑工作流。属流程风险，不是逻辑 bug。
+- `test:all` 在无 PowerShell 的 Linux 上以 `test:windows` 结尾会失败。
+
+### 误报排除与确认仍健壮的区域
+
+- 历史 C-1（每线程 SQLite）、C-2（脏草稿不被 30s 轮询覆盖）、C-3（`PLATFORM_SECRET_KEY_FILE` 启动门禁）、R-C1（按账号隔离存储）、R-W1（密钥使用 vs 管理）、R-W2（dispatchKey）均仍在。
+- URL 断言契约形状正确：复用 `value`+`assertMatch`，无新 `STEP_KEYS`，无 `STEP_ELEMENT_REQUIRED`，未知动作 `UNSUPPORTED_ACTION`，`step.asserted` 在 completed/failed 之前。
+- HTML 报告字段 `html.escape` + `redact_run_value`；前端无 `dangerouslySetInnerHTML`。
+- 自愈评分 `count()!=1` → `-inf`，CSS/XPath 不生成候选；`_heal_locator` 不会采纳全员 `-inf`。
+- 身份/RBAC/隔离、webhook SSRF 钉 IP、secret 前端不落盘、备份 WAL checkpoint 后只拷主文件：仍成立。
+- uv 迁移本身：`pyproject.toml` runtime/dev 分组、生产 `--no-dev --locked`、CI `setup-uv`、Windows `python -m uv` 引导，方向正确；问题在安装路径/锁检查顺序/venv 选择，不在锁格式。
+- R-W6 卡死本机未复现（295 pytest 全绿）。不声称所有环境都不会再挂。
+
+### 修复优先级建议
+
+1. **立即（生产可用性）**：N-C2（Windows 升级必回滚）、N-C1（录制堵死事件循环）、N-W14/N-W15 + R-W4（错误 venv / 浏览器路径 / `.env` 覆盖密钥）。
+2. **本迭代**：N-W1（URL 等待）、N-W2（自愈误点）、N-W6（报告文件名）、N-W7（redact 类型）、N-W12（录制终态草稿）、N-W16（CI lock 门禁）、R-W8（通知离 worker）、R-W5/R-W3（恢复完整性）。
+3. **规划**：R-W9/R-W10/R-W11、N-W3/N-W4/N-W5/N-W8/N-W9/N-W10/N-W11、S-W2/S-W6/S-W7/S-W8、契约文档「4 个」漂移、其余 INFO。
+
+审查任务按 PRD **不直接改产品代码**。批准后可按上述优先级开修复任务。
+
+---
+
+## 修复记录（2026-08-28，用户批准「立即」+ 旧 WARNING）
+
+| 编号 | 修复 |
+| --- | --- |
+| N-C1 | 录制 create/stop/cancel/cancel-active 走 `run_in_threadpool` |
+| N-C2 | HTTPS 中间件豁免 `/ready`、`/health`；upgrade.ps1 明文探测可成功 |
+| N-W14 | install/upgrade 在 `PLAYWRIGHT_BROWSERS_PATH` 下安装 Python Chromium |
+| N-W15 | WinSW 设置 `AUTOFLOW_PYTHON=%BASE%\app\venv\Scripts\python.exe` |
+| R-W4 | robocopy 排除 `.env` / `.venv*` / `venv` / `.trellis` |
+| R-W8 | `queue_run_deliveries` 默认 `flush=False`；worker 终态不再同步投递 |
+| R-W9 | 缺密钥失败；仅 `AUTOFLOW_ALLOW_INSECURE_DEV_KEY=1` 且非 production 允许开发默认密钥 |
+| R-W10 | 通道测试/投递/模板占位符改为稳定错误码 |
+| R-W11 | 可信代理时用 X-Forwarded-For；过期限流桶清理 |
+| R-W3 | manifest verify 要求 version=1 且含 `platform.sqlite` |
+| R-W5 | restore 检查 stop/start 退出码并等待进程退出 |
+| N-W1 | URL 断言有 `wait_for_url` 时等到命中或超时 |
+| N-W2 | 自愈仅在原定位未命中/strict mode 时触发；role 回退保留 accessible name |
+| N-W6 | 断言报告文件名带 UUID，避免覆盖 |
+| N-W7 | `redact_run_value` 失败保持原类型；单行解密失败跳过该 secret |
+| N-W12 | 终态录制 GET `/result`；编辑器自动/手动导入有步骤的草稿 |
+| N-W16 | CI 先 `uv lock --check` 再 `uv sync --frozen` |
+| N-W3 | 步内心跳线程按 `RUN_HEARTBEAT_INTERVAL_S` 续命 |
+| N-W4 | `mark_run_started` 0 行则 worker 跳过执行 |
+| N-W5 | `finalize_run_as_interrupted` 使用 `BEGIN IMMEDIATE` |
+| N-W8 | 趋势窗口按日历日起点截断，不追加窗口外日期 |
+| N-W9 | 录制全局槽满立即 `RECORDING_BUSY`（默认 4） |
+| N-W10 | 采集脚本注入环境 `testIdAttribute` |
+| N-W11 | cancel 只 set signal，不在锁内跨线程关浏览器 |
+| N-W13 | 切换动作时清掉 `trimCompare` |
+| S-W2/S-W6/S-W7/S-W8 | 安装/升级检查退出码；信号常驻+SIGKILL；WhatIf；upgrade 整段 try 回滚 |

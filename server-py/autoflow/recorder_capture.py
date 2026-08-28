@@ -5,6 +5,8 @@
 （``RECORDER_INIT_SCRIPT``）保持不变。
 """
 
+import re
+
 from .sensitive import JS_SENSITIVE_PATTERN_SOURCE
 
 RECORDER_INIT_SCRIPT_TEMPLATE = r"""
@@ -66,7 +68,7 @@ RECORDER_INIT_SCRIPT_TEMPLATE = r"""
     autocomplete: el.getAttribute("autocomplete") || "",
     role: roleFor(el),
     accessibleName: labelText(el) || (el.getAttribute("aria-label") || "").trim(),
-    testid: el.getAttribute("data-testid") || "",
+    testid: el.getAttribute("@@AUTOFLOW_TESTID@@") || "",
     // text 是展示用的折叠截断标签；fullText 才是定位候选使用的原文全文
     // （重放端 get_by_text 按空白归一化后的全字符串匹配，截断值必然失配）。
     text: (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60),
@@ -213,7 +215,17 @@ RECORDER_INIT_SCRIPT_TEMPLATE = r"""
 })();
 """
 
+def recorder_init_script(test_id_attribute: str = "data-testid") -> str:
+    """Fill sensitive-word and test-id placeholders for a recording session."""
+    attribute = (
+        test_id_attribute
+        if re.match(r"^[a-zA-Z_][\w:-]*$", test_id_attribute or "")
+        else "data-testid"
+    )
+    return RECORDER_INIT_SCRIPT_TEMPLATE.replace(
+        "@@AUTOFLOW_SENSITIVE@@", JS_SENSITIVE_PATTERN_SOURCE
+    ).replace("@@AUTOFLOW_TESTID@@", attribute)
+
+
 # 词表由 autoflow.sensitive 单源生成后替换进模板（W0-3），保持对外常量名不变。
-RECORDER_INIT_SCRIPT = RECORDER_INIT_SCRIPT_TEMPLATE.replace(
-    "@@AUTOFLOW_SENSITIVE@@", JS_SENSITIVE_PATTERN_SOURCE
-)
+RECORDER_INIT_SCRIPT = recorder_init_script()

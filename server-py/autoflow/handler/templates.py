@@ -826,8 +826,10 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                                     now(),
                                 ),
                             )
-                        except Exception as e:
-                            warnings.append(f"创建密钥占位符 {s_name} 失败: {str(e)}")
+                        except Exception:
+                            warnings.append(
+                                f"创建密钥占位符 {s_name} 失败: SECRET_PLACEHOLDER_FAILED"
+                            )
 
         services.audit(
             template[1],

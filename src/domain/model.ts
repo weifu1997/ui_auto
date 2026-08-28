@@ -41,7 +41,7 @@ export type FlowStep = {
   outputPublic?: boolean;
   // 断言字段：每个字段只属于一种断言类型，枚举互斥，不得跨类型取值。
   // 枚举/缺省由 ./assertions 单源（契约见 .trellis/spec/backend/assertion-field-contract.md）。
-  /** 仅文本/属性断言：匹配方式（缺省 contains，兼容既有行为）。 */
+  /** 文本/属性/URL 断言：匹配方式（缺省 contains，兼容既有行为）。 */
   assertMatch?: AssertMatch;
   /** 仅可见性断言：可见/不可见（缺省 visible）。不复用 assertMatch。 */
   assertVisibility?: AssertVisibility;

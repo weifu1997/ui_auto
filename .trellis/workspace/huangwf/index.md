@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
-- **Last Active**: 2026-08-18
+- **Total Sessions**: 19
+- **Last Active**: 2026-08-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~405 | Active |
+| `journal-1.md` | ~427 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 19 | 2026-08-28 | 代码审查修复收尾 | `36baeb7`, `92e56a6` | `v3.2_flow_assertion` |
 | 18 | 2026-08-18 | 独立提交现有任务改动 | `2f19954`, `e380be5`, `8cf0332`, `23efcae` | `master` |
 | 17 | 2026-08-18 | 修复录制交互事件采集 | `968014f` | `master` |
 | 16 | 2026-08-18 | 修复录制布局与语义步骤捕获 | `a2eba93` | `master` |

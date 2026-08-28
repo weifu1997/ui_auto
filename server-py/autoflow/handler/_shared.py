@@ -174,6 +174,7 @@ def _assert_revision_secret_safety(
 
 
 def _client_ip(request: Request) -> str:
-    if request.client:
-        return request.client.host or "unknown"
-    return "unknown"
+    from ..transport import forwarded_client_ip, trusted_proxy
+
+    peer = request.client.host if request.client else None
+    return forwarded_client_ip(peer, request.headers, trusted_proxy())

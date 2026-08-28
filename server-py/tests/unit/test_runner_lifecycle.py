@@ -8,10 +8,15 @@ Playwright 驱动，不启动真实浏览器。
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
-from autoflow.runner import execute_browser_run, execute_element_validation
+from autoflow.runner import (
+    _heartbeat_interval_s,
+    execute_browser_run,
+    execute_element_validation,
+)
 
 
 # ---------- 假 Playwright 栈 ----------
@@ -253,6 +258,56 @@ def test_browser_run_step_failure_runs_teardown(monkeypatch: pytest.MonkeyPatch)
     # 原 finally 顺序：先 hooks clear，再停 trace（记录 artifact），故用成员判断
     assert ("browser", "clear") in recorder
     assert context.closed and browser.closed and fake_pw.stopped
+
+
+def test_heartbeat_interval_clamps_and_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RUN_HEARTBEAT_INTERVAL_S", raising=False)
+    assert _heartbeat_interval_s() == 30.0
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "abc")
+    assert _heartbeat_interval_s() == 30.0
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "0")
+    assert _heartbeat_interval_s() == 1.0
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "1")
+    assert _heartbeat_interval_s() == 1.0
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "45")
+    assert _heartbeat_interval_s() == 45.0
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "999")
+    assert _heartbeat_interval_s() == 60.0
+
+
+def test_browser_run_in_step_heartbeat_keeps_progress(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "1")
+    ticks: list[int] = []
+
+    class _SlowPage(_FakePage):
+        def goto(self, *args: object, **kwargs: object) -> None:
+            time.sleep(2.2)
+
+    monkeypatch.setattr(_FakeContext, "new_page", lambda self: _SlowPage())
+    recorder: list[tuple[str, object]] = []
+    hooks = {
+        **_make_hooks(recorder),
+        "progress": lambda index: ticks.append(index),
+    }
+
+    result = execute_browser_run(
+        {
+            "environment": {"baseUrl": "https://app.test"},
+            "flow": {
+                "steps": [
+                    {"id": "s1", "action": "打开页面", "title": "Open", "value": "/"}
+                ]
+            },
+            "secrets": {},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert ticks[0] == 0
+    assert ticks.count(0) >= 2
 
 
 # ---------- execute_element_validation ----------

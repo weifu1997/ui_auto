@@ -189,3 +189,53 @@ def test_assertion_actual_with_secret_is_redacted(tmp_path, monkeypatch, fixture
         assert safe_event["passed"] is True
     finally:
         services.close()
+
+
+def test_redact_run_value_keeps_type_when_decrypt_fails(tmp_path, monkeypatch):
+    services, project_id = _setup_services(tmp_path, monkeypatch)
+    try:
+        run = {"id": "run-1", "projectId": project_id}
+        payload = {
+            "status": "success",
+            "flowOutputs": {"alpha": "captured-value"},
+            "assertions": [{"passed": True, "actual": "ok"}],
+        }
+        original = services.decrypt
+
+        def boom(_row):
+            raise RuntimeError("corrupt secret row")
+
+        services.decrypt = boom  # type: ignore[method-assign]
+        try:
+            redacted = services.redact_run_value(run, payload)
+        finally:
+            services.decrypt = original  # type: ignore[method-assign]
+        assert isinstance(redacted, dict)
+        assert redacted["status"] == "success"
+        assert redacted["flowOutputs"]["alpha"] == "captured-value"
+        assert redacted["assertions"][0]["passed"] is True
+    finally:
+        services.close()
+
+
+def test_redact_run_value_failed_query_returns_typed_mask(tmp_path, monkeypatch):
+    services, project_id = _setup_services(tmp_path, monkeypatch)
+    try:
+        run = {"id": "run-1", "projectId": project_id}
+        payload = {"status": "success", "flowOutputs": {"alpha": "captured-value"}}
+        original = services.database
+
+        class Boom:
+            def execute(self, *_args, **_kwargs):
+                raise RuntimeError("database locked")
+
+        services.database = Boom()  # type: ignore[assignment]
+        try:
+            redacted = services.redact_run_value(run, payload)
+        finally:
+            services.database = original
+        assert isinstance(redacted, dict)
+        assert redacted["status"] == "***"
+        assert redacted["flowOutputs"]["alpha"] == "***"
+    finally:
+        services.close()
