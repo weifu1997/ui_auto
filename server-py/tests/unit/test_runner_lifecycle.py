@@ -252,9 +252,11 @@ def test_browser_run_headed_windows_host_uses_windows_chrome(
             "cdpEndpoint": "http://127.0.0.1:9334",
         }
 
-    monkeypatch.setattr("autoflow.runner._launch_windows_chrome", fake_launch_windows_chrome)
     monkeypatch.setattr(
-        "autoflow.runner._close_windows_chrome",
+        "autoflow.runner.launch_windows_chrome_session", fake_launch_windows_chrome
+    )
+    monkeypatch.setattr(
+        "autoflow.runner.close_windows_chrome",
         lambda browser: closed_browsers.append(browser),
     )
     recorder: list[tuple[str, object]] = []

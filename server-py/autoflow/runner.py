@@ -21,9 +21,9 @@ from .locator_score import HeuristicLocatorScorer, LocatorScorer
 
 # 有头运行在 WSL/Windows 宿主上复用 Windows Chrome（WSLg 下 Linux Chromium 不可见）。
 from .browser_session import (
-    _close_windows_chrome,
-    _launch_windows_chrome,
+    close_windows_chrome,
     headed_chromium_args,
+    launch_windows_chrome_session,
     should_use_windows_chrome,
 )
 
@@ -797,7 +797,7 @@ class _BrowserSession:
                 context_kwargs["storage_state"] = self._storage_state
             self._windows_chrome = False
             if not headless and should_use_windows_chrome():
-                result = _launch_windows_chrome(
+                result = launch_windows_chrome_session(
                     playwright,
                     self._storage_state,
                     context_kwargs=dict(context_kwargs),
@@ -825,7 +825,7 @@ class _BrowserSession:
         self._hooks["browser"](None, None)
         if self._windows_chrome and self.browser is not None:
             # CDP 连接的 browser.close() 只断连；先杀掉 Windows Chrome 进程本身。
-            _close_windows_chrome(self.browser)
+            close_windows_chrome(self.browser)
         if self.context is not None:
             _close_quietly(self.context.close)
         if self.browser is not None:

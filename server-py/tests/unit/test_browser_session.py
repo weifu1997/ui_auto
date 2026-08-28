@@ -6,11 +6,13 @@ from autoflow.browser_session import (
     HEADED_WINDOW_BOUNDS,
     _pick_debug_port,
     _windows_local_app_data,
+    _windows_temp_root,
     close_browser_session,
     default_windows_chrome_candidates,
     headed_chromium_args,
     is_native_windows,
     launch_browser_session,
+    purge_stale_windows_chrome_profiles,
     reveal_headed_window,
     running_under_wsl,
     should_use_windows_chrome,
@@ -269,6 +271,54 @@ def test_windows_local_app_data_native_reads_env(monkeypatch):
     assert _windows_local_app_data() == r"C:\Users\t\AppData\Local"
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     assert _windows_local_app_data() == r"C:\Users\Public"
+
+
+def test_windows_temp_root_maps_between_hosts():
+    local = r"C:\Users\t\AppData\Local"
+    assert _windows_temp_root(local, native=True) == Path(local)
+    assert _windows_temp_root(local, native=False) == Path("/mnt/c/Users/t/AppData/Local")
+    # 无法解析的格式兜底到不存在的目录，glob 自然为空
+    assert _windows_temp_root("not-a-path", native=False) == Path("/nonexistent")
+
+
+def test_purge_stale_windows_chrome_profiles(tmp_path, monkeypatch):
+    import os
+    import time
+
+    stale = tmp_path / "autoflow-headed-9000"
+    fresh = tmp_path / "autoflow-headed-9001"
+    unrelated = tmp_path / "autoflow-other"
+    for directory in (stale, fresh, unrelated):
+        directory.mkdir()
+    old = time.time() - 48 * 3600
+    os.utime(stale, (old, old))
+
+    monkeypatch.setattr(
+        "autoflow.browser_session._windows_local_app_data",
+        lambda: r"C:\Users\t\AppData\Local",
+    )
+    monkeypatch.setattr(
+        "autoflow.browser_session._windows_temp_root",
+        lambda local, native=None: tmp_path,
+    )
+
+    purge_stale_windows_chrome_profiles()
+
+    assert not stale.exists()  # 超过 24h 的旧 profile 被清理
+    assert fresh.exists()  # 最近会话的 profile 保留
+    assert unrelated.exists()  # 非本功能命名空间的不动
+
+
+def test_purge_stale_windows_chrome_profiles_never_raises(monkeypatch):
+    monkeypatch.setattr(
+        "autoflow.browser_session._windows_local_app_data",
+        lambda: r"C:\Users\t\AppData\Local",
+    )
+    monkeypatch.setattr(
+        "autoflow.browser_session._windows_temp_root",
+        lambda local, native=None: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    purge_stale_windows_chrome_profiles()  # 不应抛出
 
 
 def _install_windows_chrome_stubs(monkeypatch, *, native: bool) -> dict[str, object]:

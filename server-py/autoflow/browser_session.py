@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -180,22 +181,71 @@ def _windows_local_app_data() -> str:
     return r"C:\Users\Public"
 
 
+def _windows_temp_root(local_app_data: str, *, native: bool | None = None) -> Path:
+    """POSIX path of the Windows Temp root holding headed-Chrome profiles."""
+    use_native = is_native_windows() if native is None else native
+    if use_native:
+        return Path(local_app_data)
+    drive, _, rest = local_app_data.partition("\\")
+    if not drive or not rest:
+        return Path("/nonexistent")
+    return Path("/mnt", drive.rstrip(":").lower(), rest.replace("\\", "/"))
+
+
+STALE_PROFILE_MAX_AGE_S = 24 * 3600
+
+
+def purge_stale_windows_chrome_profiles(
+    *,
+    now_s: float | None = None,
+    max_age_s: float = STALE_PROFILE_MAX_AGE_S,
+) -> None:
+    """Best-effort delete leftover headed-Chrome profiles from old runs.
+
+    每次有头会话都在 Windows Temp 建一个独立 profile，Chrome 退出后不会自动清
+    理；只删超过 max_age 的目录，最近会话与运行中的（按端口命名的）一律不动。
+    """
+    try:
+        root = _windows_temp_root(_windows_local_app_data())
+        now = time.time() if now_s is None else now_s
+        for entry in root.glob("autoflow-headed-*"):
+            try:
+                if not entry.is_dir() or now - entry.stat().st_mtime < max_age_s:
+                    continue
+                shutil.rmtree(entry, ignore_errors=True)
+            except OSError:
+                continue
+    except Exception:
+        return
+
+
 def _wait_for_cdp(endpoint: str, timeout_s: float = 20) -> None:
     url = f"{endpoint}/json/version"
+    # 直连 opener：127.0.0.1 的 CDP 探测绝不能走 http_proxy，否则配了代理的
+    # 环境（WSL 开发机常见）会探测失败并误报 Chrome 未启动。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.time() + timeout_s
     last_error: Exception | None = None
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1) as response:
+            with opener.open(url, timeout=1) as response:
                 if getattr(response, "status", 200) == 200:
                     return
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             last_error = error
         time.sleep(0.1)
-    raise RuntimeError(f"Windows Chrome CDP was not reachable at {url}: {last_error}")
+    raise RuntimeError(
+        f"Windows Chrome did not expose CDP at {url} within {timeout_s:.0f}s "
+        f"({last_error}); check that Chrome is allowed to start (antivirus/policy)"
+    )
 
 
-def _close_windows_chrome(browser: Any) -> None:
+def close_windows_chrome(browser: Any) -> None:
+    """Kill the Windows Chrome process behind a CDP connection.
+
+    CDP 连接的 ``browser.close()`` 只断开 Playwright，不结束 Chrome 进程；录制
+    与运行路径退出时都必须先经此显式 ``Browser.close``，否则留下孤儿窗口。
+    """
     try:
         session = browser.new_browser_cdp_session()
         session.send("Browser.close")
@@ -216,7 +266,7 @@ def _headed_context_kwargs(storage_state: dict[str, Any] | None) -> dict[str, An
     return kwargs
 
 
-def _launch_windows_chrome(
+def launch_windows_chrome_session(
     playwright: Any,
     storage_state: dict[str, Any] | None,
     *,
@@ -231,6 +281,7 @@ def _launch_windows_chrome(
     chrome = windows_chrome_executable()
     if chrome is None:
         raise RuntimeError("Windows Chrome executable was not found")
+    purge_stale_windows_chrome_profiles()
     port = _pick_debug_port()
     user_data_dir = rf"{_windows_local_app_data()}\Temp\autoflow-headed-{port}"
     bounds = HEADED_WINDOW_BOUNDS
@@ -284,7 +335,7 @@ def _launch_windows_chrome(
         }
     except Exception:
         if browser is not None:
-            _close_windows_chrome(browser)
+            close_windows_chrome(browser)
         raise
 
 
@@ -298,7 +349,7 @@ def launch_browser_session(
     playwright = sync_playwright().start()
     if not headless and should_use_windows_chrome():
         try:
-            return _launch_windows_chrome(playwright, storage_state)
+            return launch_windows_chrome_session(playwright, storage_state)
         except Exception:
             try:
                 playwright.stop()
@@ -332,7 +383,7 @@ def launch_browser_session(
 def close_browser_session(session: dict[str, Any]) -> None:
     """按 context → browser → playwright 顺序尽力回收，不抛出。"""
     if session.get("windowsChrome"):
-        _close_windows_chrome(session.get("browser"))
+        close_windows_chrome(session.get("browser"))
     for closer in (
         lambda: session["context"].close(),
         lambda: session["browser"].close(),
