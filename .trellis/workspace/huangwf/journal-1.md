@@ -403,3 +403,25 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: 代码审查修复收尾
+
+**Date**: 2026-08-28
+**Task**: 代码审查修复收尾
+**Branch**: `v3.2_flow_assertion`
+
+### Summary
+
+完成 08-22 全库审查后的立即项、旧 WARNING 与本迭代剩余修复：录制 off-loop、HTTPS 探针豁免、通知异步入队、缺密钥失败、稳定错误码、XFF 限流、备份 manifest/restore、安装排除 .env/venv、URL 等待、自愈范围、报告文件名、脱敏类型、终态录制草稿、CI lock --check。lint/unit/py 全绿。已归档 08-22-code-review。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `36baeb7` | (see git log) |
+| `92e56a6` | (see git log) |
+
+### Status
+
+[OK] **Completed**
