@@ -1,4 +1,4 @@
-"""Shared headed-browser session lifecycle for Platform recording.
+"""Shared headed-browser session lifecycle for Platform recording and runs.
 
 录制协调器通过专用线程化提交器串行访问 Playwright，本模块不做加锁。
 """
@@ -12,7 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
 
 HEADED_WINDOW_BOUNDS = {
@@ -23,10 +23,10 @@ HEADED_WINDOW_BOUNDS = {
     "windowState": "normal",
 }
 
-WINDOWS_CHROME_CANDIDATES = (
-    Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"),
-    Path("/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
-)
+
+def is_native_windows() -> bool:
+    """True when this Python process itself runs on Windows (not inside WSL)."""
+    return sys.platform == "win32"
 
 
 def running_under_wsl(
@@ -41,18 +41,64 @@ def running_under_wsl(
     return root.exists()
 
 
+def default_windows_chrome_candidates(*, wsl: bool) -> tuple[Path, ...]:
+    """Chrome install locations, seen through /mnt/c under WSL or natively."""
+    if wsl:
+        return (
+            Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"),
+            Path("/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
+        )
+
+    def windows_path(base: str, *parts: str) -> Path:
+        # PureWindowsPath keeps separators canonical even when this runs on a
+        # POSIX host; Path() of it is concrete on Windows for is_file checks.
+        return Path(PureWindowsPath(base).joinpath(*parts))
+
+    return (
+        windows_path(
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            "Google",
+            "Chrome",
+            "Application",
+            "chrome.exe",
+        ),
+        windows_path(
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            "Google",
+            "Chrome",
+            "Application",
+            "chrome.exe",
+        ),
+        windows_path(
+            os.environ.get("LOCALAPPDATA", r"C:\Users\Public\AppData\Local"),
+            "Google",
+            "Chrome",
+            "Application",
+            "chrome.exe",
+        ),
+    )
+
+
 def windows_chrome_executable(
     candidates: tuple[Path, ...] | None = None,
 ) -> Path | None:
-    for path in candidates if candidates is not None else WINDOWS_CHROME_CANDIDATES:
+    for path in (
+        candidates
+        if candidates is not None
+        else default_windows_chrome_candidates(wsl=running_under_wsl())
+    ):
         if path.is_file():
             return path
     return None
 
 
 def should_use_windows_chrome() -> bool:
-    """WSLg RAIL does not show Playwright's Linux Chromium; use Windows Chrome."""
-    return running_under_wsl() and windows_chrome_executable() is not None
+    """WSLg maps Linux Chromium to an invisible 32x32 RAIL stub, and a
+    native-Windows service cannot rely on Playwright's bundled Chromium being
+    installed; both host kinds run headed sessions on Windows Chrome via CDP."""
+    if not (running_under_wsl() or is_native_windows()):
+        return False
+    return windows_chrome_executable() is not None
 
 
 def headed_chromium_args(*, wsl: bool | None = None) -> list[str]:
@@ -117,6 +163,8 @@ def _pick_debug_port(start: int = 9330, count: int = 100) -> int:
 
 
 def _windows_local_app_data() -> str:
+    if is_native_windows():
+        return os.environ.get("LOCALAPPDATA") or r"C:\Users\Public"
     result = subprocess.run(
         ["cmd.exe", "/c", "echo %LOCALAPPDATA%"],
         capture_output=True,
@@ -171,12 +219,20 @@ def _headed_context_kwargs(storage_state: dict[str, Any] | None) -> dict[str, An
 def _launch_windows_chrome(
     playwright: Any,
     storage_state: dict[str, Any] | None,
+    *,
+    context_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Start Windows Chrome with a debugging port and attach over CDP.
+
+    Shared by recording and run execution. ``context_kwargs=None`` keeps the
+    recording viewport; callers that must match bundled-Chromium behavior pass
+    their own kwargs explicitly.
+    """
     chrome = windows_chrome_executable()
     if chrome is None:
         raise RuntimeError("Windows Chrome executable was not found")
     port = _pick_debug_port()
-    user_data_dir = rf"{_windows_local_app_data()}\Temp\autoflow-recording-{port}"
+    user_data_dir = rf"{_windows_local_app_data()}\Temp\autoflow-headed-{port}"
     bounds = HEADED_WINDOW_BOUNDS
     subprocess.Popen(
         [
@@ -194,7 +250,7 @@ def _launch_windows_chrome(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=False,
-        cwd="/mnt/c/Windows",
+        cwd=None if is_native_windows() else "/mnt/c/Windows",
     )
     endpoint = f"http://127.0.0.1:{port}"
     browser = None
@@ -202,7 +258,9 @@ def _launch_windows_chrome(
         _wait_for_cdp(endpoint)
         browser = playwright.chromium.connect_over_cdp(endpoint)
         default_contexts = list(browser.contexts)
-        context = browser.new_context(**_headed_context_kwargs(storage_state))
+        if context_kwargs is None:
+            context_kwargs = _headed_context_kwargs(storage_state)
+        context = browser.new_context(**context_kwargs)
         page = context.new_page()
         # Closing the default CDP context kills the whole Windows Chrome process.
         # Only close its leftover about:blank pages so one recording window remains.
@@ -213,7 +271,7 @@ def _launch_windows_chrome(
                 except Exception:
                     pass
         reveal_headed_window(page)
-        sys.stderr.write(f"[autoflow:recording] opened Windows Chrome at {endpoint}\n")
+        sys.stderr.write(f"[autoflow:headed] opened Windows Chrome at {endpoint}\n")
         sys.stderr.flush()
         return {
             "playwright": playwright,

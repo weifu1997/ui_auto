@@ -5,11 +5,15 @@ from pathlib import Path
 from autoflow.browser_session import (
     HEADED_WINDOW_BOUNDS,
     _pick_debug_port,
+    _windows_local_app_data,
     close_browser_session,
+    default_windows_chrome_candidates,
     headed_chromium_args,
+    is_native_windows,
     launch_browser_session,
     reveal_headed_window,
     running_under_wsl,
+    should_use_windows_chrome,
     windows_chrome_executable,
 )
 
@@ -200,107 +204,217 @@ def test_windows_chrome_executable_skips_missing_paths(tmp_path):
     assert windows_chrome_executable(candidates=(missing, present)) == present
 
 
-def test_headed_wsl_launch_connects_to_windows_chrome(monkeypatch):
-    captured: dict[str, object] = {}
-    revealed: list[object] = []
-    launched: list[list[str]] = []
+def test_is_native_windows_follows_platform(monkeypatch):
+    import sys
 
-    class _Page:
+    assert is_native_windows() is (sys.platform == "win32")
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert is_native_windows() is True
+
+
+def test_default_windows_chrome_candidates_wsl_paths():
+    candidates = default_windows_chrome_candidates(wsl=True)
+    assert Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe") in candidates
+    assert Path(
+        "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"
+    ) in candidates
+
+
+def test_default_windows_chrome_candidates_native_paths(monkeypatch):
+    from pathlib import PureWindowsPath
+
+    monkeypatch.setenv("ProgramFiles", r"D:\Apps")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\t\AppData\Local")
+    candidates = default_windows_chrome_candidates(wsl=False)
+    # 候选路径用 PureWindowsPath 归一化比较，兼容 POSIX/Windows 宿主的分隔符差异
+    normalized = [PureWindowsPath(str(path)) for path in candidates]
+    assert PureWindowsPath(r"D:\Apps\Google\Chrome\Application\chrome.exe") in normalized
+    assert (
+        PureWindowsPath(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe")
+        in normalized
+    )
+    assert (
+        PureWindowsPath(
+            r"C:\Users\t\AppData\Local\Google\Chrome\Application\chrome.exe"
+        )
+        in normalized
+    )
+
+
+def test_should_use_windows_chrome_requires_windows_host_and_chrome(monkeypatch):
+    monkeypatch.setattr("autoflow.browser_session.running_under_wsl", lambda: False)
+    monkeypatch.setattr("autoflow.browser_session.is_native_windows", lambda: True)
+    monkeypatch.setattr(
+        "autoflow.browser_session.windows_chrome_executable",
+        lambda: Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    )
+    assert should_use_windows_chrome() is True
+
+    # 宿主是 Windows 但找不到 chrome.exe → 回退自带 Chromium。
+    monkeypatch.setattr("autoflow.browser_session.windows_chrome_executable", lambda: None)
+    assert should_use_windows_chrome() is False
+
+    # 纯 Linux 宿主永远不用 Windows Chrome。
+    monkeypatch.setattr("autoflow.browser_session.is_native_windows", lambda: False)
+    monkeypatch.setattr(
+        "autoflow.browser_session.windows_chrome_executable",
+        lambda: Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    )
+    assert should_use_windows_chrome() is False
+
+
+def test_windows_local_app_data_native_reads_env(monkeypatch):
+    monkeypatch.setattr("autoflow.browser_session.is_native_windows", lambda: True)
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\t\AppData\Local")
+    assert _windows_local_app_data() == r"C:\Users\t\AppData\Local"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert _windows_local_app_data() == r"C:\Users\Public"
+
+
+def _install_windows_chrome_stubs(monkeypatch, *, native: bool) -> dict[str, object]:
+    """Stub the full Windows Chrome launch path for either host kind.
+
+    Returns a ``captured`` dict with the Popen args/kwargs, the CDP endpoint,
+    the fake browser/context, and teardown observations.
+    """
+    import playwright.sync_api as api
+
+    chrome = (
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        if native
+        else Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
+    )
+    captured: dict[str, object] = {
+        "launched": [],
+        "popen_kwargs": {},
+        "revealed": [],
+        "closed_via_cdp": [],
+    }
+
+    class _StubPage:
         def __init__(self):
             self.closed = False
 
         def close(self):
             self.closed = True
 
-    class _Context:
+    class _StubContext:
         def __init__(self):
             self.pages = []
             self.closed = False
 
         def new_page(self):
-            page = _Page()
+            page = _StubPage()
             self.pages.append(page)
             return page
 
         def close(self):
             self.closed = True
 
-    class _Browser:
+    class _StubBrowser:
         def __init__(self):
-            self.default_page = _Page()
-            self.default_context = _Context()
+            self.default_page = _StubPage()
+            self.default_context = _StubContext()
             self.default_context.pages.append(self.default_page)
             self.contexts = [self.default_context]
+            self.closed = False
 
         def new_context(self, **kwargs):
-            captured["context"] = kwargs
-            return _Context()
+            captured["context_kwargs"] = kwargs
+            return _StubContext()
 
         def new_browser_cdp_session(self):
             class _Session:
                 def send(self, method, params=None):
-                    captured["browser_close"] = (method, params)
+                    captured["closed_via_cdp"].append(method)
 
             return _Session()
 
         def close(self):
-            captured["disconnected"] = True
+            self.closed = True
 
-    class _Chromium:
+    class _StubChromium:
         def launch(self, **kwargs):
-            captured["launch"] = kwargs
-            raise AssertionError("bundled Chromium must not launch when Windows Chrome is used")
+            raise AssertionError(
+                "bundled Chromium must not launch when Windows Chrome is used"
+            )
 
         def connect_over_cdp(self, endpoint):
             captured["endpoint"] = endpoint
-            browser = _Browser()
+            browser = _StubBrowser()
             captured["browser"] = browser
             return browser
 
-    class _Playwright:
-        chromium = _Chromium()
-
-        def stop(self):
-            captured["stopped"] = True
+    class _StubPlaywright:
+        def __init__(self):
+            self.chromium = _StubChromium()
 
         def start(self):
             return self
 
-    import playwright.sync_api as api
+        def stop(self):
+            captured["stopped"] = True
 
-    monkeypatch.setattr(api, "sync_playwright", lambda: _Playwright())
+    def _fake_popen(args, **kwargs):
+        captured["launched"].append(args)
+        captured["popen_kwargs"].update(kwargs)
+        return type("Proc", (), {})()
+
+    monkeypatch.setattr(api, "sync_playwright", lambda: _StubPlaywright())
     monkeypatch.setattr("autoflow.browser_session.should_use_windows_chrome", lambda: True)
-    monkeypatch.setattr(
-        "autoflow.browser_session.windows_chrome_executable",
-        lambda: Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"),
-    )
+    monkeypatch.setattr("autoflow.browser_session.windows_chrome_executable", lambda: chrome)
+    monkeypatch.setattr("autoflow.browser_session.is_native_windows", lambda: native)
     monkeypatch.setattr("autoflow.browser_session._pick_debug_port", lambda: 9334)
     monkeypatch.setattr(
         "autoflow.browser_session._windows_local_app_data",
         lambda: r"C:\Users\tester\AppData\Local",
     )
-    monkeypatch.setattr("autoflow.browser_session._wait_for_cdp", lambda endpoint, timeout_s=20: None)
     monkeypatch.setattr(
-        "autoflow.browser_session.subprocess.Popen",
-        lambda args, **kwargs: launched.append(args) or type("Proc", (), {})(),
+        "autoflow.browser_session._wait_for_cdp", lambda endpoint, timeout_s=20: None
     )
+    monkeypatch.setattr("autoflow.browser_session.subprocess.Popen", _fake_popen)
     monkeypatch.setattr(
         "autoflow.browser_session.reveal_headed_window",
-        lambda page: revealed.append(page),
+        lambda page: captured["revealed"].append(page),
     )
+    return captured
+
+
+def test_headed_wsl_launch_connects_to_windows_chrome(monkeypatch):
+    captured = _install_windows_chrome_stubs(monkeypatch, native=False)
 
     session = launch_browser_session(False, {"cookies": []})
-    assert "launch" not in captured
+
     assert captured["endpoint"] == "http://127.0.0.1:9334"
-    assert launched[0][0].endswith("chrome.exe")
-    assert "--remote-debugging-port=9334" in launched[0]
+    args = captured["launched"][0]
+    assert args[0] == "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
+    assert "--remote-debugging-port=9334" in args
+    assert captured["popen_kwargs"]["cwd"] == "/mnt/c/Windows"
     assert session["windowsChrome"] is True
+    assert captured["context_kwargs"]["storage_state"] == {"cookies": []}
     browser = captured["browser"]
     assert browser.default_page.closed is True
     assert browser.default_context.closed is False
-    assert revealed
-    assert captured["context"]["storage_state"] == {"cookies": []}
+    assert captured["revealed"]
 
     close_browser_session(session)
-    assert captured["browser_close"] == ("Browser.close", None)
+    assert captured["closed_via_cdp"] == ["Browser.close"]
+    assert captured["stopped"] is True
+
+
+def test_headed_native_windows_launch_connects_to_windows_chrome(monkeypatch):
+    captured = _install_windows_chrome_stubs(monkeypatch, native=True)
+
+    session = launch_browser_session(False, {"cookies": []})
+
+    args = captured["launched"][0]
+    assert args[0] == r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    assert "--remote-debugging-port=9334" in args
+    # 原生 Windows 没有 /mnt/c，直接从当前目录启动 chrome.exe。
+    assert captured["popen_kwargs"]["cwd"] is None
+    assert session["windowsChrome"] is True
+    assert captured["context_kwargs"]["storage_state"] == {"cookies": []}
+
+    close_browser_session(session)
+    assert captured["closed_via_cdp"] == ["Browser.close"]
     assert captured["stopped"] is True

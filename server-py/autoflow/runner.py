@@ -19,6 +19,14 @@ from .assertion_contract import (
 )
 from .locator_score import HeuristicLocatorScorer, LocatorScorer
 
+# 有头运行在 WSL/Windows 宿主上复用 Windows Chrome（WSLg 下 Linux Chromium 不可见）。
+from .browser_session import (
+    _close_windows_chrome,
+    _launch_windows_chrome,
+    headed_chromium_args,
+    should_use_windows_chrome,
+)
+
 
 def interpolate(
     value: str,
@@ -749,6 +757,13 @@ class _BrowserSession:
     据此关浏览器）。退出：先 ``hooks["browser"](None, None)`` 清理引用，再安全关闭
     context/browser 与 playwright。
 
+    有头且宿主为 WSL/Windows 时改走 ``_launch_windows_chrome``（Windows Chrome
+    via CDP）：WSLg 把 Linux Chromium 映射成用户看不见的 32x32 RAIL 桩窗口，原生
+    Windows 则不保证装了 Playwright 自带 Chromium。context 参数与自带 Chromium
+    路径保持一致（不设 viewport），保证同一 flow 跨宿主行为相同。取消是纯信号：
+    ManagedRunner 只置 signal，浏览器一律由 ``__exit__`` 关闭——CDP 连接的
+    ``browser.close()`` 只断连不杀进程，故先显式 ``Browser.close``。
+
     Trace 归调用方负责（须在 ``__exit__`` 前停止，保证 context 仍打开）。
     """
 
@@ -763,6 +778,7 @@ class _BrowserSession:
         self._environment = environment or {}
         self._storage_state = storage_state
         self._playwright_cm: Any = None
+        self._windows_chrome = False
         self.browser: Any = None
         self.context: Any = None
 
@@ -776,11 +792,25 @@ class _BrowserSession:
             headless = environment.get("headless")
             if headless is None:
                 headless = os.environ.get("MANAGED_RUNNER_HEADLESS", "1") != "0"
-            self.browser = playwright.chromium.launch(headless=bool(headless))
             context_kwargs: dict[str, Any] = {"locale": "zh-CN"}
             if self._storage_state is not None:
                 context_kwargs["storage_state"] = self._storage_state
-            self.context = self.browser.new_context(**context_kwargs)
+            self._windows_chrome = False
+            if not headless and should_use_windows_chrome():
+                result = _launch_windows_chrome(
+                    playwright,
+                    self._storage_state,
+                    context_kwargs=dict(context_kwargs),
+                )
+                self._windows_chrome = True
+                self.browser = result["browser"]
+                self.context = result["context"]
+            else:
+                launch_kwargs: dict[str, Any] = {"headless": bool(headless)}
+                if not headless:
+                    launch_kwargs["args"] = headed_chromium_args()
+                self.browser = playwright.chromium.launch(**launch_kwargs)
+                self.context = self.browser.new_context(**context_kwargs)
         except BaseException:
             # 启动中途失败时释放 playwright driver，等价原 `with sync_playwright()` 的清理。
             try:
@@ -793,6 +823,9 @@ class _BrowserSession:
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         self._hooks["browser"](None, None)
+        if self._windows_chrome and self.browser is not None:
+            # CDP 连接的 browser.close() 只断连；先杀掉 Windows Chrome 进程本身。
+            _close_windows_chrome(self.browser)
         if self.context is not None:
             _close_quietly(self.context.close)
         if self.browser is not None:
