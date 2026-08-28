@@ -1,0 +1,33 @@
+{
+  "id": "reference-ui-auto-new-architecture",
+  "name": "reference-ui-auto-new-architecture",
+  "title": "参考 ui_auto_new 整体架构改造",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "huangwf",
+  "assignee": "huangwf",
+  "createdAt": "2026-08-24",
+  "completedAt": "2026-08-28",
+  "branch": null,
+  "base_branch": "v3.2_flow_assertion",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-27-reliability-repair-waves",
+    "08-27-phase-0-contracts-baseline",
+    "08-27-phase-1-architecture",
+    "08-27-phase-2-recording-execution",
+    "08-27-phase-3-assertion",
+    "08-27-phase-4-orchestration-ui"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

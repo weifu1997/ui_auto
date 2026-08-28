@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "SQLite 备份必须拷贝 sqlite+wal+shm 三文件，约束 P-W2 restore 预快照"}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "录制会话生命周期与错误码；P-W3 改 create 返回时机时不得破坏 BUSY/ACTIVE 契约"}
+{"file": ".trellis/spec/backend/production-startup.md", "reason": "生产入口与 Playwright 浏览器路径；P-W5 与 WinSW PLAYWRIGHT_BROWSERS_PATH 对齐"}
+{"file": "docs/生产基线发布与分支保护.md", "reason": "集成分支与 CI 触发的现行文档，P-W1 必须同步而不是只改 yaml"}

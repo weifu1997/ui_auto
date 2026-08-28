@@ -16,7 +16,7 @@
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "test:unit": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:startup": "node --test scripts/start-production.test.mjs",
+    "test:startup": "node --test scripts/start-production.test.mjs scripts/setup-py.test.mjs",
     "test:e2e": "playwright test",
     "server:py": "node scripts/server-py.mjs",
     "test:py": "node scripts/run-py.mjs -m pytest server-py/tests",

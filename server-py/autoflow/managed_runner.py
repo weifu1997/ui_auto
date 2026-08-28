@@ -163,10 +163,7 @@ class ManagedRunner:
         try:
             started = callbacks.get("started")
             if callable(started):
-                try:
-                    accepted = started()
-                except Exception:
-                    accepted = False
+                accepted = started()
                 if accepted is False:
                     # Cancel/watchdog already finalized the row. Do not execute
                     # and do not call completed(); still drop the active slot.

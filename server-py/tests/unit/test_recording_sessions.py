@@ -626,7 +626,19 @@ def test_coordinator_real_browser_pumps_idle_binding_events(fixture_server):
             "/page1.html?delayed-recorder-events=1",
             headless=True,
         )
-        assert created["status"] == "recording"
+        assert created["status"] in ("starting", "recording")
+        deadline = threading.Event()
+        for _attempt in range(50):
+            status = coordinator.session_response(
+                coordinator._require_session(created["id"])
+            )["status"]
+            if status == "recording":
+                break
+            if status not in ("starting", "recording"):
+                pytest.fail(f"recording session entered {status} before becoming ready")
+            deadline.wait(0.1)
+        else:
+            pytest.fail("recording browser did not become ready")
         deadline = threading.Event()
         for _attempt in range(50):
             preview = coordinator.events_after(created["id"], 0)
@@ -680,6 +692,42 @@ def test_create_session_fails_fast_when_global_recording_slots_are_full():
             "project-1", "flow-2", other_env, "/login", owner_id="other", headless=True
         )
     assert error.value.code == "RECORDING_BUSY"
+
+
+def test_create_session_returns_starting_without_waiting_for_browser():
+    started = threading.Event()
+    release = threading.Event()
+
+    def launch(headless, storage_state):
+        started.set()
+        release.wait(timeout=5)
+        return _stub_launch(storage_state)
+
+    class _DeferredSubmit:
+        def __call__(self, function, *args):
+            thread = threading.Thread(target=function, args=args, daemon=True)
+            thread.start()
+
+            class _Future:
+                def result(self, timeout=None):
+                    thread.join(timeout)
+
+            return _Future()
+
+    coordinator = RecordingCoordinator(
+        submit=_DeferredSubmit(),
+        launch=launch,
+        idle_ms=1000,
+        max_ms=100_000,
+        now_ms=lambda: 1_000_000,
+    )
+    created = coordinator.create_session(
+        "project-1", "flow-1", ENVIRONMENT, "/login", headless=True
+    )
+    assert created["status"] == "starting"
+    assert started.wait(timeout=2)
+    release.set()
+    coordinator.close_all()
 
 
 def test_create_session_init_script_uses_environment_testid_attribute():

@@ -1,0 +1,33 @@
+{
+  "id": "next-roadmap-planning",
+  "name": "next-roadmap-planning",
+  "title": "规划下一阶段需求与缺陷",
+  "description": "基于代码、测试和既有自测证据，规划下一阶段缺陷修复与需求优先级",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "huangwf",
+  "assignee": "huangwf",
+  "createdAt": "2026-08-15",
+  "completedAt": "2026-08-28",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-15-flow-recording-mvp",
+    "08-15-flow-batch-execution-mvp",
+    "08-15-flow-revision-selection-correctness",
+    "08-16-legacy-e2e-failures",
+    "08-16-flow-retry-reproduction-correctness",
+    "08-21-flow-assertion-mvp"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
