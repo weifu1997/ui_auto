@@ -425,3 +425,37 @@ Filled source-backed frontend conventions, verified project checks, and archived
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: 审查跟进提交与 29 个任务正规归档
+
+**Date**: 2026-08-28
+**Task**: 审查跟进提交与 29 个任务正规归档
+**Branch**: `v3.2_flow_assertion`
+
+### Summary
+
+落地代码审查 planning-tier 跟进并推送；用 task.py archive 按子任务→父任务顺序归档 29 个已完成任务到 archive/2026-08/。
+
+### Main Changes
+
+- 修复 started()=False 泄漏并发槽，并提交审查跟进源码 e42ab8b
+- task.py archive 归档 29 个任务（先子后父），活跃任务清零
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e42ab8b` | (see git log) |
+
+### Testing
+
+- [OK] Python unit 321 passed；assertion-step-draft 与契约 parity 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 如需同步远程，推送归档提交；新需求再开 Trellis 任务
