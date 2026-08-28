@@ -1,5 +1,7 @@
+[CmdletBinding(SupportsShouldProcess=$true)]
 param([Parameter(Mandatory=$true)][string]$Backup, [string]$Root = "D:\AutoFlow", [string]$PythonExe = "")
 $ErrorActionPreference = "Stop"
+if (-not $PSCmdlet.ShouldProcess($Root, "Restore AutoFlow backup")) { return }
 $backupPath = (Resolve-Path -LiteralPath $Backup).Path
 if (-not (Test-Path -LiteralPath (Join-Path $backupPath "backup.json"))) { throw "Invalid AutoFlow backup" }
 $python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { Join-Path $Root "app\venv\Scripts\python.exe" }
@@ -22,6 +24,12 @@ if (Test-Path -LiteralPath $service) {
   }
 }
 $data = Join-Path $Root "data"; New-Item -ItemType Directory -Force -Path $data | Out-Null
+$liveDb = Join-Path $data "platform.sqlite"
+if (Test-Path -LiteralPath $liveDb) {
+  $preRestore = Join-Path $data ("pre-restore-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+  New-Item -ItemType Directory -Force -Path $preRestore | Out-Null
+  Copy-Item -LiteralPath $liveDb -Destination (Join-Path $preRestore "platform.sqlite") -Force
+}
 if (-not (Test-Path -LiteralPath (Join-Path $backupPath "platform.sqlite"))) { throw "Backup missing platform.sqlite" }
 foreach ($name in @("platform.sqlite", "autoflow.sqlite")) {
   Remove-Item -LiteralPath (Join-Path $data ("$name-wal")) -Force -ErrorAction SilentlyContinue

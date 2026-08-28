@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -802,6 +803,15 @@ class _BrowserSession:
         return False
 
 
+def _heartbeat_interval_s() -> float:
+    raw = os.environ.get("RUN_HEARTBEAT_INTERVAL_S", "30")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 30.0
+    return max(1.0, min(60.0, value))
+
+
 def execute_browser_run(
     input: dict[str, Any],
     hooks: dict[str, Any],
@@ -828,6 +838,23 @@ def execute_browser_run(
     tracing_started = False
     started = time.time()
     assertions: list[dict[str, Any]] = []
+    heartbeat_index = {"value": -1}
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat_loop() -> None:
+        interval = _heartbeat_interval_s()
+        while not stop_heartbeat.wait(interval):
+            progress = hooks.get("progress")
+            if callable(progress):
+                try:
+                    progress(heartbeat_index["value"])
+                except Exception:
+                    pass
+
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, name="run-heartbeat", daemon=True
+    )
+    heartbeat_thread.start()
     try:
         with _BrowserSession(hooks, input.get("environment", {})) as context:
             page = context.new_page()
@@ -842,8 +869,9 @@ def execute_browser_run(
                 for index, step in enumerate(steps):
                     if hooks.get("signal") and hooks["signal"].is_set():
                         raise RuntimeError("RUN_CANCELED")
-                    # W0-4 心跳：每步开始即上报进度，watchdog 依据其新鲜度判定，
-                    # 长跑但健康的 run 不再因 updated_at 停滞被误杀。
+                    heartbeat_index["value"] = index
+                    # W0-4 心跳：每步开始上报，步内由 heartbeat 线程续命，避免
+                    # 单步 timeout 大于 watchdog 窗口时被误杀。
                     progress = hooks.get("progress")
                     if callable(progress):
                         progress(index)
@@ -982,6 +1010,8 @@ def execute_browser_run(
             "flowOutputs": outputs,
             "assertions": assertions,
         }
+    finally:
+        stop_heartbeat.set()
 
 
 def _element_validation_login_error(

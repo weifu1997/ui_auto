@@ -237,6 +237,28 @@ def test_run_trend_window_includes_empty_days(tmp_path):
         services.close()
 
 
+def test_run_trend_window_excludes_day_before_calendar_start(tmp_path):
+    """now-N*24h would include the previous calendar day; the axis must not."""
+    services, session = _seed_services(tmp_path)
+    try:
+        _seed_run(services, "trend-too-old", "success", _iso(8, hour=18))
+        _seed_run(services, "trend-today", "success", _iso(0, hour=12))
+        response = _call(
+            _route(services),
+            token=session["token"],
+            query_string=b"window_days=7",
+            project_id=PROJECT_ID,
+        )
+        assert response.status_code == 200
+        body = json.loads(response.body)
+        dates = [point["date"] for point in body["points"]]
+        assert len(dates) == 7
+        assert _iso(8, hour=18)[:10] not in dates
+        assert _iso(0, hour=12)[:10] in dates
+    finally:
+        services.close()
+
+
 def test_run_trend_empty_project(tmp_path):
     """空库/无 run：points 为空列表。"""
     services, session = _seed_services(tmp_path)

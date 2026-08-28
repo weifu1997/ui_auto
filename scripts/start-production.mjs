@@ -214,16 +214,26 @@ export function startProduction({ environment = process.env, root = repoRoot } =
   });
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  let forceKill = null;
   const forwardSignal = (signal) => {
     if (!child.killed) child.kill(signal);
+    if (forceKill == null) {
+      forceKill = setTimeout(() => {
+        if (child.exitCode == null && child.signalCode == null) {
+          child.kill("SIGKILL");
+        }
+      }, 10_000);
+      forceKill.unref?.();
+    }
   };
-  signals.forEach((signal) => process.once(signal, forwardSignal));
+  signals.forEach((signal) => process.on(signal, forwardSignal));
 
   child.once("error", (error) => {
     console.error(`Failed to start production server: ${error.message}`);
     process.exitCode = 1;
   });
   child.once("exit", (code, signal) => {
+    if (forceKill != null) clearTimeout(forceKill);
     signals.forEach((item) => process.removeListener(item, forwardSignal));
     process.exitCode = signal ? 1 : code ?? 1;
   });

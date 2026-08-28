@@ -654,15 +654,8 @@ class _RunsLifecycleMixin:
             return
         input = self.managed_runner_input(run)
 
-        def started() -> None:
-            self.database.execute(
-                """
-                UPDATE platform_runs SET status = 'running', updated_at = ?
-                WHERE id = ? AND status = 'queued'
-                """,
-                (now(), run_id),
-            )
-            self.append_run_event(run_id, "run.started", {"executorType": "managed"})
+        def started() -> bool:
+            return self.mark_run_started(run_id)
 
         def progress(step_index: int) -> None:
             # W0-4 心跳：仅刷新 updated_at，不进事件流（每步都发事件会淹没详情页）。
@@ -878,6 +871,21 @@ class _RunsLifecycleMixin:
             run["projectId"],
         )
 
+    def mark_run_started(self, run_id: str) -> bool:
+        """Flip queued -> running. Return False if the row is no longer queued
+        (canceled/watchdog won the race) so the worker must not execute."""
+        updated = self.database.execute(
+            """
+            UPDATE platform_runs SET status = 'running', updated_at = ?
+            WHERE id = ? AND status = 'queued'
+            """,
+            (now(), run_id),
+        )
+        if updated.rowcount != 1:
+            return False
+        self.append_run_event(run_id, "run.started", {"executorType": "managed"})
+        return True
+
     def touch_run_heartbeat(self, run_id: str, step_index: int = -1) -> None:
         """W0-4 心跳：步骤开始时刷新 running 行的 updated_at。
 
@@ -968,21 +976,31 @@ class _RunsLifecycleMixin:
             pass
 
     def finalize_run_as_interrupted(self, run_id: str, reason: str) -> None:
-        updated = self.database.execute(
-            """
-            UPDATE platform_runs
-            SET status = 'failed', result = ?, updated_at = ?
-            WHERE id = ? AND status IN ('queued', 'running')
-            """,
-            (json({"error": reason, "interrupted": True}), now(), run_id),
-        )
-        if updated.rowcount != 1:
-            return
-        self.append_run_event(run_id, "run.interrupted", {"reason": reason})
-        self.append_run_event(
-            run_id, "run.failed", {"reason": reason, "interrupted": True}
-        )
-        self.audit_run_lifecycle(run_id, self.run_by_id(run_id), "failed")
-        self.queue_run_deliveries(
-            self.run_by_id(run_id), "failed", flush=False
-        )
+        try:
+            self.database.execute("BEGIN IMMEDIATE")
+            updated = self.database.execute(
+                """
+                UPDATE platform_runs
+                SET status = 'failed', result = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                (json({"error": reason, "interrupted": True}), now(), run_id),
+            )
+            if updated.rowcount != 1:
+                self.database.execute("ROLLBACK")
+                return
+            self.append_run_event(run_id, "run.interrupted", {"reason": reason})
+            self.append_run_event(
+                run_id, "run.failed", {"reason": reason, "interrupted": True}
+            )
+            self.audit_run_lifecycle(run_id, self.run_by_id(run_id), "failed")
+            self.queue_run_deliveries(
+                self.run_by_id(run_id), "failed", flush=False
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            try:
+                self.database.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise

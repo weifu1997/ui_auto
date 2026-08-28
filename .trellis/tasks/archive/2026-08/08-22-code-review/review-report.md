@@ -373,3 +373,12 @@ R-W6（TestClient 卡死）在本机 **未复现**：身份生命周期测试已
 | N-W7 | `redact_run_value` 失败保持原类型；单行解密失败跳过该 secret |
 | N-W12 | 终态录制 GET `/result`；编辑器自动/手动导入有步骤的草稿 |
 | N-W16 | CI 先 `uv lock --check` 再 `uv sync --frozen` |
+| N-W3 | 步内心跳线程按 `RUN_HEARTBEAT_INTERVAL_S` 续命 |
+| N-W4 | `mark_run_started` 0 行则 worker 跳过执行 |
+| N-W5 | `finalize_run_as_interrupted` 使用 `BEGIN IMMEDIATE` |
+| N-W8 | 趋势窗口按日历日起点截断，不追加窗口外日期 |
+| N-W9 | 录制全局槽满立即 `RECORDING_BUSY`（默认 4） |
+| N-W10 | 采集脚本注入环境 `testIdAttribute` |
+| N-W11 | cancel 只 set signal，不在锁内跨线程关浏览器 |
+| N-W13 | 切换动作时清掉 `trimCompare` |
+| S-W2/S-W6/S-W7/S-W8 | 安装/升级检查退出码；信号常驻+SIGKILL；WhatIf；upgrade 整段 try 回滚 |

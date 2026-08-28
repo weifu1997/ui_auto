@@ -22,6 +22,11 @@ sequence, not semantic versioning (no stable tagged release yet).
   keeps role accessible names; assertion reports use unique filenames; redact
   failures keep the payload type; terminal recordings can import in-memory drafts;
   CI checks `uv.lock` before `uv sync --frozen`.
+- Planning-tier follow-up: in-step run heartbeat, skip execution when queued
+  cancel wins, transactional interrupted finalize, calendar-aligned run trend,
+  recording slot fail-fast, capture honors testIdAttribute, cancel only signals
+  the worker, PowerShell ShouldProcess/upgrade try scope, and five assertion
+  actions in the contract.
 
 ### Phase 2 — Stable internal production
 

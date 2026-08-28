@@ -250,3 +250,28 @@ def test_absorb_late_completed_run_keeps_failed_but_persists_outputs(
         assert "run.lateCompletion" in kinds
     finally:
         services.close()
+
+
+def test_mark_run_started_only_flips_queued_rows(tmp_path, monkeypatch):
+    services, _, project_id = _setup_services(tmp_path, monkeypatch)
+    try:
+        queued = _insert_run(services, project_id, status="queued")
+        canceled = _insert_run(services, project_id, status="canceled")
+        assert services.mark_run_started(queued) is True
+        assert (
+            services.database.execute(
+                "SELECT status FROM platform_runs WHERE id = ?", (queued,)
+            ).fetchone()[0]
+            == "running"
+        )
+        kinds = [
+            row[0]
+            for row in services.database.execute(
+                "SELECT kind FROM platform_run_events WHERE run_id = ?", (queued,)
+            ).fetchall()
+        ]
+        assert "run.started" in kinds
+        assert services.mark_run_started(canceled) is False
+        assert services.mark_run_started(queued) is False
+    finally:
+        services.close()

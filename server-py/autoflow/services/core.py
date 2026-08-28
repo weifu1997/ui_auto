@@ -39,7 +39,7 @@ class CoreServices:
             ),
         )
         self._recording_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="recording"
+            max_workers=4, thread_name_prefix="recording"
         )
         self.recording_session_state = RecordingSessionStateStore()
         self.recording_coordinator = RecordingCoordinator(

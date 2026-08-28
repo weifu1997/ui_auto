@@ -65,4 +65,6 @@ finally {
   Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
 }
 & (Join-Path $resolvedRoot "AutoFlow.exe") install
+if ($LASTEXITCODE -ne 0) { throw "AutoFlow service install failed with exit code $LASTEXITCODE" }
 & (Join-Path $resolvedRoot "AutoFlow.exe") start
+if ($LASTEXITCODE -ne 0) { throw "AutoFlow service start failed with exit code $LASTEXITCODE" }

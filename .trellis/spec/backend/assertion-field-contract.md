@@ -49,6 +49,6 @@ assertMatch  assertVisibility  assertOperator  assertAttribute  trimCompare
 
 ## 5. 跨层 parity 约束
 
-- 前端 `actionOptions` 的断言动作 == 后端 `_ASSERTION_TYPES` 键（4 个）。
+- 前端 `actionOptions` 的断言动作 == 后端 `ASSERTION_TYPES` 键（5 个，含 URL 断言）。
 - 前端 `assertions.ts` 枚举 == 后端 `assertion_contract.py` 枚举 == 本契约第 1 节表。
 - 任一方向漂移，对应 parity 测试即红。

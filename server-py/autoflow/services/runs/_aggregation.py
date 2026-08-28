@@ -119,9 +119,23 @@ class _AggregationMixin:
         """
         params: list[Any] = [project_id]
         window_sql = ""
-        if window_days is not None and window_days > 0:
+        bounded = window_days is not None and window_days > 0
+        empty: dict[str, int] = {
+            "runTotal": 0,
+            "runPassed": 0,
+            "runFailed": 0,
+            "assertionTotal": 0,
+            "assertionPassed": 0,
+        }
+        buckets: dict[str, dict[str, Any]] = {}
+        if bounded:
+            today = datetime.now(timezone.utc).date()
+            start = today - timedelta(days=window_days - 1)
             window_sql = "AND created_at >= ?"
-            params.append(days_ago_iso(window_days))
+            params.append(f"{start.isoformat()}T00:00:00.000Z")
+            for offset in range(window_days):
+                day = (start + timedelta(days=offset)).isoformat()
+                buckets[day] = {"date": day, **empty}
         rows = self.database.execute(
             f"""
             SELECT status, created_at, result FROM platform_runs
@@ -131,27 +145,14 @@ class _AggregationMixin:
             tuple(params),
         ).fetchall()
 
-        empty: dict[str, int] = {
-            "runTotal": 0,
-            "runPassed": 0,
-            "runFailed": 0,
-            "assertionTotal": 0,
-            "assertionPassed": 0,
-        }
-        buckets: dict[str, dict[str, Any]] = {}
-        if window_days is not None and window_days > 0:
-            today = datetime.now(timezone.utc).date()
-            start = today - timedelta(days=window_days - 1)
-            for offset in range(window_days):
-                day = (start + timedelta(days=offset)).isoformat()
-                buckets[day] = {"date": day, **empty}
-
         for status, created_at, result in rows:
             day = created_at[:10] if created_at else None
             if not day:
                 continue
             bucket = buckets.get(day)
             if bucket is None:
+                if bounded:
+                    continue
                 bucket = {"date": day, **empty}
                 buckets[day] = bucket
             bucket["runTotal"] += 1
