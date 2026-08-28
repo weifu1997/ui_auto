@@ -9,10 +9,12 @@ Move-Item -LiteralPath $current -Destination $previous
 New-Item -ItemType Directory -Path $current | Out-Null
 Expand-Archive -LiteralPath $packagePath -DestinationPath $current -Force
 Push-Location $current; npm ci; npm run build; Pop-Location
-if (-not (Test-Path -LiteralPath (Join-Path $current "venv\Scripts\python.exe"))) { & $python -m venv (Join-Path $current "venv") }
-& (Join-Path $current "venv\Scripts\python.exe") -m pip install -r (Join-Path $current "server-py\requirements.txt")
+& $python -m pip install --upgrade uv
+$env:UV_PROJECT_ENVIRONMENT = Join-Path $current "venv"
 Push-Location (Join-Path $current "server-py")
-& (Join-Path $current "venv\Scripts\python.exe") -m playwright install chromium
+& $python -m uv sync --no-dev --locked
+& $python -m uv run --no-dev --frozen python -m playwright install chromium
 Pop-Location
+Remove-Item Env:UV_PROJECT_ENVIRONMENT
 try { & $service start; Start-Sleep -Seconds 3; Invoke-RestMethod -Uri "http://127.0.0.1:8787/ready" | Out-Null }
 catch { & $service stop; Remove-Item -LiteralPath $current -Recurse -Force; Move-Item -LiteralPath $previous -Destination $current; & $service start; Write-Host "Upgrade failed and the previous version was restored."; Write-Host "If the database is inconsistent, restore the pre-upgrade backup manually: scripts\restore.ps1 -Backup <backup-directory>."; throw "Upgrade failed and previous version was restored" }

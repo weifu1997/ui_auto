@@ -14,6 +14,13 @@ npm run build
 npm run start
 ```
 
+> `npm run setup:py` 需要 [uv](https://docs.astral.sh/uv/) 已安装（CI 通过
+> `astral-sh/setup-uv` 自动提供）。首次安装：
+> `curl -LsSf https://astral.sh/uv/install.sh | sh`
+> （Windows PowerShell：`irm https://astral.sh/uv/install.ps1 | iex`）。
+> Python 依赖在 `server-py/pyproject.toml` 声明，由跨平台 `server-py/uv.lock` 精确锁定，
+> `uv sync` 按锁安装。
+
 `npm run start` 是唯一受支持的应用入口，需要 Node.js `>=20.12`。它会自动设置 `NODE_ENV=production`，检查 `dist/index.html` 和非空的 `PLATFORM_SECRET_KEY`（或可读且非空的 `PLATFORM_SECRET_KEY_FILE` 密钥文件；两者同时设置时直接环境变量优先），默认监听 `127.0.0.1:8787`。未构建或未设置密钥时，服务会在监听前失败并给出修复提示。
 
 在 WSL/Linux 中，首次在仓库根目录创建受保护的 `.env`，然后填写至少一个

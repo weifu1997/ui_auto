@@ -41,8 +41,11 @@ export function projectVenvs() {
   ];
 }
 
+// uv-managed venvs do not ship pip, so a usable venv only needs its
+// interpreter to exist. The pip path is kept on the candidates for legacy
+// callers but is no longer required for detection.
 export function isUsableVenv(venv) {
-  return existsSync(venv.python) && existsSync(venv.pip);
+  return existsSync(venv.python);
 }
 
 export function resolvePython() {

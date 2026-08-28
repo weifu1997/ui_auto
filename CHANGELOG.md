@@ -15,7 +15,11 @@ sequence, not semantic versioning (no stable tagged release yet).
 - Observability: `GET /metrics` JSON endpoint (OBS-02).
 - Quality: frontend coverage thresholds and CI dependency/security scanning
   (QA-01).
-- Release: pinned `requirements.lock` + `verify-lock.py` (REL-01).
+- Release: Python 依赖迁移到 uv — `server-py/pyproject.toml` 声明 + 跨平台
+  `server-py/uv.lock` 精确锁定，`setup-py.mjs` 用 `uv sync` 按锁安装；移除
+  `requirements.lock` 参考锁与 `verify-lock.py`；Windows 生产部署在脚本内
+  `pip install uv` 引导并按 `uv sync --no-dev --locked` 安装（生产不再装
+  pytest/pytest-asyncio/httpx dev 组），CI 增加 `uv lock --check` 漂移护栏。
 
 ### Phase 1 — Controlled multi-team pilot
 

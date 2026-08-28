@@ -43,10 +43,12 @@ $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $resolvedRoot "browsers"
 try { Push-Location $appRoot; npm ci; npm run build; npx playwright install chromium; Pop-Location }
 finally { $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath }
-& $python -m venv (Join-Path $appRoot "venv")
-& (Join-Path $appRoot "venv\Scripts\python.exe") -m pip install -r (Join-Path $appRoot "server-py\requirements.txt")
+& $python -m pip install --upgrade uv
+$env:UV_PROJECT_ENVIRONMENT = Join-Path $appRoot "venv"
 Push-Location (Join-Path $appRoot "server-py")
-& (Join-Path $appRoot "venv\Scripts\python.exe") -m playwright install chromium
+& $python -m uv sync --no-dev --locked
+& $python -m uv run --no-dev --frozen python -m playwright install chromium
 Pop-Location
+Remove-Item Env:UV_PROJECT_ENVIRONMENT
 & (Join-Path $resolvedRoot "AutoFlow.exe") install
 & (Join-Path $resolvedRoot "AutoFlow.exe") start
