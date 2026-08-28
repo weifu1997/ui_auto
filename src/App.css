@@ -1188,6 +1188,23 @@
   display: grid;
   gap: var(--space-1);
 }
+.batch-step-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+}
+.batch-step-bar > span {
+  font-weight: 600;
+  color: var(--ink);
+}
 .step-item {
   min-height: 61px;
   display: grid;
@@ -1201,6 +1218,14 @@
   color: var(--ink);
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+.step-item.has-select {
+  grid-template-columns: 20px 20px 22px minmax(0, 1fr) 25px;
+}
+.step-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .step-item:hover {
   background: var(--surface-2);
@@ -1324,6 +1349,24 @@
   flex: 1;
   min-width: 0;
 }
+.recording-assertions {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+.recording-assertions > p {
+  margin: 0;
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.recording-assertion-row {
+  display: flex;
+  align-items: center;
+  font-size: var(--text-footnote);
+}
 .validation-summary-tags {
   display: inline-flex;
   flex-wrap: wrap;
@@ -1389,6 +1432,21 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+/* 虚拟列表滚动容器与行间距（@tanstack/react-virtual 绝对定位行） */
+.virtual-list-scroll {
+  overflow-y: auto;
+}
+.virtual-list-scroll .recording-step-item {
+  margin-bottom: var(--space-1);
+}
+.virtual-list-scroll .recording-assertion-row {
+  margin-bottom: var(--space-2);
+}
+.recording-element-row {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-footnote);
+  color: var(--text);
 }
 .recording-step-item {
   display: flex;
@@ -1632,6 +1690,237 @@
   margin: 2px 0 0;
   font-size: var(--text-caption);
   color: var(--muted);
+}
+.assertion-block {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.assertion-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.assertion-heading h2 {
+  font-size: var(--text-title3);
+  margin: 0;
+}
+.assertion-heading span {
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.assertion-export {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.assertion-export .ant-btn-sm {
+  font-size: var(--text-caption);
+}
+.assertion-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--text-caption);
+}
+.summary-rate {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.summary-rate span {
+  color: var(--muted);
+}
+.summary-rate strong {
+  font-size: var(--text-title3);
+  color: var(--success-strong);
+}
+.summary-counts {
+  display: inline-flex;
+  gap: 12px;
+}
+.summary-counts .passed {
+  color: var(--success-strong);
+}
+.summary-counts .failed {
+  color: var(--error);
+}
+.summary-types {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.type-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--line);
+  color: var(--text-secondary);
+}
+.assertion-list {
+  display: grid;
+  gap: 8px;
+}
+.assertion-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.assertion-row.passed {
+  border-color: var(--success);
+}
+.assertion-row.failed {
+  border-color: var(--error);
+}
+.assertion-icon {
+  font-size: var(--text-body);
+}
+.assertion-row.passed .assertion-icon {
+  color: var(--success-strong);
+}
+.assertion-row.failed .assertion-icon {
+  color: var(--error);
+}
+.assertion-title strong,
+.assertion-title small {
+  display: block;
+}
+.assertion-title small {
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.assertion-compare {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.assertion-compare code {
+  color: var(--ink);
+  background: var(--subtle);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
+.assertion-verdict {
+  font-size: var(--text-caption);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.assertion-verdict.passed {
+  color: var(--success-strong);
+}
+.assertion-verdict.failed {
+  color: var(--error);
+}
+.assertion-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-size: var(--text-caption);
+  color: var(--muted);
+  background: var(--surface);
+}
+.assertion-stats-bar strong {
+  font-size: var(--text-title3);
+  color: var(--success-strong);
+}
+.assertion-stats-bar small {
+  margin-left: auto;
+  color: var(--muted);
+}
+.orchestration-dashboard {
+  margin-bottom: 16px;
+  padding: 16px;
+}
+.dashboard-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.dashboard-heading h3 {
+  margin: 0;
+  font-size: var(--text-emphasis);
+}
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.chart-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--surface);
+}
+.chart-card h4 {
+  margin: 0 0 8px;
+  font-size: var(--text-footnote);
+  color: var(--muted);
+  font-weight: 600;
+}
+.batch-detail {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0;
+}
+.batch-assertion-summary {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--subtle);
+  font-size: var(--text-caption);
+  color: var(--ink);
+}
+.batch-assertion-summary.empty {
+  color: var(--muted);
+}
+.batch-assertion-summary strong {
+  margin-right: 10px;
+}
+.batch-assertion-summary .pass-rate {
+  color: var(--muted);
+}
+.batch-assertion-failures {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.batch-assertion-failures li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  color: var(--error);
+}
+.batch-assertion-failures .failure-flow {
+  font-weight: 600;
+}
+.batch-assertion-failures code {
+  color: var(--ink);
+  background: var(--surface);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
 }
 .detail-aside {
   display: grid;

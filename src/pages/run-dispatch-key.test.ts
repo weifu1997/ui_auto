@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlatformApiError } from "../api/platform-api";
 import {
+  RunDispatchKeyMap,
+  RUN_DISPATCH_KEY_STORAGE,
   nextRunDispatchKey,
   releaseRunDispatchKey,
   runIntentKey,
@@ -65,5 +67,57 @@ describe("nextRunDispatchKey / releaseRunDispatchKey", () => {
 
     releaseRunDispatchKey(map, intent, new PlatformApiError(409, "RUN_NOT_RETRYABLE"));
     expect(map.has(intent)).toBe(false);
+  });
+});
+
+describe("RunDispatchKeyMap persistence (W1-7)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("write-through: set/delete persist to user-scoped storage and survive remount", () => {
+    const store = new RunDispatchKeyMap();
+    const intentA = runIntentKey({ projectId: "p1", flowId: "flow-a" });
+    const intentB = runIntentKey({ projectId: "p1", flowId: "flow-b" });
+    const keyA = nextRunDispatchKey(store, intentA);
+    nextRunDispatchKey(store, intentB);
+
+    const hydrated = new RunDispatchKeyMap();
+    expect(hydrated.get(intentA)).toBe(keyA);
+    expect(hydrated.get(intentB)).toBeTruthy();
+
+    // 成功释放后重挂载：key 不再复用（也不会被误吞）。
+    releaseRunDispatchKey(store, intentA);
+    const remounted = new RunDispatchKeyMap();
+    expect(remounted.has(intentA)).toBe(false);
+    expect(remounted.has(intentB)).toBe(true);
+  });
+
+  it("drops entries older than the 24h TTL on hydration", () => {
+    // 先用探针写一条，确定当前用户分区的实际存储键（登录态在测试里未定）。
+    const probe = new RunDispatchKeyMap();
+    probe.set(runIntentKey({ projectId: "p0", flowId: "flow-probe" }), "web-probe");
+    const scopedKey =
+      Object.keys(localStorage).find((key) => key.startsWith(RUN_DISPATCH_KEY_STORAGE)) ??
+      RUN_DISPATCH_KEY_STORAGE;
+
+    const intent = runIntentKey({ projectId: "p1", flowId: "flow-old" });
+    const freshIntent = runIntentKey({ projectId: "p1", flowId: "flow-fresh" });
+    const staleAt = Date.now() - 25 * 60 * 60 * 1000;
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({
+        [intent]: { key: "web-stale-key", at: staleAt },
+        [freshIntent]: { key: "web-fresh-key", at: Date.now() },
+      }),
+    );
+
+    const store = new RunDispatchKeyMap();
+    expect(store.has(intent)).toBe(false);
+    expect(store.get(freshIntent)).toBe("web-fresh-key");
   });
 });

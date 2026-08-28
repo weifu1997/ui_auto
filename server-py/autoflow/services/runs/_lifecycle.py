@@ -1,34 +1,23 @@
-"""Run spec resolution, enqueue/execute lifecycle, deletion, and metrics."""
+"""Run lifecycle: spec resolution, create/cancel/retry/terminal-state persistence."""
 from __future__ import annotations
 
 import json as _json
+import shutil
+import tempfile
+import threading
 import uuid
 import re
-import shutil
+from pathlib import Path
 from typing import Any
-from ..core import json, now, parse_json, public_flow_output_names, safe_artifact_name
-from ..resources import as_record
-from ._shared import (
-    _TERMINAL_RUN_STATUSES,
-)
+from ...core import json, now, parse_json, public_flow_output_names, safe_artifact_name
+from ...resources import as_record
+from .._shared import _TERMINAL_RUN_STATUSES
 
-
-class RunServices:
-    """Run spec resolution, enqueue/execute lifecycle, deletion, and metrics."""
-
-    def append_run_event(
-        self, run_id: str, kind: str, data: dict[str, Any]
-    ) -> None:
-        self.database.execute(
-            """
-            INSERT INTO platform_run_events (run_id, kind, data, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (run_id, kind, json(data), now()),
-        )
+class _RunsLifecycleMixin:
+    """Run lifecycle: create/cancel/retry/terminal-state."""
 
     def resolve_run_spec(self, input: dict[str, Any]) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         project_id = input["projectId"]
         revision = self.published_revision_for(
@@ -159,7 +148,7 @@ class RunServices:
     def _preflight_retry_variables(
         self, project_id: str, flow: dict[str, Any], secret_names: list[str]
     ) -> None:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         required = self._required_retry_variable_names(flow, secret_names)
         if not required:
@@ -196,7 +185,7 @@ class RunServices:
             raise PlatformError(409, "RUN_VARIABLE_NOT_CONFIGURED")
 
     def _preflight_retry_spec(self, project_id: str, spec: dict[str, Any]) -> None:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         snapshot_secret_names = [
             name
@@ -222,7 +211,7 @@ class RunServices:
 
     def clone_retry_spec_from_run(self, run: dict[str, Any]) -> dict[str, Any]:
         """从源 run 的持久 snapshot 构造一对一 retry spec，不重新解析 revision/dataset。"""
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         snapshot = run.get("snapshot")
         if not isinstance(snapshot, dict):
@@ -309,7 +298,7 @@ class RunServices:
         actor_id: str,
         dispatch_key: str | None = None,
     ) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         run = self.run_by_id(run_id)
         if run["projectId"] != project_id:
@@ -354,7 +343,7 @@ class RunServices:
         batch_item_index: int | None = None,
         retry_of_run_id: str | None = None,
     ) -> str:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         project_id = spec["projectId"]
         revision = spec["revision"]
@@ -466,43 +455,10 @@ class RunServices:
             )
         return run_id
 
-    def queue_published_runs(self, input: dict[str, Any]) -> dict[str, Any]:
-        spec = self.resolve_run_spec(input)
-        run_ids: list[str] = []
-        self.database.execute("BEGIN IMMEDIATE")
-        try:
-            for row in spec["rows"]:
-                dispatch_key = (
-                    f"{input['dispatchKey']}:{row['rowNumber'] or 0}"
-                    if input.get("dispatchKey")
-                    else None
-                )
-                run_ids.append(
-                    self.insert_run_from_spec(
-                        spec,
-                        row=row,
-                        created_by=input["createdBy"],
-                        source=input["source"],
-                        dispatch_key=dispatch_key,
-                    )
-                )
-            self.database.execute("COMMIT")
-        except Exception:
-            self.database.execute("ROLLBACK")
-            raise
-        for run_id in run_ids:
-            self.enqueue_managed_run(run_id)
-        return {
-            "runIds": run_ids,
-            "revision": spec["revision"],
-            "environmentId": spec["environmentId"],
-            "datasetVersionId": spec["datasetVersionId"],
-        }
-
     def run_by_id(
         self, run_id: str, project_id: str | None = None
     ) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         row = self.database.execute(
             """
@@ -533,7 +489,7 @@ class RunServices:
         }
 
     def delete_run(self, project_id: str, run_id: str) -> dict[str, Any]:
-        from ..http import PlatformError
+        from ...http import PlatformError
 
         run = self.database.execute(
             "SELECT id, project_id, status FROM platform_runs WHERE id = ?",
@@ -605,75 +561,30 @@ class RunServices:
             raise
         return {"runIds": deletable_run_ids, "deletedCount": deleted_count}
 
-    def run_response(self, run: dict[str, Any]) -> dict[str, Any]:
-        agent = self.database.execute(
+    def request_run_cancel(self, run_id: str, project_id: str) -> None:
+        """W1-5：取消标记先行落库。
+
+        旧实现"先读状态再分支 UPDATE"存在窗口——读到 queued 后 worker 抢先
+        转 running，分支语句 0 行命中，cancellation_requested 未持久化，
+        终态被错记为 failed。现在无条件先把标记写到（queued/running 界内），
+        再对仍处 queued 的行直接置 canceled；completed 映射尊重标记。
+        """
+        self.database.execute(
             """
-            SELECT id, name, browser_version, os, max_concurrency, last_seen_at
-            FROM agents WHERE id = ?
+            UPDATE platform_runs
+            SET cancellation_requested = 1, updated_at = ?
+            WHERE id = ? AND project_id = ? AND status IN ('queued', 'running')
             """,
-            (run["agentId"],),
-        ).fetchone()
-        artifacts = self.database.execute(
+            (now(), run_id, project_id),
+        )
+        self.database.execute(
             """
-            SELECT id, name, content_type, created_at FROM platform_artifacts
-            WHERE run_id = ? ORDER BY created_at ASC
+            UPDATE platform_runs
+            SET status = 'canceled', updated_at = ?
+            WHERE id = ? AND project_id = ? AND status = 'queued'
             """,
-            (run["id"],),
-        ).fetchall()
-        events = self.database.execute(
-            """
-            SELECT id, kind, data, created_at FROM platform_run_events
-            WHERE run_id = ? ORDER BY id ASC LIMIT 500
-            """,
-            (run["id"],),
-        ).fetchall()
-        flow_outputs = self.database.execute(
-            """
-            SELECT name, value, source, created_at FROM flow_outputs
-            WHERE run_id = ? ORDER BY name ASC
-            """,
-            (run["id"],),
-        ).fetchall()
-        response: dict[str, Any] = {
-            **run,
-            "artifacts": [
-                {
-                    "id": row[0],
-                    "name": row[1],
-                    "contentType": row[2],
-                    "createdAt": row[3],
-                }
-                for row in artifacts
-            ],
-            "events": [
-                {
-                    "id": row[0],
-                    "kind": row[1],
-                    "data": parse_json(row[2], {}),
-                    "at": row[3],
-                }
-                for row in events
-            ],
-            "flowOutputs": [
-                {
-                    "name": row[0],
-                    "value": row[1],
-                    "source": row[2],
-                    "createdAt": row[3],
-                }
-                for row in flow_outputs
-            ],
-        }
-        if run["executorType"] == "agent" and agent:
-            response["agent"] = {
-                "id": agent[0],
-                "name": agent[1],
-                "browserVersion": agent[2],
-                "os": agent[3],
-                "maxConcurrency": agent[4],
-                "lastSeenAt": agent[5],
-            }
-        return response
+            (now(), run_id, project_id),
+        )
 
     def cancel_managed_run(self, run_id: str) -> bool:
         return self.managed_runner.cancel(run_id)
@@ -753,6 +664,10 @@ class RunServices:
             )
             self.append_run_event(run_id, "run.started", {"executorType": "managed"})
 
+        def progress(step_index: int) -> None:
+            # W0-4 心跳：仅刷新 updated_at，不进事件流（每步都发事件会淹没详情页）。
+            self.touch_run_heartbeat(run_id, step_index)
+
         def event(kind: str, data: dict[str, Any]) -> None:
             self.append_run_event(
                 run_id,
@@ -789,32 +704,7 @@ class RunServices:
             )
 
         def completed(result: dict[str, Any]) -> None:
-            current_run = self.run_by_id(run_id)
-            safe_result = self.redact_run_value(current_run, result)
-            requested_status = (
-                result.get("status")
-                if result.get("status") in ("success", "failed")
-                else "failed"
-            )
-            status = "canceled" if current_run["cancellationRequested"] else requested_status
-            updated = self.database.execute(
-                """
-                UPDATE platform_runs
-                SET status = ?, result = ?, updated_at = ?
-                WHERE id = ? AND status IN ('queued', 'running')
-                """,
-                (status, json(safe_result), now(), run_id),
-            )
-            if updated.rowcount != 1:
-                return
-            self.persist_flow_outputs(current_run, safe_result)
-            self.append_run_event(
-                run_id,
-                "run.complete",
-                {"status": status, "result": safe_result, "executorType": "managed"},
-            )
-            self.audit_run_lifecycle(run_id, current_run, status)
-            self.queue_run_deliveries(self.run_by_id(run_id), status)
+            self.finalize_completed_run(run_id, result)
 
         self.managed_runner.enqueue(
             run_id,
@@ -824,79 +714,103 @@ class RunServices:
                 "event": event,
                 "artifact": artifact,
                 "completed": completed,
+                "progress": progress,
             },
             kind="run",
             workspace_id=self.project_for(run["projectId"])["workspace_id"],
         )
 
-    def metrics(self) -> dict[str, Any]:
-        """OBS-02 service-level metrics (DB-backed, JSON)."""
-        run_counts: dict[str, int] = {}
-        for row in self.database.execute(
-            "SELECT status, COUNT(*) FROM platform_runs GROUP BY status"
-        ).fetchall():
-            run_counts[str(row[0])] = int(row[1])
+    @staticmethod
+    def _flow_secret_names(flow: Any) -> list[str]:
+        """从试跑流程步骤里收集 `{{secret.X}}` 占位符对应的 secret 名。"""
+        steps = flow.get("steps") if isinstance(flow, dict) else []
+        if not isinstance(steps, list):
+            steps = []
+        names: set[str] = set()
+        for step in steps:
+            record = as_record(step)
+            value = record.get("value")
+            if not isinstance(value, str):
+                continue
+            for match in re.finditer(r"{{\s*([^}]+?)\s*}}", value):
+                expression = match.group(1).strip()
+                if expression.startswith("secret."):
+                    name = expression[len("secret.") :].strip()
+                    if name:
+                        names.add(name)
+        return sorted(names)
 
-        delivery_counts: dict[str, int] = {}
-        for row in self.database.execute(
-            "SELECT status, COUNT(*) FROM deliveries GROUP BY status"
-        ).fetchall():
-            delivery_counts[str(row[0])] = int(row[1])
+    def preview_run(self, project_id: str, input: dict[str, Any]) -> dict[str, Any]:
+        """断言试跑通道：直调 runner，最小 hooks，不持久化。
 
-        disk: dict[str, int] | None = None
-        try:
-            usage = shutil.disk_usage(str(self.data_directory))
-            disk = {"total": usage.total, "used": usage.used, "free": usage.free}
-        except Exception:
-            pass
+        - `upToStepId` 执行到该步（含）；不存在时复用 `RUN_STEP_NOT_FOUND`。
+        - 不写 `platform_runs` / `platform_run_events` / artifacts。
+        - 服务端解析项目 secret 注入 `input.secrets`，返回前统一脱敏。
+        """
+        from ...http import PlatformError
+        from ...runner import execute_browser_run
 
-        return {
-            "runs": run_counts,
-            "deliveries": delivery_counts,
-            "disk": disk,
-            "artifactBytes": self._artifact_bytes(),
-        }
-
-    def _artifact_bytes(self) -> int:
-        total = 0
-        try:
-            for path in self.managed_runner.artifact_directory.rglob("*"):
-                if path.is_file():
-                    total += path.stat().st_size
-        except Exception:
-            pass
-        return total
-
-    def redact_run_value(self, run: dict[str, Any], value: Any) -> Any:
-        try:
-            rows = self.database.execute(
-                """
-                SELECT name, iv, tag, ciphertext FROM project_secrets
-                WHERE project_id = ?
-                """,
-                (run["projectId"],),
-            ).fetchall()
-            secrets = {
-                row[0]: self.decrypt({"iv": row[1], "tag": row[2], "ciphertext": row[3]})
-                for row in rows
+        flow = as_record(input.get("flow"))
+        steps = flow.get("steps") if isinstance(flow, dict) else []
+        if not isinstance(steps, list):
+            steps = []
+        up_to_step_id = input.get("upToStepId")
+        if up_to_step_id:
+            if not any(as_record(step).get("id") == up_to_step_id for step in steps):
+                raise PlatformError(400, "RUN_STEP_NOT_FOUND")
+        requested = input.get("secretNames")
+        if not isinstance(requested, list):
+            requested = []
+        secret_names = sorted(
+            {
+                *[name for name in requested if isinstance(name, str)],
+                *self._flow_secret_names(flow),
             }
-
-            def redact(current: Any) -> Any:
-                if isinstance(current, str):
-                    result = current
-                    for secret in secrets.values():
-                        if secret:
-                            result = result.replace(secret, "***")
-                    return result
-                if isinstance(current, list):
-                    return [redact(item) for item in current]
-                if isinstance(current, dict):
-                    return {key: redact(item) for key, item in current.items()}
-                return current
-
-            return redact(value)
-        except Exception:
-            return "***"
+        )
+        execution_input = {
+            "environment": as_record(input.get("environment")),
+            "flow": {
+                "id": flow.get("id") if isinstance(flow, dict) else "preview",
+                "name": flow.get("name") if isinstance(flow, dict) else "试跑流程",
+                "steps": steps,
+            },
+            "elements": input.get("elements")
+            if isinstance(input.get("elements"), list)
+            else [],
+            "variables": input.get("variables")
+            if isinstance(input.get("variables"), dict)
+            else {},
+            "data": input.get("data") if isinstance(input.get("data"), dict) else {},
+            "secrets": self.secret_values(project_id, secret_names),
+            "upToStepId": up_to_step_id or None,
+        }
+        signal = threading.Event()
+        events: list[dict[str, Any]] = []
+        # W1-2：预览产物统一落在专用临时目录，结束时整体删除，
+        # 不再向 /tmp 根部散落一次性 png/zip。
+        preview_directory = tempfile.mkdtemp(prefix="autoflow-preview-")
+        hooks = {
+            "signal": signal,
+            "artifact_path": lambda _name, extension: str(
+                Path(preview_directory) / f"artifact_{uuid.uuid4()}.{extension}"
+            ),
+            "artifact": lambda _data: None,
+            "event": lambda kind, data: events.append({"kind": kind, "data": data}),
+            "browser": lambda *_args: None,
+        }
+        try:
+            result = execute_browser_run(execution_input, hooks)
+        except RuntimeError as error:
+            if str(error) == "RUN_STEP_NOT_FOUND":
+                raise PlatformError(400, "RUN_STEP_NOT_FOUND") from None
+            raise PlatformError(400, "PREVIEW_RUN_FAILED") from error
+        finally:
+            shutil.rmtree(preview_directory, ignore_errors=True)
+        run_ref = {"projectId": project_id}
+        return {
+            "result": self.redact_run_value(run_ref, result),
+            "events": self.redact_run_value(run_ref, events),
+        }
 
     def persist_flow_outputs(
         self,
@@ -963,6 +877,94 @@ class RunServices:
             detail,
             run["projectId"],
         )
+
+    def touch_run_heartbeat(self, run_id: str, step_index: int = -1) -> None:
+        """W0-4 心跳：步骤开始时刷新 running 行的 updated_at。
+
+        watchdog 只依据 updated_at 新鲜度判活；异常情况下静默放弃本次心跳
+        （失败只影响误杀窗口，绝不能把执行线程拖挂）。
+        """
+        try:
+            self.database.execute(
+                """
+                UPDATE platform_runs SET updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now(), run_id),
+            )
+        except Exception:
+            pass
+
+    def finalize_completed_run(self, run_id: str, result: dict[str, Any]) -> None:
+        """执行终态落库（W1-1 事务化）。
+
+        状态终写、flowOutputs、run.complete 事件、审计与投递登记放在同一个
+        BEGIN IMMEDIATE 内；中途崩溃不再出现「账面已结束但输出丢失」。
+        投递的网络发送在提交之后统一触发。截图/trace 文件由 runner 在执行
+        期间先行落盘，事务失败时产生的无行引用文件由 retention 孤儿清扫处理。
+        """
+        current_run = self.run_by_id(run_id)
+        safe_result = self.redact_run_value(current_run, result)
+        requested_status = (
+            result.get("status")
+            if result.get("status") in ("success", "failed")
+            else "failed"
+        )
+        status = "canceled" if current_run["cancellationRequested"] else requested_status
+        try:
+            self.database.execute("BEGIN IMMEDIATE")
+            updated = self.database.execute(
+                """
+                UPDATE platform_runs
+                SET status = ?, result = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                (status, json(safe_result), now(), run_id),
+            )
+            if updated.rowcount != 1:
+                self.database.execute("ROLLBACK")
+                # W0-4 兜底：run 被 watchdog 判死（failed）后真实 success 结果
+                # 才返回时，状态不改回（通知口径已按 failed 发出），但产物与
+                # 可解释事件必须补齐入库，不再静默丢弃。
+                if requested_status == "success" and current_run["status"] == "failed":
+                    self.absorb_late_completed_run(run_id, current_run, safe_result)
+                return
+            self.persist_flow_outputs(current_run, safe_result)
+            self.append_run_event(
+                run_id,
+                "run.complete",
+                {"status": status, "result": safe_result, "executorType": "managed"},
+            )
+            self.audit_run_lifecycle(run_id, current_run, status)
+            self.queue_run_deliveries(
+                self.run_by_id(run_id), status, flush=False
+            )
+            self.database.execute("COMMIT")
+        except Exception:
+            try:
+                self.database.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        self.deliver_pending_notifications()
+
+    def absorb_late_completed_run(
+        self,
+        run_id: str,
+        current_run: dict[str, Any],
+        safe_result: dict[str, Any],
+    ) -> None:
+        """W0-4 兜底：watchdog 误杀后迟到的 success 结果，产物补齐入库。"""
+        try:
+            self.persist_flow_outputs(current_run, safe_result)
+            self.append_run_event(
+                run_id,
+                "run.lateCompletion",
+                {"attemptedStatus": "success", "result": safe_result},
+            )
+        except Exception:
+            # 兜底路径自身的写盘失败不应反向炸掉 worker 回调线程。
+            pass
 
     def finalize_run_as_interrupted(self, run_id: str, reason: str) -> None:
         updated = self.database.execute(

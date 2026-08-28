@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "../router";
+import { VirtualList } from "../components/VirtualList";
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
@@ -18,6 +19,7 @@ import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import {
   cancelPlatformRun,
+  createPlatformAssertionReport,
   createPlatformRun,
   fetchPlatformArtifact,
   getPlatformRun,
@@ -27,7 +29,7 @@ import type { PlatformRun } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { message } from "../lib/antd-feedback";
 import type { Project, Run } from "../lib/mock-data";
-import { canUseCapability, nextRunDispatchKey, releaseRunDispatchKey, runIntentKey } from "./shared";
+import { canUseCapability, createRunDispatchKeyStore, nextRunDispatchKey, releaseRunDispatchKey, runIntentKey } from "./shared";
 
 type ProjectLayoutProps = {
   project: Project;
@@ -94,13 +96,60 @@ function platformTaskAsRun(task: PlatformRun, fallback?: Run): Run {
   };
 }
 
+// 断言结果契约（result.assertions 与 step.asserted 事件共用同一判定载荷）。
+type AssertionRecord = {
+  stepIndex: number;
+  stepId: string;
+  title: string;
+  type: "visibility" | "text" | "count" | "attribute" | "url";
+  passed: boolean;
+  expected: string;
+  actual: string;
+};
+
+const ASSERTION_TYPE_LABELS: Record<string, string> = {
+  visibility: "可见性",
+  text: "文本",
+  count: "数量",
+  attribute: "属性",
+  url: "URL",
+};
+
+function assertionTypeLabel(type: string) {
+  return ASSERTION_TYPE_LABELS[type] ?? type;
+}
+
+function runAssertions(run: Pick<PlatformRun, "result">): AssertionRecord[] {
+  const raw = run.result?.assertions;
+  if (!Array.isArray(raw)) return [];
+  const records: AssertionRecord[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const value = item as Record<string, unknown>;
+    if (typeof value.passed !== "boolean") continue;
+    records.push({
+      stepIndex: Number(value.stepIndex) || 0,
+      stepId: typeof value.stepId === "string" ? value.stepId : "",
+      title: typeof value.title === "string" ? value.title : "断言",
+      type: (value.type as AssertionRecord["type"]) ?? "text",
+      passed: value.passed,
+      expected: typeof value.expected === "string" ? value.expected : String(value.expected ?? ""),
+      actual: typeof value.actual === "string" ? value.actual : String(value.actual ?? ""),
+    });
+  }
+  return records;
+}
+
 function platformEventAsLog(event: PlatformRun["events"][number]): ReportLog {
-  const failed = event.kind.includes("failed") || event.kind.includes("error");
+  const isAsserted = event.kind === "step.asserted";
+  const failed = isAsserted
+    ? event.data.passed !== true
+    : event.kind.includes("failed") || event.kind.includes("error");
   const isStepCompleted = event.kind === "step.completed" || event.kind === "step.succeeded";
   const completed = isStepCompleted || event.kind === "run.complete";
   const index = Number(event.data.index);
   const title = typeof event.data.title === "string" ? event.data.title : "Step";
-  const message = typeof event.data.message === "string"
+  let message = typeof event.data.message === "string"
     ? event.data.message
     : event.kind === "step.started"
       ? "Step started"
@@ -109,10 +158,21 @@ function platformEventAsLog(event: PlatformRun["events"][number]): ReportLog {
         : event.kind === "run.complete"
           ? `Run ${event.data.status === "success" ? "passed" : "finished"}`
           : event.kind;
+  if (isAsserted) {
+    const expected = typeof event.data.expected === "string"
+      ? event.data.expected
+      : String(event.data.expected ?? "");
+    const actual = typeof event.data.actual === "string"
+      ? event.data.actual
+      : String(event.data.actual ?? "");
+    message = event.data.passed === true
+      ? `断言通过：期望 ${expected}，实际 ${actual}`
+      : `断言失败：期望 ${expected}，实际 ${actual}`;
+  }
   return {
     id: String(event.id),
     time: eventTime(event.at),
-    level: failed ? "error" : completed ? "success" : "info",
+    level: failed ? "error" : isAsserted || completed ? "success" : "info",
     step: Number.isFinite(index) ? `${index + 1}. ${title}` : "平台",
     message,
     duration: durationFromMilliseconds(event.data.durationMs),
@@ -161,7 +221,7 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   const [platformTask, setPlatformTask] = useState<PlatformRun | null>(null);
   const [platformError, setPlatformError] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const [canceling, setCanceling] = useState(false);
 
   useEffect(() => {
@@ -223,6 +283,20 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
   };
   const reportLogs: ReportLog[] = (platformTask?.events ?? []).map(platformEventAsLog);
   const logs = activeLog === "all" ? reportLogs : reportLogs.filter((log) => log.level === activeLog);
+  // 断言结果区块：读 run.result.assertions（无断言步骤的 run 不展示）。
+  const assertions = platformTask ? runAssertions(platformTask) : [];
+  const passedAssertions = assertions.filter((item) => item.passed).length;
+  // 类型分布（R4-3 摘要卡）：按 type 计数，标签复用 ASSERTION_TYPE_LABELS。
+  // 断言行数小（通常 <20），每次渲染直接计算，无需 memo。
+  const assertionTypeCounts = (() => {
+    const counts = new Map<string, number>();
+    for (const item of assertions) {
+      counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort(
+      (a, b) => (b[1] - a[1]) || assertionTypeLabel(a[0]).localeCompare(assertionTypeLabel(b[0])),
+    );
+  })();
   const artifacts = platformTask?.artifacts ?? [];
   const error = typeof platformTask?.result?.error === "string" ? platformTask.result.error : undefined;
   const securityDisabledMessage = (platformTask?.events ?? []).find((event) => event.kind === "run.security")
@@ -302,6 +376,35 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
       setCanceling(false);
     }
   };
+  // 导出断言报告：先请求生成（端点登记为 run artifact），再走既有产物下载链路。
+  const exportAssertionReport = async (format: "json" | "xlsx" | "html") => {
+    const context = platformContextFor(project.id);
+    if (!context || !runId) {
+      message.error("Platform session is unavailable");
+      return;
+    }
+    try {
+      const { artifact } = await createPlatformAssertionReport(
+        context.session.token,
+        context.platformProjectId,
+        runId,
+        format,
+      );
+      const blob = await fetchPlatformArtifact(context.session.token, artifact.id);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = artifact.name;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+      message.success("断言报告已导出");
+    } catch (error) {
+      const code = error instanceof Error && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+      message.error(code === "RUN_HAS_NO_ASSERTIONS" ? "本次运行没有断言可导出" : "导出断言报告失败");
+    }
+  };
   return (
     <ProjectLayout project={project} section="runs">
       <div className="detail-back">
@@ -373,6 +476,64 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
             <div><Statistic title="重试次数" value={run.retries} /></div>
             {platformTask && <div><Statistic title="执行节点" value="部署机本机" /></div>}
           </div>
+          {assertions.length > 0 && (
+            <div className="assertion-block">
+              <div className="assertion-heading">
+                <h2>断言结果</h2>
+                <span>{passedAssertions}/{assertions.length} 通过</span>
+                <div className="assertion-export">
+                  <Button size="small" onClick={() => void exportAssertionReport("json")}>导出 JSON</Button>
+                  <Button size="small" onClick={() => void exportAssertionReport("xlsx")}>导出 Excel</Button>
+                  <Button size="small" onClick={() => void exportAssertionReport("html")}>导出 HTML</Button>
+                </div>
+              </div>
+              <div className="assertion-summary" role="group" aria-label="断言摘要">
+                <div className="summary-rate">
+                  <span>断言通过率</span>
+                  <strong>
+                    {assertions.length > 0
+                      ? Math.round((passedAssertions / assertions.length) * 100)
+                      : 0}
+                    %
+                  </strong>
+                </div>
+                <div className="summary-counts">
+                  <span className="passed">通过 {passedAssertions}</span>
+                  <span className="failed">失败 {assertions.length - passedAssertions}</span>
+                </div>
+                <div className="summary-types">
+                  {assertionTypeCounts.map(([type, count]) => (
+                    <span className="type-chip" key={type}>
+                      {assertionTypeLabel(type)} × {count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="assertion-list">
+                {assertions.map((assertion) => (
+                  <div
+                    className={`assertion-row ${assertion.passed ? "passed" : "failed"}`}
+                    key={`${assertion.stepId}-${assertion.stepIndex}`}
+                  >
+                    <span className="assertion-icon">
+                      {assertion.passed ? <CheckCircleFilled /> : <StopOutlined />}
+                    </span>
+                    <div className="assertion-title">
+                      <strong>{assertion.title}</strong>
+                      <small>{assertionTypeLabel(assertion.type)}断言</small>
+                    </div>
+                    <div className="assertion-compare">
+                      <span>期望 <code>{assertion.expected}</code></span>
+                      <span>实际 <code>{assertion.actual}</code></span>
+                    </div>
+                    <span className={`assertion-verdict ${assertion.passed ? "passed" : "failed"}`}>
+                      {assertion.passed ? "通过" : "失败"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="log-heading">
             <div>
               <h2>执行日志</h2>
@@ -392,19 +553,29 @@ export default function RunDetailPage({ ProjectLayout, PageHeading, statusTag, s
           <div className="log-list">
             {logs.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待 Platform 输出日志" />
-            ) : logs.map((log) => (
-              <div className={`log-row ${log.level}`} key={log.id}>
-                <time>{log.time}</time>
-                <span className="log-icon">
-                  {log.level === "success" ? <CheckCircleFilled /> : log.level === "error" ? <StopOutlined /> : <ClockCircleOutlined />}
-                </span>
-                <div>
-                  <strong>{log.step}</strong>
-                  <p>{log.message}</p>
-                </div>
-                <span className="log-duration">{log.duration}</span>
-              </div>
-            ))}
+            ) : (
+              <VirtualList
+                items={logs}
+                className="virtual-list-scroll"
+                rowClassName={(log) => `log-row ${log.level}`}
+                estimateSize={58}
+                maxHeight={420}
+                ariaLabel="执行日志"
+                renderItem={(log) => (
+                  <>
+                    <time>{log.time}</time>
+                    <span className="log-icon">
+                      {log.level === "success" ? <CheckCircleFilled /> : log.level === "error" ? <StopOutlined /> : <ClockCircleOutlined />}
+                    </span>
+                    <div>
+                      <strong>{log.step}</strong>
+                      <p>{log.message}</p>
+                    </div>
+                    <span className="log-duration">{log.duration}</span>
+                  </>
+                )}
+              />
+            )}
           </div>
         </div>
         <aside className="detail-aside">

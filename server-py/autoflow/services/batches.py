@@ -33,7 +33,7 @@ class BatchServices:
     """
     _RUN_BATCH_STATUS_EXPR = """
             CASE
-              WHEN COALESCE(c.total, 0) = 0 THEN 'queued'
+              WHEN COALESCE(c.total, 0) = 0 THEN 'failed'
               WHEN COALESCE(c.queued, 0) = COALESCE(c.total, 0) THEN 'queued'
               WHEN COALESCE(c.running, 0) > 0
                 OR (COALESCE(c.queued, 0) > 0 AND COALESCE(c.completed, 0) > 0)

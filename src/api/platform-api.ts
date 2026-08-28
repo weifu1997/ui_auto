@@ -785,6 +785,56 @@ export function createPlatformRun(token: string, projectId: string, input: { rev
   );
 }
 
+export type PlatformPreviewAssertion = {
+  stepIndex?: number;
+  stepId?: string;
+  title?: string;
+  type: string;
+  passed: boolean;
+  expected?: string;
+  actual?: string;
+  durationMs?: number;
+};
+
+export type PlatformPreviewEvent = {
+  kind: string;
+  data: Record<string, unknown>;
+};
+
+export type PlatformPreviewRun = {
+  result: {
+    status: "success" | "failed" | "canceled";
+    completedSteps?: number;
+    totalSteps?: number;
+    elapsedMs?: number;
+    error?: string;
+    assertions?: PlatformPreviewAssertion[];
+    [key: string]: unknown;
+  };
+  events: PlatformPreviewEvent[];
+};
+
+/** W1-6：编辑器「运行至此步骤」的试跑通道——直接执行、不落库，
+ *  断言结果不进入项目级通过率统计。 */
+export function previewPlatformRun(
+  token: string,
+  projectId: string,
+  input: {
+    environment: unknown;
+    flow: { id?: string; name?: string; steps: unknown[] };
+    elements: unknown[];
+    variables?: Record<string, unknown>;
+    secretNames?: string[];
+    upToStepId?: string;
+  },
+) {
+  return request<PlatformPreviewRun>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/preview`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
 export type PlatformSecret = {
   id: string;
   name: string;
@@ -875,6 +925,37 @@ export type PlatformRunBatchItem = {
   updatedAt: string;
 };
 
+export type AssertionStats = {
+  runsWithAssertions: number;
+  totalAssertions: number;
+  passedAssertions: number;
+  failedAssertions: number;
+  windowDays?: number | null;
+};
+
+export type AssertionFailure = {
+  runId: string;
+  flowName: string;
+  title: string;
+  type: string;
+  expected: string;
+  actual: string;
+};
+
+export type RunTrendPoint = {
+  date: string;
+  runTotal: number;
+  runPassed: number;
+  runFailed: number;
+  assertionTotal: number;
+  assertionPassed: number;
+};
+
+export type RunTrend = {
+  windowDays?: number | null;
+  points: RunTrendPoint[];
+};
+
 export function createPlatformRunBatch(token: string, projectId: string, input: { flowIds: string[]; environmentId: string; clientRequestId: string }) {
   return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/run-batches`,
@@ -897,8 +978,31 @@ export function getPlatformRunBatches(token: string, projectId: string, query: {
 }
 
 export function getPlatformRunBatch(token: string, projectId: string, batchId: string) {
-  return request<{ batch: PlatformRunBatch; runs: PlatformRunBatchItem[] }>(
+  return request<{
+    batch: PlatformRunBatch;
+    runs: PlatformRunBatchItem[];
+    assertionStats?: AssertionStats;
+    assertionFailures?: AssertionFailure[];
+  }>(
     `/platform/projects/${encodeURIComponent(projectId)}/run-batches/${encodeURIComponent(batchId)}`,
+    {},
+    token,
+  );
+}
+
+export function getPlatformAssertionStats(token: string, projectId: string, windowDays?: number) {
+  const suffix = windowDays !== undefined && windowDays > 0 ? `?windowDays=${windowDays}` : "";
+  return request<AssertionStats>(
+    `/platform/projects/${encodeURIComponent(projectId)}/assertion-stats${suffix}`,
+    {},
+    token,
+  );
+}
+
+export function getPlatformRunTrend(token: string, projectId: string, windowDays?: number) {
+  const suffix = windowDays !== undefined && windowDays > 0 ? `?window_days=${windowDays}` : "";
+  return request<RunTrend>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/trend${suffix}`,
     {},
     token,
   );
@@ -955,7 +1059,29 @@ export function deletePlatformRuns(token: string, projectId: string, runIds: str
   );
 }
 
-export type RecordingSessionStatus = "starting" | "recording" | "paused" | "stopped" | "canceled" | "expired" | "failed";
+export type AssertionReportArtifact = {
+  id: string;
+  name: string;
+  contentType: string;
+  createdAt: string;
+};
+
+export function createPlatformAssertionReport(
+  token: string,
+  projectId: string,
+  runId: string,
+  format: "json" | "xlsx" | "html",
+) {
+  // 生成断言报告并登记为 run artifact；客户端再按返回 artifactId 走既有
+  // fetchPlatformArtifact 下载链路。
+  return request<{ artifact: AssertionReportArtifact }>(
+    `/platform/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/assertion-report?format=${format}`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export type RecordingSessionStatus = "starting" | "recording" | "paused" | "stopped" | "canceled" | "expired" | "failed" | "interrupted";
 
 export type RecordingSession = {
   id: string;
@@ -1065,7 +1191,7 @@ function likelySensitiveRecordedStep(step: RecordedStep) {
 function decodeRecordingSession(value: unknown): RecordingSession {
   const source = asRecordingObject(value);
   const status = requiredRecordingString(source.status);
-  if (!(["starting", "recording", "paused", "stopped", "canceled", "expired", "failed"] as string[]).includes(status)) {
+  if (!(["starting", "recording", "paused", "stopped", "canceled", "expired", "failed", "interrupted"] as string[]).includes(status)) {
     throw recordingContractError();
   }
   return {
@@ -1184,6 +1310,29 @@ export function cancelActiveRecordingSession(token: string, projectId: string, e
     { method: "POST", body: JSON.stringify({ environmentId }) },
     token,
   ).then((response) => ({ canceled: response.canceled === true }));
+}
+
+export function listRecordingSessions(
+  token: string,
+  projectId: string,
+  page = 1,
+  pageSize = 20,
+): Promise<{ sessions: RecordingSession[]; total: number; page: number; pageSize: number }> {
+  const query = `?page=${encodeURIComponent(String(page))}&pageSize=${encodeURIComponent(String(pageSize))}`;
+  return request<unknown>(
+    `/platform/projects/${encodeURIComponent(projectId)}/recording-sessions${query}`,
+    {},
+    token,
+  ).then((response) => {
+    const body = asRecordingObject(response);
+    const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+    return {
+      sessions: sessions.map(decodeRecordingSession),
+      total: recordingNumber(body.total),
+      page: recordingNumber(body.page),
+      pageSize: recordingNumber(body.pageSize),
+    };
+  });
 }
 
 export function getRecordingSession(token: string, projectId: string, sessionId: string) {

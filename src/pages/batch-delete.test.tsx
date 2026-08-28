@@ -96,6 +96,7 @@ vi.mock("../api/platform-api", async (importOriginal) => {
     getPlatformRevisions: vi.fn(async () => ({ revisions: [] })),
     getPlatformRuns: vi.fn(async () => ({ total: 2, runs: mockPlatformRuns })),
     getPlatformRunBatches: vi.fn(async () => ({ total: 0, batches: [] })),
+    getPlatformAssertionStats: vi.fn(async () => ({ runsWithAssertions: 0, totalAssertions: 0, passedAssertions: 0, failedAssertions: 0, windowDays: 30 })),
     deletePlatformRun: (...args: any[]) => (mockDeletePlatformRun as any)(...args),
     deletePlatformRuns: (...args: any[]) => (mockDeletePlatformRuns as any)(...args),
   };

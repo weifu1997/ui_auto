@@ -5,7 +5,7 @@ import type { PlatformRevision } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
-import { PageHeading, canUseCapability, describePlatformRunError, emptyEnvironments, emptyFlows, emptyVariables, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, statusTag, uniqueNameValidator } from "./shared";
+import { PageHeading, canUseCapability, createRunDispatchKeyStore, describePlatformRunError, emptyEnvironments, emptyFlows, emptyVariables, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, statusTag, uniqueNameValidator } from "./shared";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -82,7 +82,7 @@ export function FlowsPage({ project }: { project: Project }) {
     (tagFilter === "all" || item.tags.includes(tagFilter)),
   );
   const [dispatchingFlowId, setDispatchingFlowId] = useState<string | null>(null);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const runFlow = async (flow: Flow) => {
     const steps = flow.definition ?? [];
     if (steps.length === 0) {

@@ -23,5 +23,6 @@ Server-side conventions and executable contracts for the Platform API layer unde
 | [Audit & Governance Contracts](./audit-governance.md)                 | Audit event naming, audit query API, analytics API, notification env wiring, secret snapshot mechanics                          |
 | [Identity, Membership & RBAC](./identity-membership-rbac.md)          | Local-account bootstrap, workspace roles/capabilities, safe invitation/reset lifecycles, session revocation and admin audit     |
 | [Run Batch & Recording Contracts](./run-batch-recording-contracts.md) | Batch execution, run-record deletion, browser-recording routes, validation, lifecycle, isolation, and regression requirements   |
+| [Assertion Field Contract](./assertion-field-contract.md)            | 断言字段/枚举/缺省/动作-判定映射/事件载荷与顺序；前端 `assertions.ts` 与后端 `assertion_contract.py` 的权威来源（单源化） |
 | [Production Startup](./production-startup.md)                         | `npm run build` / `npm run start` prerequisites, environment contract, readiness/maintenance behavior, and Worker route removal |
 | [Route-Wide Workspace And Project Isolation](./route-workspace-project-isolation.md) | Executable route inventory, parent-scoped child resolution, cross-workspace error and side-effect contracts |

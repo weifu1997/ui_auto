@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Architecture Boundaries Guide](./architecture-boundaries.md) | 三区改动边界：稳定契约区（只读）/可重构区（保行为）/可扩展区（纯增量） | 参考 ui_auto_new 五阶段改造的任一阶段开工前；计划改动稳定契约区或可能改变对外行为时 |
 
 ---
 

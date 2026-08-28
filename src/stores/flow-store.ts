@@ -22,6 +22,8 @@ type FlowStore = {
   isDirty: boolean;
   setSelectedStep: (id: string) => void;
   updateStep: (patch: Partial<FlowStep>) => void;
+  /** 批量更新指定步骤（用于批量编辑条）。 */
+  updateSteps: (ids: string[], patch: Partial<FlowStep>) => void;
   addStep: () => void;
   removeStep: (id: string) => void;
   moveStep: (from: number, to: number) => void;
@@ -56,6 +58,16 @@ export const useFlowStore = create<FlowStore>((set) => ({
       ),
       isDirty: true,
     })),
+  updateSteps: (ids, patch) =>
+    set((state) => {
+      const idSet = new Set(ids);
+      return {
+        steps: state.steps.map((step) =>
+          idSet.has(step.id) ? { ...step, ...patch } : step,
+        ),
+        isDirty: true,
+      };
+    }),
   addStep: () =>
     set((state) => {
       const step = newStep();

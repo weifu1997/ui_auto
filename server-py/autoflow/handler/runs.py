@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from ..core import now
 from ..http import PlatformError
 from ..services import PlatformServices
@@ -15,6 +17,21 @@ from ._shared import (
     _send,
     _text,
 )
+
+# preview 会在 worker 线程里同步驱动 Playwright，整个进程只允许一个并发
+# preview 占位；超出的请求立即失败而不是排队占死线程池。
+_PREVIEW_SLOTS = threading.BoundedSemaphore(1)
+
+
+async def dispatch_preview(
+    services: PlatformServices, project_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    if not _PREVIEW_SLOTS.acquire(blocking=False):
+        raise PlatformError(409, "PREVIEW_BUSY")
+    try:
+        return await run_in_threadpool(services.preview_run, project_id, body)
+    finally:
+        _PREVIEW_SLOTS.release()
 
 
 def register(router: APIRouter, services: PlatformServices) -> None:
@@ -204,6 +221,92 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 200, {"run": services.run_response(run)})
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/assertion-stats",
+        methods=["GET"],
+    )
+    async def platform_assertion_stats(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_role(project_id, user.id)
+        query = request.query_params
+        raw_days = _text(query.get("windowDays")).strip()
+        try:
+            window_days = int(raw_days) if raw_days else None
+        except ValueError:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID") from None
+        if window_days is not None and window_days <= 0:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID")
+        stats = services.assertion_stats(project_id, window_days)
+        return _send(Response(), 200, stats)
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/runs/trend",
+        methods=["GET"],
+    )
+    async def platform_run_trend(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_role(project_id, user.id)
+        query = request.query_params
+        raw_days = _text(query.get("window_days")).strip()
+        try:
+            window_days = int(raw_days) if raw_days else None
+        except ValueError:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID") from None
+        if window_days is not None and window_days <= 0:
+            raise PlatformError(400, "WINDOW_DAYS_INVALID")
+        trend = services.run_trend(project_id, window_days)
+        return _send(Response(), 200, trend)
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/runs/{run_id}/assertion-report",
+        methods=["POST"],
+    )
+    async def platform_run_assertion_report(
+        request: Request, project_id: str, run_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        role = services.require_project_role(project_id, user.id)
+        services.run_by_id(run_id, project_id)
+        run_format = _text(request.query_params.get("format")) or "json"
+        if run_format not in ("json", "xlsx", "html"):
+            raise PlatformError(400, "REPORT_FORMAT_INVALID")
+        report = services.build_assertion_report(run_id, run_format)
+        services.audit(
+            role["project"]["workspace_id"],
+            {"type": "user", "id": user.id},
+            "run.assertion_report_exported",
+            {"type": "run", "id": run_id},
+            {"format": run_format, "artifactId": report["artifact"]["id"]},
+            project_id,
+        )
+        return _send(Response(), 201, report)
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/runs/preview",
+        methods=["POST"],
+    )
+    async def platform_run_preview(
+        request: Request, project_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "run.execute")
+        raw_body = await request.body()
+        if raw_body:
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                raise PlatformError(400, "PREVIEW_INPUT_INVALID") from None
+        else:
+            body = {}
+        if not isinstance(body, dict):
+            raise PlatformError(400, "PREVIEW_INPUT_INVALID")
+        preview = await dispatch_preview(services, project_id, body)
+        return _send(Response(), 200, preview)
+
+    @router.api_route(
         "/api/platform/projects/{project_id}/runs/{run_id}/cancel",
         methods=["POST"],
     )
@@ -222,26 +325,8 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 202,
                 {"run": services.run_response(run)},
             )
-        if run["status"] == "queued":
-            services.database.execute(
-                """
-                UPDATE platform_runs
-                SET cancellation_requested = 1,
-                    status = 'canceled',
-                    updated_at = ?
-                WHERE id = ? AND project_id = ? AND status = 'queued'
-                """,
-                (now(), run["id"], project_id),
-            )
-        else:
-            services.database.execute(
-                """
-                UPDATE platform_runs
-                SET cancellation_requested = 1, updated_at = ?
-                WHERE id = ? AND project_id = ? AND status = 'running'
-                """,
-                (now(), run["id"], project_id),
-            )
+        # W1-5：标记先行、queued 直置终态，消除与 worker 的读后写竞态。
+        services.request_run_cancel(run["id"], project_id)
         services.cancel_managed_run(run["id"])
         services.append_run_event(
             run["id"], "run.cancel_requested", {"actorId": user.id}
@@ -360,14 +445,18 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         user = services.session_user(dict(request.headers))
         services.require_project_role(project_id, user.id)
         batch = services.run_batch_by_id(project_id, batch_id)
+        runs = services.batch_runs(project_id, batch_id)
+        # 批量级断言计数：口径同全项目（只统计含断言的子 run）。
+        assertionStats = services.assertion_stats_for_runs(runs)
+        assertionFailures = services.assertion_failures_for_runs(runs)
         return _send(
             Response(),
             200,
             {
                 "batch": batch,
-                "runs": _batch_run_summaries(
-                    services.batch_runs(project_id, batch_id)
-                ),
+                "runs": _batch_run_summaries(runs),
+                "assertionStats": assertionStats,
+                "assertionFailures": assertionFailures,
             },
         )
 

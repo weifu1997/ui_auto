@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/guides/architecture-boundaries.md", "reason": "三区改动边界（阶段0固化）：五阶段所有改动须落在②可重构区（保行为）与③可扩展区，稳定契约区只读。"}
+{"file": ".trellis/spec/backend/assertion-field-contract.md", "reason": "断言字段契约（阶段0固化）：阶段1单源化的权威来源，阶段3断言体系扩展须先更新本契约。"}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "阶段2录制/执行稳定性与阶段3断言的 run/batch/recording/retry 契约基准。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "各阶段前端质量门禁定义（build/lint/unit/bundle/e2e）。"}

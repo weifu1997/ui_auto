@@ -135,15 +135,18 @@ delete_project_runs(project_id, deletable_ids)
 ### 2. Signatures
 
 - `POST /api/platform/projects/{project_id}/recording-sessions` with `{ flowId, environmentId, startUrl, freshLogin? }`.
+- `GET /api/platform/projects/{project_id}/recording-sessions` list, paginated `page`/`pageSize` (R2-3, includes `interrupted` sessions).
 - `GET /api/platform/projects/{project_id}/recording-sessions/{session_id}` and `/events?afterSeq=&limit=`.
 - `POST` pause, resume, and stop endpoints below the session; `DELETE` cancels it.
-- Service owner: `RecordingCoordinator.create_session`, `events_after`, `pause`, `resume`, `stop`, and `cancel`.
+- Service owner: `RecordingCoordinator.create_session`, `events_after`, `pause`, `resume`, `stop`, `cancel`, and `list_sessions` (list endpoint).
 
 ### 3. Contracts
 
-- Every route requires `flow.edit`, project membership, and the owning user. A foreign project/session must not reveal whether the session exists.
+- Every route requires `flow.edit`, project membership, and the owning user. A foreign project/session must not reveal whether the session exists. The list endpoint is owner-scoped through the same capability resolution and returns newest-first items only (a foreign session is never listed).
 - The start URL must be HTTP(S), same-origin with the environment base URL, and free of userinfo. Session and audit URLs are sanitized to scheme, host, and path.
 - Events are retrieved incrementally by `afterSeq`; the client deduplicates by `seq` and may store only the session id in `sessionStorage` for control recovery.
+- Session metadata is persisted (best-effort, failure-silent) to the `recording_sessions` table via UPSERT, throttled to ≥1s per session. Only lifecycle metadata is durable — raw browser events, browser state, selectors, and sensitive values stay process-local. When no database provider is configured, persistence is a no-op.
+- `interrupted` is a terminal status: on service restart, leftover non-terminal sessions are recovered to `interrupted` with error code `SERVICE_RESTARTED`, so a stale `sessionStorage` id never 404s. `_require_session` falls back to persisted metadata when the in-memory session is gone.
 - The recording owner thread must remain inside a bounded Playwright sync call after startup so browser binding callbacks from user-idle interactions are dispatched. Stop, cancel, expiry, and browser failure signal the session and let that same owner thread flush results and close Playwright resources; request threads must not close sync objects directly.
 - Capture descriptors for click and keyboard events must resolve the closest same-document semantic interactive ancestor (`button`, `a[href]`, form control, or explicit `role`) so nested text/SVG nodes retain the parent testid or role/name locator. Unsupported-feature detection still evaluates the raw event path, preserving the Shadow DOM and contenteditable warning contract.
 - Pause is a normalization boundary: flush any pending input before changing status to `paused`, then ignore subsequent business events until resume. This prevents text typed before and after pause from becoming one recorded step.
@@ -159,6 +162,7 @@ delete_project_runs(project_id, deletable_ids)
 | Second active session for the same owner/project/environment | `RECORDING_SESSION_ACTIVE` |
 | Browser start or initial navigation failure | `RECORDING_BROWSER_START_FAILED` or `RECORDING_NAVIGATION_FAILED` |
 | Invalid event cursor or limit | `RECORDING_AFTER_SEQ_INVALID` or `RECORDING_LIMIT_INVALID` |
+| Invalid list pagination | `PAGINATION_INVALID` |
 | Browser page closed or browser disconnected | terminal `failed` with `RECORDING_PAGE_CLOSED` or `RECORDING_BROWSER_DISCONNECTED` |
 
 ### 5. Good / Base / Bad Cases
@@ -173,6 +177,7 @@ delete_project_runs(project_id, deletable_ids)
 - `test_recording_sessions.py`: the real Chromium coordinator case must trigger input/click after `create_session` returns without issuing another page command, then assert seq, preview steps, and same-thread teardown.
 - `test_recorder_poc.py`: nested text and SVG-path clicks must produce steps that reference their button/link parent locators, then replay successfully.
 - `test_recording_api.py`: capability/project scoping, malformed JSON, and terminal audit idempotence.
+- `test_recording_persistence.py`: metadata persistence across lifecycle transitions, throttled event seq/count sync, no-provider no-op, restart recovery to `interrupted`, DB fallback in `_require_session`, and the owner-scoped paginated list endpoint (newest-first, includes interrupted).
 - Playwright `e2e/recording.spec.ts`: session recovery, pause/resume controls, review, locator validation, and atomic draft import.
 - Assert every sensitive test value is absent from captured payloads and serialized outputs.
 
@@ -191,6 +196,63 @@ if session["status"] == "recording":
 if session["status"] == "recording":
     session["normalizer"].flush_pending()
     session["status"] = "paused"
+```
+
+## Scenario: Locator Self-Healing (D5, 2026-08-28)
+
+### 1. Scope / Trigger
+
+- Trigger: a recorded element-action step (点击/填写/清空填写/选择下拉项/勾选) fails to locate its element in the executing browser.
+- The healing engine is heuristic-only (dom-to-locator scoring + `count()===1` uniqueness); an optional LLM implementation is reserved behind the `LocatorScorer` interface but no external AI service is introduced.
+
+### 2. Signatures
+
+- `server-py/autoflow/locator_score.py`: `LocatorScorer` Protocol (`score(locator, page) -> float`) + `HeuristicLocatorScorer` (default).
+- Runner integration: `_fallback_candidates` (text→role-by-name for common roles, testid→attribute substring `[attr*="value"]`, label→`exact=False` substring, role→drop name constraint; css/XPath produce no candidates), `_locator_from_spec` (builds candidate locators tagged with their source technique via `_autoflow_method`), `_heal_locator` (scores candidates, adopts the unique best).
+
+### 3. Contracts
+
+- Self-healing activates **only** on element-action locator failure — the normal success path has zero extra cost (`count()` checks happen only after a failure).
+- A candidate is adopted only when it uniquely matches (`count() === 1`); ambiguous or absent matches keep the original timeout/error path — a fallback never risks mis-click/mis-fill.
+- When a candidate is adopted, the existing reserved `step.locatorFallback` event kind is emitted (no new kind) with `{method, value, reason}` and the fallback event always precedes `step.completed`/`step.failed` for that step.
+- Safety: self-healing re-locates only; it never touches secrets/sensitive fields, and sensitive runs keep Trace/screenshot disabled while healing proceeds normally.
+- Scoring absorbs `count()`/page-closed exceptions as unavailable (score `-inf`), so a closed page during cancellation never raises into the run.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Primary locator succeeds | no healing, no extra locator calls |
+| Primary times out, one candidate unique | fallback adopted, `step.locatorFallback` emitted before `step.completed` |
+| Primary times out, no candidate unique | original failure path (timeout error), no fallback event |
+| Sensitive run, primary times out | heal proceeds, Trace/artifacts stay disabled (`run.security`) |
+
+### 5. Good / Base / Bad Cases
+
+- Good: `[data-testid="login-submit"]` goes stale; `[data-testid*="login-submit"]` uniquely matches and the click succeeds with a fallback event.
+- Base: the locator still resolves — no scoring, no fallback, no event.
+- Bad: adopting a candidate whose `count()` is ambiguous (0 or >1), or emitting a fallback event that would reorder the `step.asserted`/`step.completed`/`step.failed` contract.
+
+### 6. Tests Required
+
+- `server-py/tests/unit/test_locator_self_heal.py`: scorer uniqueness/stability, testidPartial heal with event ordering, label substring heal for fill, no-heal failure path, sensitive-run boundary.
+- Assert fallback events never appear without a preceding element-action timeout, and never after the step's terminal event.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+if candidate.count() > 0:  # ambiguous — could click the wrong element
+    locator = candidate
+```
+
+#### Correct
+
+```python
+healed = _heal_locator(element, action, page)   # count()===1 gate inside
+if healed is not None:
+    locator = healed
 ```
 
 ## Scenario: Element Validation Login-State Reuse
@@ -255,3 +317,21 @@ if login_detected and not element_path_is_login_page:
         raise RuntimeError("ELEMENT_VALIDATION_LOGIN_INVALID")
     raise RuntimeError("ELEMENT_VALIDATION_LOGIN_REQUIRED")
 ```
+
+## Scenario: Integrity Hardening Contracts (W0–W2, 2026-08-27)
+
+### 1. Sensitive Word List Single Source
+- 唯一权威词表：`server-py/autoflow/sensitive.py`。浏览器注入脚本的正则由 `RECORDER_INIT_SCRIPT` 模板占位符替换生成；服务端判定 `is_sensitive_field` 直接委托。新增敏感词（含中文）只允许改这里，禁止在前后端各自复制正则。
+- 中文标签输入属于该契约范围：历史上前端词表含中文而服务端不含，造成明文经 GET events 外泄。回归锚点：`tests/unit/test_text_and_sensitive_fidelity.py::test_chinese_labeled_input_value_never_persists`。
+
+### 2. Run Finalize Transactional Contract
+- 终态落库唯一入口 `PlatformServices.finalize_completed_run(run_id, result)`：状态 UPDATE、flowOutputs、run.complete、审计、投递登记必须在同一 BEGIN IMMEDIATE 内提交；投递的 **网络发送** 用 `queue_run_deliveries(..., flush=False)` 只入队，COMMIT 之后统一 `deliver_pending_notifications()`。
+- 迟到成功兜底：行已被 watchdog 判死（failed）后收到 success 结果 → `absorb_late_completed_run` 补产物与 `run.lateCompletion` 事件，状态不回改。
+
+### 3. Heartbeat & Watchdog & Cancellation Marker
+- ManagedRunner hooks 增加 `progress(stepIndex)`：每步开始触发 `touch_run_heartbeat` 仅刷新 running 行 updated_at（不发事件流）。watchdog 窗口由环境变量 `RUN_WATCHDOG_MINUTES` 控制（默认 20，钳制 [5,240]），判定语义是"无步进超窗"。
+- 取消标记先行：`request_run_cancel` 无条件对 queued/running 写 `cancellation_requested=1` 再把仍 queued 的置 canceled；禁止回退为"先读后分支写"。
+- 「等待」步骤硬上限 `WAIT_STEP_MAX_MS`（默认 10 分钟，下限 1 秒），保证取消最坏延迟有界；截断发 `step.waitCapped`。
+
+### 4. Frontend: Persistent Run Dispatch Keys
+- `RunDispatchKeyMap`（src/pages/shared.tsx）：按用户分区持久化到 localStorage（base 键见 `RUN_DISPATCH_KEY_STORAGE`，TTL 24h）。五处调用统一 `createRunDispatchKeyStore()` 构造；新增运行入口不得再用裸 `new Map()`。登出清理经 account-state-reset 的 userScopedBases。

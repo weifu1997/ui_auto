@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/architecture-boundaries.md", "reason": "阶段0 固化的三区改动边界：阶段1 全部改动须落在②可重构区（保行为）与③可扩展区，不触碰①稳定契约区。"}
+{"file": ".trellis/spec/backend/assertion-field-contract.md", "reason": "断言 schema 单源化的权威契约文档（阶段1 产出）；两端单一模块与 parity 测试均以此为准。"}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "runs.py 拆分期间 run/batch/retry 契约保持只读；拆分后 test:py 回归以此为基准。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "FlowEditorPage 拆分与 MSW 接入的前端质量门禁定义。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "FlowEditorPage 拆分时状态归置参照（页面收窄为编排、状态仍归 store/hook）。"}

@@ -61,6 +61,12 @@ def now() -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+def days_ago_iso(days: int) -> str:
+    """ISO-8601 UTC 时间戳：`days` 天前（用于按窗口扫描 run 列表）。"""
+    value = datetime.now(timezone.utc) - timedelta(days=days)
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 

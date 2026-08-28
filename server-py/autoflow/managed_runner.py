@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .runner import execute_browser_run, execute_element_validation
+from .runner import _close_quietly, execute_browser_run, execute_element_validation
 
 
 class ManagedRunner:
@@ -144,16 +144,10 @@ class ManagedRunner:
     def _close_browser(self, item: dict[str, Any]) -> None:
         context = item.get("context")
         if context is not None:
-            try:
-                context.close()
-            except Exception:
-                pass
+            _close_quietly(context.close)
         browser = item.get("browser")
         if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
+            _close_quietly(browser.close)
 
     def _run(self) -> None:
         while True:
@@ -179,6 +173,8 @@ class ManagedRunner:
             ),
             "artifact": callbacks["artifact"],
             "event": callbacks["event"] if item["kind"] == "run" else (lambda *_args: None),
+            # W0-4：步骤级心跳回调；未提供 progress 的入队方（如元素校验）安全降级。
+            "progress": callbacks.get("progress") or (lambda *_args: None),
             "browser": lambda browser, context: self._set_active_browser(
                 item["id"], browser, context
             ),

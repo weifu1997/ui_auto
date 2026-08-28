@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit
 from typing import Any
 from ..core import json, now, parse_json, safe_artifact_name
@@ -9,6 +10,84 @@ from ..core import json, now, parse_json, safe_artifact_name
 
 class ValidationServices:
     """Element validation lifecycle and managed validation enqueue."""
+
+    def recover_interrupted_validations(self) -> None:
+        """服务重启后清理中断的校验（W1-3）。
+
+        校验依赖进程内录制登录态快照，重启后重放必然落入登录墙，重排队
+        没有意义；直接置失败并给出稳定错误码，让前端能明确提示。
+        """
+        stale = self.database.execute(
+            "SELECT id FROM element_validations WHERE status IN ('queued', 'running')"
+        ).fetchall()
+        for row in stale:
+            self.database.execute(
+                """
+                UPDATE element_validations
+                SET status = 'failed', error = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                ("VALIDATION_SERVICE_RESTARTED", now(), row[0]),
+            )
+
+    def reap_stale_element_validations(self, minutes: int = 15) -> int:
+        """运行期收割：updated_at 超过窗口仍 running 的校验判死（W1-3）。
+
+        只处理 running；queued 可能只是在等并发额度，不能按超时误杀。
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(minutes=max(1, minutes))
+        ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        stuck = self.database.execute(
+            """
+            SELECT id FROM element_validations
+            WHERE status = 'running' AND updated_at <= ?
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in stuck:
+            self.database.execute(
+                """
+                UPDATE element_validations
+                SET status = 'failed', error = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                ("VALIDATION_WATCHDOG_TIMEOUT", now(), row[0]),
+            )
+        return len(stuck)
+
+    def cancel_element_validation(
+        self,
+        validation_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        """取消排队中/执行中的校验；对终态幂等返回原记录（W1-3）。"""
+        validation = self.element_validation_by_id(validation_id, project_id)
+        if validation["status"] in ("queued", "running"):
+            # 先摘队列或给活动项发信号（复用 ManagedRunner 取消路径），
+            # 再立即落 canceled 终态；迟到的完成回调受状态守卫保护不再回写。
+            try:
+                self.managed_runner.cancel(validation_id)
+            except Exception:
+                pass
+            self.database.execute(
+                """
+                UPDATE element_validations
+                SET status = 'canceled', error = ?, updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                ("VALIDATION_CANCELED", now(), validation_id),
+            )
+            project = self.project_for(validation["projectId"])
+            self.audit(
+                project["workspace_id"],
+                {"type": "system", "id": "element-validation"},
+                "element.validation_canceled",
+                {"type": "element_validation", "id": validation_id},
+                None,
+                validation["projectId"],
+            )
+        return self.element_validation_by_id(validation_id, project_id)
 
     def element_validation_by_id(
         self, validation_id: str, project_id: str | None = None
@@ -172,11 +251,12 @@ class ValidationServices:
                 "elapsedMs": result.get("elapsedMs"),
                 "screenshotId": artifact_row[0] if artifact_row else None,
             }
+            # 状态守卫：已被取消/收割的行不被迟到的真实结果覆盖（W1-3）。
             self.database.execute(
                 """
                 UPDATE element_validations
                 SET status = ?, result = ?, error = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('queued', 'running')
                 """,
                 (
                     result.get("status"),

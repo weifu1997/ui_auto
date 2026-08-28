@@ -1,14 +1,17 @@
 """Test-session isolation for import-time side effects.
 
-`autoflow.main` defines a module-level `app = create_app()` so uvicorn can load
-`autoflow.main:app`. Importing that module in a test therefore constructs a
-real `PlatformServices` pointed at the repository's `data/` directory, running
-migrations, starting ManagedRunner threads, and re-enqueueing queued runs.
+Since 阶段1-D, `autoflow.main` no longer constructs services on import: the
+module-level `app = create_app()` was removed in favor of the explicit
+`create_platform_app()` factory (uvicorn `--factory`) plus a lazy module
+`__getattr__` that only builds `app` when `autoflow.main:app` is explicitly
+referenced. `import autoflow.main` / `from autoflow.main import create_app`
+are therefore side-effect free.
 
-conftest is imported before any test module, so redirecting
-`PLATFORM_DATA_DIRECTORY` here keeps that side-effectful instance away from
-real data. Tests always construct their own `PlatformServices` on `tmp_path`,
-so this only affects the module-level app that tests never assert against.
+The `PLATFORM_DATA_DIRECTORY` redirect below is retained as a harmless safety
+net: if anything ever constructs a default `PlatformServices` (un-pointed
+data dir) during a test import, it still lands on a throwaway temp directory
+instead of the repository's real `data/`. Tests always construct their own
+`PlatformServices` on `tmp_path`.
 """
 
 import os

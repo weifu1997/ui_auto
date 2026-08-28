@@ -60,6 +60,18 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         return _send(Response(), 200, {"validation": validation})
 
     @router.api_route(
+        "/api/platform/projects/{project_id}/element-validations/{validation_id}/cancel",
+        methods=["POST"],
+    )
+    async def element_validation_cancel(
+        request: Request, project_id: str, validation_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "run.execute")
+        validation = services.cancel_element_validation(validation_id, project_id)
+        return _send(Response(), 200, {"validation": validation})
+
+    @router.api_route(
         "/api/platform/validation-artifacts/{artifact_id}", methods=["GET"]
     )
     async def validation_artifact(

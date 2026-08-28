@@ -1,13 +1,14 @@
 import { message } from "../lib/antd-feedback";
 import type { Project, Run } from "../lib/mock-data";
-import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, deletePlatformRun, deletePlatformRuns, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../api/platform-api";
-import type { PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../api/platform-api";
+import { cancelPlatformRun, cancelPlatformRunBatch, createPlatformRun, deletePlatformRun, deletePlatformRuns, getPlatformAssertionStats, getPlatformRun, getPlatformRunBatch, getPlatformRunBatches, getPlatformRuns, retryPlatformRun, retryPlatformRunBatch } from "../api/platform-api";
+import type { AssertionFailure, AssertionStats, PlatformRunBatch, PlatformRunBatchItem, PlatformSession } from "../api/platform-api";
 
 import { readPlatformProjectMap, readStoredPlatformSession } from "../api/platform-context";
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
-import { FilterBar, FilterItem, PageHeading, canUseCapability, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
+import { FilterBar, FilterItem, PageHeading, canUseCapability, createRunDispatchKeyStore, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
+import { OrchestrationDashboard } from "./OrchestrationDashboard";
 import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
@@ -42,7 +43,7 @@ export function RunsPage({ project }: { project: Project }) {
   const [platformPageRuns, setPlatformPageRuns] = useState<Run[]>([]);
   const [platformTotal, setPlatformTotal] = useState(0);
   const [updatingRunId, setUpdatingRunId] = useState<string | null>(null);
-  const runDispatchKeysRef = useRef(new Map<string, string>());
+  const runDispatchKeysRef = useRef(createRunDispatchKeyStore());
   const [refreshing, setRefreshing] = useState(false);
   const [batches, setBatches] = useState<PlatformRunBatch[]>([]);
   const [batchTotal, setBatchTotal] = useState(0);
@@ -54,6 +55,11 @@ export function RunsPage({ project }: { project: Project }) {
   const [batchUpdatingId, setBatchUpdatingId] = useState<string | null>(null);
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
+  // 断言聚合（全项目口径，独立端点）：RunsPage 通过率 + batch detail 汇总。
+  const [assertionStats, setAssertionStats] = useState<AssertionStats | null>(null);
+  // 编排看板刷新键：列表每次成功刷新自增，看板趋势随之重拉。
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
+  const [batchAssertions, setBatchAssertions] = useState<Record<string, { stats: AssertionStats; failures: AssertionFailure[] }>>({});
   useEffect(() => {
     if (platformSession && legacyPlatformProjectId && !platformProjectId) {
       setPlatformProjectId(project.id, legacyPlatformProjectId);
@@ -76,6 +82,8 @@ export function RunsPage({ project }: { project: Project }) {
       setPlatformPageRuns(pageRuns);
       setPlatformTotal(response.total);
       pageRuns.forEach((run) => upsertRun(project.id, run));
+      // 编排看板随列表刷新重拉趋势（同源平台会话，避免两套轮询）。
+      setDashboardRefreshKey((key) => key + 1);
     } catch {
       message.error("平台运行列表加载失败，请稍后重试");
     }
@@ -90,9 +98,31 @@ export function RunsPage({ project }: { project: Project }) {
         platformSession.token, remotePlatformProjectId, batchId,
       );
       setBatchItems((current) => ({ ...current, [batchId]: detail.runs }));
+      // batch detail 附带断言汇总（含失败明细），口径同全项目。
+      setBatchAssertions((current) => ({
+        ...current,
+        [batchId]: {
+          stats: detail.assertionStats ?? {
+            runsWithAssertions: 0,
+            totalAssertions: 0,
+            passedAssertions: 0,
+            failedAssertions: 0,
+          },
+          failures: detail.assertionFailures ?? [],
+        },
+      }));
     } catch {
       // 展开的批次详情加载失败时保留已有数据，列表仍可用。
     }
+  }, [platformSession, remotePlatformProjectId]);
+  useEffect(() => {
+    // 断言通过率来自独立端点（全项目口径，非分页聚合）。
+    if (!platformSession || !remotePlatformProjectId) return;
+    void getPlatformAssertionStats(platformSession.token, remotePlatformProjectId, 30)
+      .then((stats) => setAssertionStats(stats))
+      .catch(() => {
+        // 聚合失败不阻塞列表：保留上次结果或留空。
+      });
   }, [platformSession, remotePlatformProjectId]);
   const refreshBatches = useCallback(async () => {
     if (!platformSession || !remotePlatformProjectId) return;
@@ -457,6 +487,39 @@ export function RunsPage({ project }: { project: Project }) {
           : null,
     },
   ];
+  const renderBatchAssertionSummary = (batchId: string) => {
+    const summary = batchAssertions[batchId];
+    if (!summary) return null;
+    if (summary.stats.totalAssertions === 0) {
+      return (
+        <div className="batch-assertion-summary empty">
+          本批次未配置断言步骤
+        </div>
+      );
+    }
+    const passRate = Math.round((summary.stats.passedAssertions / summary.stats.totalAssertions) * 100);
+    return (
+      <div className="batch-assertion-summary">
+        <strong>断言汇总</strong>
+        <span className="pass-rate">
+          {summary.stats.passedAssertions}/{summary.stats.totalAssertions} 通过
+          （{passRate}%） · 失败 {summary.stats.failedAssertions}
+        </span>
+        {summary.failures.length > 0 && (
+          <ul className="batch-assertion-failures">
+            {summary.failures.map((failure, index) => (
+              <li key={`${failure.runId}-${index}`}>
+                <span className="failure-flow">{failure.flowName}</span>
+                <code>{failure.title}</code>
+                <span>期望 <code>{failure.expected}</code></span>
+                <span>实际 <code>{failure.actual}</code></span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  };
   return (
     <>
       <PageHeading
@@ -565,6 +628,11 @@ export function RunsPage({ project }: { project: Project }) {
           <Input type="date" aria-label="结束日期" value={toFilter} onChange={(event) => { setPage(1); setToFilter(event.target.value); }} />
         </FilterItem>
       </FilterBar>
+      <OrchestrationDashboard
+        platformSession={platformSession}
+        platformProjectId={remotePlatformProjectId}
+        refreshKey={dashboardRefreshKey}
+      />
       {batches.length > 0 && (
         <section className="surface" style={{ marginBottom: 16 }}>
           <Table
@@ -591,13 +659,16 @@ export function RunsPage({ project }: { project: Project }) {
               },
               expandedRowRender: (batch) =>
                 batchItems[batch.id] ? (
-                  <Table
-                    size="small"
-                    rowKey="id"
-                    columns={batchItemColumns}
-                    dataSource={batchItems[batch.id]}
-                    pagination={false}
-                  />
+                  <div className="batch-detail">
+                    {renderBatchAssertionSummary(batch.id)}
+                    <Table
+                      size="small"
+                      rowKey="id"
+                      columns={batchItemColumns}
+                      dataSource={batchItems[batch.id]}
+                      pagination={false}
+                    />
+                  </div>
                 ) : (
                   <span>批次详情加载中…</span>
                 ),
@@ -607,6 +678,16 @@ export function RunsPage({ project }: { project: Project }) {
         </section>
       )}
       <section className="surface">
+        {assertionStats && assertionStats.totalAssertions > 0 && (
+          <div className="assertion-stats-bar">
+            <span>
+              断言通过率 <strong>{Math.round((assertionStats.passedAssertions / assertionStats.totalAssertions) * 100)}%</strong>
+            </span>
+            <span>含断言运行 {assertionStats.runsWithAssertions} 次</span>
+            <span>通过 {assertionStats.passedAssertions} · 失败 {assertionStats.failedAssertions}</span>
+            <small>全项目口径 · 近 {assertionStats.windowDays ?? "全部"} 天</small>
+          </div>
+        )}
         <Table
           rowKey="id"
           columns={columns}

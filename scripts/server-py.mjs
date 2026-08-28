@@ -15,7 +15,8 @@ const child = spawn(
   [
     "-m",
     "uvicorn",
-    "autoflow.main:app",
+    "autoflow.main:create_platform_app",
+    "--factory",
     "--app-dir",
     "server-py",
     "--host",
