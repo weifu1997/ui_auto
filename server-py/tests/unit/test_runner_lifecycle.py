@@ -111,9 +111,9 @@ class _FakeChromium:
     def __init__(self) -> None:
         self.launches: list[dict[str, object]] = []
 
-    def launch(self, headless: object = None) -> _FakeBrowser:
+    def launch(self, headless: object = None, args: object = None) -> _FakeBrowser:
         browser = _FakeBrowser()
-        self.launches.append({"headless": headless, "browser": browser})
+        self.launches.append({"headless": headless, "args": args, "browser": browser})
         return browser
 
 
@@ -189,6 +189,12 @@ def test_browser_run_start_sequence_and_teardown(monkeypatch: pytest.MonkeyPatch
 def test_browser_run_headless_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_pw = _FakePlaywright()
     monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    # 有头路径：固定走自带 Chromium（否则 WSL/Windows 宿主上会拉起真实 Chrome）
+    monkeypatch.setattr("autoflow.runner.should_use_windows_chrome", lambda: False)
+    monkeypatch.setattr(
+        "autoflow.runner.headed_chromium_args",
+        lambda: ["--window-size=1280,800", "--window-position=80,80"],
+    )
     recorder: list[tuple[str, object]] = []
     hooks = _make_hooks(recorder)
 
@@ -202,6 +208,81 @@ def test_browser_run_headless_from_environment(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert fake_pw.chromium.launches[0]["headless"] is False
+    # 有头自带 Chromium 需要钉住窗口几何，避免窗口跑出屏幕
+    assert fake_pw.chromium.launches[0]["args"] == [
+        "--window-size=1280,800",
+        "--window-position=80,80",
+    ]
+
+
+def test_browser_run_headed_windows_host_uses_windows_chrome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WSL/Windows 宿主上有头运行改走 Windows Chrome via CDP。
+
+    取消是纯信号：ManagedRunner 不跨线程关 Playwright，浏览器统一由
+    ``_BrowserSession.__exit__`` 回收，因此 CDP 浏览器必须先 ``Browser.close``
+    杀进程再断连，不能把 Chrome 留成孤儿窗口。
+    """
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setattr("autoflow.runner.should_use_windows_chrome", lambda: True)
+    launched: dict[str, object] = {}
+    closed_browsers: list[object] = []
+
+    class _CdpBrowser(_FakeBrowser):
+        pass
+
+    def fake_launch_windows_chrome(
+        playwright: object,
+        storage_state: object,
+        *,
+        context_kwargs: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        launched["context_kwargs"] = context_kwargs
+        browser = _CdpBrowser()
+        launched["browser"] = browser
+        context = _FakeContext()
+        launched["context"] = context
+        return {
+            "browser": browser,
+            "context": context,
+            "page": object(),
+            "windowsChrome": True,
+            "cdpEndpoint": "http://127.0.0.1:9334",
+        }
+
+    monkeypatch.setattr(
+        "autoflow.runner.launch_windows_chrome_session", fake_launch_windows_chrome
+    )
+    monkeypatch.setattr(
+        "autoflow.runner.close_windows_chrome",
+        lambda browser: closed_browsers.append(browser),
+    )
+    recorder: list[tuple[str, object]] = []
+    hooks = _make_hooks(recorder)
+
+    result = execute_browser_run(
+        {
+            "environment": {"baseUrl": "https://app.test", "headless": False},
+            "flow": {"steps": []},
+            "secrets": {},
+        },
+        hooks,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    # 自带 Chromium 不得启动
+    assert fake_pw.chromium.launches == []
+    # 与自带 Chromium 路径同参（locale/storage_state，不设 viewport），跨宿主行为一致
+    assert launched["context_kwargs"] == {"locale": "zh-CN"}
+    browser = launched["browser"]
+    context = launched["context"]
+    assert ("browser", "register") in recorder
+    assert recorder[-1] == ("browser", "clear")
+    # teardown：先杀 Windows Chrome 进程，再收尾 context/playwright
+    assert closed_browsers == [browser]
+    assert context.closed and browser.closed and fake_pw.stopped
 
 
 def test_browser_run_cancel_runs_teardown(monkeypatch: pytest.MonkeyPatch) -> None:

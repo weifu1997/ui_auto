@@ -26,6 +26,12 @@ export function isImportableRecordingStatus(status: RecordingSessionStatus) {
   return status === "stopped" || status === "failed" || status === "expired" || status === "interrupted";
 }
 
+export function recordingLiveStatusLabel(status: RecordingSessionStatus) {
+  if (status === "paused") return "录制已暂停";
+  if (status === "starting") return "正在打开录制浏览器…";
+  return "录制中";
+}
+
 export function recordingResultHasSteps(result: RecordingResult | null | undefined) {
   return Boolean(result && result.steps.length > 0);
 }
