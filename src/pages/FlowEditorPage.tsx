@@ -34,6 +34,7 @@ import {
   isImportableRecordingStatus,
   isTerminalRecordingStatus,
   mergeRecordingEvents,
+  recordingLiveStatusLabel,
   recordingResultHasSteps,
   nextRecordingEventPage,
   planRecordingImport,
@@ -684,7 +685,9 @@ export default function FlowEditorPage() {
       setRecordingOpen(false);
       recordingLastSeqRef.current = 0;
       setRecordingEvents([]);
-      message.success("录制已开始");
+      message.success(
+        created.session.status === "starting" ? "正在打开录制浏览器窗口…" : "录制已开始",
+      );
       startRecordingPoll(created.session.id);
     } catch (error) {
       if (error instanceof PlatformApiError && error.code === "RECORDING_SESSION_ACTIVE") {
@@ -959,7 +962,7 @@ export default function FlowEditorPage() {
           {recordingSession && !isTerminalRecordingStatus(recordingSession.status) ? (
             <>
               <span className="recording-status" aria-live="polite">
-                {recordingSession.status === "paused" ? "录制已暂停" : "录制中"}
+                {recordingLiveStatusLabel(recordingSession.status)}
                 {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
                 {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
                 {` · ${recordingSession.recordedStepCount ?? recordingEvents.length} 步`}

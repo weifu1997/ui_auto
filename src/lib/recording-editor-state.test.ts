@@ -6,6 +6,7 @@ import {
   isImportableRecordingStatus,
   isTerminalRecordingStatus,
   mergeRecordingEvents,
+  recordingLiveStatusLabel,
   nextRecordingEventPage,
   planRecordingImport,
   recordingResultHasSteps,
@@ -74,6 +75,12 @@ describe("recording editor state", () => {
 
     clearStoredRecordingSession(sessionStorage, key);
     expect(sessionStorage.getItem(key)).toBeNull();
+  });
+
+  it("labels starting as opening the headed recorder window", () => {
+    expect(recordingLiveStatusLabel("starting")).toBe("正在打开录制浏览器…");
+    expect(recordingLiveStatusLabel("recording")).toBe("录制中");
+    expect(recordingLiveStatusLabel("paused")).toBe("录制已暂停");
   });
 
   it("plans one safe import, reuses matching assets, and binds sensitive values", () => {
