@@ -1,23 +1,38 @@
 import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { repoRoot } from "./python-env.mjs";
 
-const projectDir = join(repoRoot, "server-py");
 const CHROMIUM_BINARIES = new Set([
   "chrome",
   "chrome.exe",
   "chromium",
   "chromium.exe",
+  "chrome-headless-shell",
+  "chrome-headless-shell.exe",
   "headless_shell",
   "headless_shell.exe",
 ]);
 
-export function resolveBrowserCache(environment = process.env, pythonProjectDir = projectDir) {
+export function defaultPlaywrightCache(environment = process.env, platform = process.platform) {
+  if (platform === "darwin") {
+    return join(homedir(), "Library", "Caches", "ms-playwright");
+  }
+  if (platform === "win32") {
+    return join(
+      environment.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
+      "ms-playwright",
+    );
+  }
+  return join(homedir(), ".cache", "ms-playwright");
+}
+
+export function resolveBrowserCache(environment = process.env, platform = process.platform) {
   return environment.PLAYWRIGHT_BROWSERS_PATH
     ? join(environment.PLAYWRIGHT_BROWSERS_PATH)
-    : join(pythonProjectDir, ".browsers");
+    : defaultPlaywrightCache(environment, platform);
 }
 
 export function chromiumLooksInstalled(cacheDir) {

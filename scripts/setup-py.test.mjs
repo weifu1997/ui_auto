@@ -5,15 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 import { chromiumLooksInstalled, resolveBrowserCache } from "./setup-py.mjs";
 
-test("resolveBrowserCache defaults to server-py/.browsers and honors env", () => {
-  const projectDir = join("/tmp", "autoflow-py");
+test("resolveBrowserCache uses Playwright's default cache and honors env", () => {
   assert.equal(
-    resolveBrowserCache({}, projectDir),
-    join(projectDir, ".browsers"),
-  );
-  assert.equal(
-    resolveBrowserCache({ PLAYWRIGHT_BROWSERS_PATH: "/opt/browsers" }, projectDir),
+    resolveBrowserCache({ PLAYWRIGHT_BROWSERS_PATH: "/opt/browsers" }),
     join("/opt", "browsers"),
+  );
+  assert.match(
+    resolveBrowserCache({}, "linux"),
+    /ms-playwright$/,
   );
 });
 
