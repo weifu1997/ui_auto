@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "检查 restore 预快照是否仍漏 wal/shm"}
+{"file": ".trellis/spec/backend/run-batch-recording-contracts.md", "reason": "检查录制 create 是否仍同步阻塞，以及 BUSY/ACTIVE 是否保持"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查前端 15s abort 与 starting 轮询是否被误改"}
+{"file": "docs/生产基线发布与分支保护.md", "reason": "检查 CI 文档与 workflow 触发是否一致"}

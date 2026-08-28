@@ -28,7 +28,12 @@ $liveDb = Join-Path $data "platform.sqlite"
 if (Test-Path -LiteralPath $liveDb) {
   $preRestore = Join-Path $data ("pre-restore-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
   New-Item -ItemType Directory -Force -Path $preRestore | Out-Null
-  Copy-Item -LiteralPath $liveDb -Destination (Join-Path $preRestore "platform.sqlite") -Force
+  foreach ($name in @("platform.sqlite", "platform.sqlite-wal", "platform.sqlite-shm")) {
+    $source = Join-Path $data $name
+    if (Test-Path -LiteralPath $source) {
+      Copy-Item -LiteralPath $source -Destination (Join-Path $preRestore $name) -Force
+    }
+  }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $backupPath "platform.sqlite"))) { throw "Backup missing platform.sqlite" }
 foreach ($name in @("platform.sqlite", "autoflow.sqlite")) {

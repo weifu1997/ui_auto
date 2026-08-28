@@ -146,3 +146,57 @@ def test_started_false_skips_browser_execution(tmp_path, monkeypatch):
         assert executed == ["next"]
     finally:
         runner.stop()
+
+
+def test_started_exception_fails_and_releases_slot(tmp_path, monkeypatch):
+    executed: list[str] = []
+    completed: list[dict] = []
+
+    def fake_execute(input, _hooks):
+        executed.append(input.get("name") or "run")
+        return {
+            "status": "success",
+            "completedSteps": 0,
+            "totalSteps": 0,
+            "elapsedMs": 0,
+            "flowOutputs": {},
+        }
+
+    monkeypatch.setattr(module, "execute_browser_run", fake_execute)
+    runner = ManagedRunner(str(tmp_path), global_concurrency=1, workspace_concurrency=1)
+    try:
+        def boom():
+            raise RuntimeError("mark_run_started boom")
+
+        runner.enqueue(
+            "boom",
+            {"name": "boom"},
+            {
+                "started": boom,
+                "event": lambda *_args: None,
+                "artifact": lambda *_args: None,
+                "completed": completed.append,
+            },
+            "run",
+            workspace_id="w1",
+        )
+        assert _wait_until(lambda: completed and completed[0].get("status") == "failed")
+        assert executed == []
+        assert "mark_run_started boom" in str(completed[0].get("error"))
+
+        runner.enqueue(
+            "next",
+            {"name": "next"},
+            {
+                "started": lambda: True,
+                "event": lambda *_args: None,
+                "artifact": lambda *_args: None,
+                "completed": lambda _result: completed.append({"id": "next"}),
+            },
+            "run",
+            workspace_id="w1",
+        )
+        assert _wait_until(lambda: any(item.get("id") == "next" for item in completed))
+        assert executed == ["next"]
+    finally:
+        runner.stop()

@@ -192,8 +192,8 @@ class RecordingCoordinator:
             )
             with self._lock:
                 session["browserFuture"] = browser_future
-            if not session["browserReady"].wait(timeout=120):
-                raise TimeoutError("recording browser did not become ready")
+                status = session["status"]
+                error_code = session.get("startupError") or session.get("errorCode")
         except Exception:
             code = "RECORDING_BROWSER_START_FAILED"
             with self._lock:
@@ -208,25 +208,14 @@ class RecordingCoordinator:
             from .http import PlatformError
 
             raise PlatformError(409, code) from None
-        with self._lock:
-            startup_error = session.get("startupError")
-            if startup_error:
-                code = startup_error
-                session["status"] = "failed"
-                session["errorCode"] = code
-                self._persist_session(session)
-                self._notify_failed(session)
-                from .http import PlatformError
+        # Immediate/sync submitters finish launch before this returns. Async
+        # submitters leave status as starting; the HTTP path must not wait.
+        if status in _TERMINAL_STATUSES:
+            from .http import PlatformError
 
-                raise PlatformError(409, code)
-            if session["status"] != "starting":
-                code = session.get("errorCode") or "RECORDING_BROWSER_START_FAILED"
-                self._persist_session(session)
-                from .http import PlatformError
-
-                raise PlatformError(409, code)
-            session["status"] = "recording"
-            self._persist_session(session)
+            raise PlatformError(
+                409, error_code or "RECORDING_BROWSER_START_FAILED"
+            )
         return self.session_response(session)
 
     def _run_browser_session(
@@ -304,6 +293,10 @@ class RecordingCoordinator:
             # that protocol call pending while allowing the page event loop to
             # deliver interaction bindings between bounded pump intervals.
             browser_started = callable(getattr(page, "wait_for_timeout", None))
+            with self._lock:
+                if session["status"] == "starting":
+                    session["status"] = "recording"
+            self._persist_session(session)
             session["browserReady"].set()
             if not browser_started:
                 return

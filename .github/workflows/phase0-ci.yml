@@ -4,9 +4,13 @@ on:
   pull_request:
     branches:
       - python_3.1
+      - master
+      - v3.2_flow_assertion
   push:
     branches:
       - python_3.1
+      - master
+      - v3.2_flow_assertion
 
 permissions:
   contents: read
