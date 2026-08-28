@@ -10,6 +10,15 @@ class RunServicesBase:
     """Shared cross-mixin helpers for run services."""
 
     def redact_run_value(self, run: dict[str, Any], value: Any) -> Any:
+        def failed(current: Any) -> Any:
+            if isinstance(current, str):
+                return "***"
+            if isinstance(current, list):
+                return [failed(item) for item in current]
+            if isinstance(current, dict):
+                return {key: failed(item) for key, item in current.items()}
+            return current
+
         try:
             rows = self.database.execute(
                 """
@@ -18,24 +27,30 @@ class RunServicesBase:
                 """,
                 (run["projectId"],),
             ).fetchall()
-            secrets = {
-                row[0]: self.decrypt({"iv": row[1], "tag": row[2], "ciphertext": row[3]})
-                for row in rows
-            }
-
-            def redact(current: Any) -> Any:
-                if isinstance(current, str):
-                    result = current
-                    for secret in secrets.values():
-                        if secret:
-                            result = result.replace(secret, "***")
-                    return result
-                if isinstance(current, list):
-                    return [redact(item) for item in current]
-                if isinstance(current, dict):
-                    return {key: redact(item) for key, item in current.items()}
-                return current
-
-            return redact(value)
         except Exception:
-            return "***"
+            return failed(value)
+
+        secrets: list[str] = []
+        for row in rows:
+            try:
+                secret = self.decrypt(
+                    {"iv": row[1], "tag": row[2], "ciphertext": row[3]}
+                )
+            except Exception:
+                continue
+            if secret:
+                secrets.append(secret)
+
+        def redact(current: Any) -> Any:
+            if isinstance(current, str):
+                result = current
+                for secret in secrets:
+                    result = result.replace(secret, "***")
+                return result
+            if isinstance(current, list):
+                return [redact(item) for item in current]
+            if isinstance(current, dict):
+                return {key: redact(item) for key, item in current.items()}
+            return current
+
+        return redact(value)

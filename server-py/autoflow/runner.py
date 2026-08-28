@@ -184,11 +184,14 @@ def _fallback_candidates(element: dict[str, Any]) -> list[tuple[str, str, str | 
     if method == "label":
         return [("label", value, None)]
     if method == "role":
-        # 去掉 name 约束的 role 退化；仅当该 role 在页面唯一（count()===1）时采纳。
-        match = re.match(r"^([\w-]+)", value)
-        if match:
-            return [("role", match.group(1), None)]
-        return []
+        parsed = re.match(r"^([\w-]+)(?:\[name=['\"]?(.*?)['\"]?\])?$", value)
+        if not parsed:
+            return []
+        role = parsed.group(1)
+        name = parsed.group(2) or None
+        # Keep the accessible name when the original locator had one. Dropping
+        # it can click the only button on the page instead of the named control.
+        return [("role", role, name)]
     return []
 
 
@@ -254,6 +257,24 @@ def _heal_locator(
             best_score = score
             best = (candidate, kind, value)
     return best
+
+
+def _should_heal_locator(locator: Any, error: BaseException) -> bool:
+    """Heal only when the original locator missed, not when it found a node.
+
+    Covered/disabled/animating nodes time out with count()>=1; swapping in a
+    different unique locator would mis-click. Strict-mode ambiguity is treated
+    as a miss so a unique fallback can still be tried.
+    """
+    if locator is None:
+        return True
+    try:
+        count = locator.count()
+    except Exception:
+        return True
+    if count == 0:
+        return True
+    return "strict mode" in str(error).lower()
 
 
 def _run_element_action(action: str, locator: Any, value: str, timeout: int) -> None:
@@ -412,6 +433,10 @@ def _assert_attribute(
     return passed, expected, actual
 
 
+def _url_matches(actual: str, expected: str, match: str) -> bool:
+    return actual == expected if match == "exact" else expected in actual
+
+
 def _assert_url(
     page: Any,
     step: dict[str, Any],
@@ -422,18 +447,28 @@ def _assert_url(
 
     页面级断言（R3-1）：不读 locator——URL 断言步骤不引用元素，也不落
     STEP_ELEMENT_REQUIRED；无 trimCompare 语义（URL 不做空白折叠归一化）。
-    页面取 URL 异常（如已关闭）时按「不可用」判定，不抛非预期异常。
+    有 ``wait_for_url`` 时等到命中或超时（覆盖 SPA/延迟跳转）；页面取 URL
+    异常（如已关闭）时按「不可用」判定，不抛非预期异常。
     """
     match = step.get("assertMatch")
     if match not in ASSERT_MATCHES:
         match = "contains"
     expected = value
+    waiter = getattr(page, "wait_for_url", None)
+    if callable(waiter):
+        try:
+            waiter(
+                lambda url: _url_matches(str(url), expected, match),
+                timeout=max(1, int(timeout_ms)),
+            )
+            return True, expected, str(page.url)
+        except Exception:
+            pass
     try:
-        actual = page.url
+        actual = str(page.url)
     except Exception:
         return False, expected, "not-available"
-    passed = actual == expected if match == "exact" else expected in actual
-    return passed, expected, actual
+    return _url_matches(actual, expected, match), expected, actual
 
 
 def _run_assertion(
@@ -637,7 +672,11 @@ def _execute_step(
         # 仅在唯一命中（count()===1）时采纳，防止误点/误填；备用定位器仍失败
         # 则回到原有超时/错误处理。回退事件恒在 step.completed/step.failed 之前。
         healed: tuple[Any, str, str] | None = None
-        if action in _ELEMENT_ACTIONS and element is not None:
+        if (
+            action in _ELEMENT_ACTIONS
+            and element is not None
+            and _should_heal_locator(locator, error)
+        ):
             healed = _heal_locator(
                 page,
                 element,

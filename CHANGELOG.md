@@ -5,6 +5,24 @@ sequence, not semantic versioning (no stable tagged release yet).
 
 ## Unreleased
 
+### Reliability / security (code-review follow-up)
+
+- Recording create/stop/cancel no longer block the FastAPI event loop.
+- `/ready` and `/health` stay reachable over loopback HTTP when HTTPS is required,
+  so Windows `upgrade.ps1` health checks no longer roll back a successful package.
+- Production Python interpreter is pinned via `AUTOFLOW_PYTHON`; install copies
+  exclude `.env`, venvs, and `.trellis`; Playwright Chromium installs into
+  `PLAYWRIGHT_BROWSERS_PATH`.
+- Run completion only enqueues notifications; the maintenance loop delivers them.
+- Missing `PLATFORM_SECRET_KEY` fails closed unless `AUTOFLOW_ALLOW_INSECURE_DEV_KEY=1`.
+- Notification/template errors return stable codes, not `str(exc)`.
+- Login rate limits use `X-Forwarded-For` only behind `AUTOFLOW_TRUSTED_PROXY`.
+- Backup manifest verify requires `platform.sqlite`; restore checks service stop.
+- URL assertions wait for navigation; locator self-heal only runs on a miss and
+  keeps role accessible names; assertion reports use unique filenames; redact
+  failures keep the payload type; terminal recordings can import in-memory drafts;
+  CI checks `uv.lock` before `uv sync --frozen`.
+
 ### Phase 2 — Stable internal production
 
 - Runner: global/per-workspace concurrency with eligible FIFO scheduling (RUN-01).

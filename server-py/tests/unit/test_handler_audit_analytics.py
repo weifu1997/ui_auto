@@ -999,3 +999,53 @@ def test_platform_login_rate_limits_per_ip(tmp_path):
         assert login_status("10.0.0.2") == 401
     finally:
         services.close()
+
+
+def test_platform_login_rate_limits_by_forwarded_ip_behind_trusted_proxy(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("AUTOFLOW_TRUSTED_PROXY", "proxy.internal")
+    services = PlatformServices(str(tmp_path))
+    try:
+        router = create_platform_router(services)
+        login_route = next(
+            route
+            for route in router.routes
+            if getattr(route, "path", None) == "/api/auth/login"
+        )
+
+        async def call_login(forwarded: str):
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/auth/login",
+                "raw_path": b"/api/auth/login",
+                "query_string": b"",
+                "headers": [(b"x-forwarded-for", forwarded.encode("ascii"))],
+                "client": ("proxy.internal", 1234),
+                "server": ("127.0.0.1", 8787),
+            }
+
+            async def receive():
+                return {
+                    "type": "http.request",
+                    "body": b'{"email":"nobody@example.test","password":"bad"}',
+                    "more_body": False,
+                }
+
+            return await login_route.endpoint(Request(scope, receive=receive))
+
+        def login_status(forwarded: str):
+            try:
+                return asyncio.run(call_login(forwarded)).status_code
+            except PlatformError as error:
+                return error.status
+
+        assert [login_status("203.0.113.9") for _ in range(10)] == [401] * 10
+        assert login_status("203.0.113.9") == 429
+        assert login_status("203.0.113.10") == 401
+    finally:
+        services.close()

@@ -946,7 +946,8 @@ class _RunsLifecycleMixin:
             except Exception:
                 pass
             raise
-        self.deliver_pending_notifications()
+        # Network delivery stays on the maintenance loop. Flushing here would
+        # block a ManagedRunner worker for up to 20 * 10s.
 
     def absorb_late_completed_run(
         self,
@@ -982,4 +983,6 @@ class _RunsLifecycleMixin:
             run_id, "run.failed", {"reason": reason, "interrupted": True}
         )
         self.audit_run_lifecycle(run_id, self.run_by_id(run_id), "failed")
-        self.queue_run_deliveries(self.run_by_id(run_id), "failed")
+        self.queue_run_deliveries(
+            self.run_by_id(run_id), "failed", flush=False
+        )

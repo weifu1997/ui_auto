@@ -462,6 +462,22 @@ def test_recording_stop_is_audited_once_and_invalid_json_is_a_stable_4xx(tmp_pat
             assert json.loads(response.body)["session"]["status"] == "stopped"
         assert [call[2] for call in audit_calls] == ["recording.session_stopped"]
 
+        result_route = _route(
+            router,
+            "/api/platform/projects/{project_id}/recording-sessions/{session_id}/result",
+        )
+        result_response = _call(
+            result_route,
+            session["token"],
+            "project-1",
+            path_params={"session_id": "rec_test"},
+        )
+        assert result_response.status_code == 200
+        result_body = json.loads(result_response.body)
+        assert result_body["session"]["status"] == "stopped"
+        assert "steps" in result_body["result"]
+        assert "elements" in result_body["result"]
+
         create_route = _route(
             router, "/api/platform/projects/{project_id}/recording-sessions"
         )

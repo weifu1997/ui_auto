@@ -18,3 +18,6 @@ import os
 import tempfile
 
 os.environ["PLATFORM_DATA_DIRECTORY"] = tempfile.mkdtemp(prefix="autoflow-test-data-")
+# Tests construct PlatformServices without a key file; opt in to the documented
+# development default. Production and direct Python startup still fail closed.
+os.environ.setdefault("AUTOFLOW_ALLOW_INSECURE_DEV_KEY", "1")

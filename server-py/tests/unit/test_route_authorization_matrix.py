@@ -176,6 +176,7 @@ ROUTE_POLICIES = [
     *_project("/api/platform/projects/{project_id}/recording-sessions/cancel-active", "POST", "flow.edit"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}", "GET DELETE", "flow.edit", "in-memory session owner + project_id"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/events", "GET", "flow.edit", "in-memory session owner + project_id"),
+    *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/result", "GET", "flow.edit", "in-memory session owner + project_id"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/pause", "POST", "flow.edit", "in-memory session owner + project_id"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/resume", "POST", "flow.edit", "in-memory session owner + project_id"),
     *_indirect("/api/platform/projects/{project_id}/recording-sessions/{session_id}/stop", "POST", "flow.edit", "in-memory session owner + project_id"),

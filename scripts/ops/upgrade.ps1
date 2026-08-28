@@ -10,11 +10,19 @@ New-Item -ItemType Directory -Path $current | Out-Null
 Expand-Archive -LiteralPath $packagePath -DestinationPath $current -Force
 Push-Location $current; npm ci; npm run build; Pop-Location
 & $python -m pip install --upgrade uv
+$previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
+$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $Root "browsers"
 $env:UV_PROJECT_ENVIRONMENT = Join-Path $current "venv"
-Push-Location (Join-Path $current "server-py")
-& $python -m uv sync --no-dev --locked
-& $python -m uv run --no-dev --frozen python -m playwright install chromium
-Pop-Location
-Remove-Item Env:UV_PROJECT_ENVIRONMENT
+try {
+  Push-Location (Join-Path $current "server-py")
+  & $python -m uv sync --no-dev --locked --python $python
+  & $python -m uv run --no-dev --frozen python -m playwright install chromium
+  Pop-Location
+}
+finally {
+  $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath
+  Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+}
+# /ready is exempt from AUTOFLOW_REQUIRE_HTTPS so the loopback probe works.
 try { & $service start; Start-Sleep -Seconds 3; Invoke-RestMethod -Uri "http://127.0.0.1:8787/ready" | Out-Null }
 catch { & $service stop; Remove-Item -LiteralPath $current -Recurse -Force; Move-Item -LiteralPath $previous -Destination $current; & $service start; Write-Host "Upgrade failed and the previous version was restored."; Write-Host "If the database is inconsistent, restore the pre-upgrade backup manually: scripts\restore.ps1 -Backup <backup-directory>."; throw "Upgrade failed and previous version was restored" }

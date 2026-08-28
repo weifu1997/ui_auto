@@ -45,11 +45,11 @@ jobs:
       - name: Install locked Node dependencies
         run: npm ci
 
-      - name: Set up Python test environment
-        run: npm run setup:py
-
       - name: Check Python lockfile freshness
         run: uv lock --check --project server-py
+
+      - name: Set up Python test environment
+        run: npm run setup:py
 
       - name: Build
         run: npm run build
@@ -113,6 +113,9 @@ jobs:
 
       - name: Install locked Node dependencies
         run: npm ci
+
+      - name: Check Python lockfile freshness
+        run: uv lock --check --project server-py
 
       - name: Set up Python test environment
         run: npm run setup:py

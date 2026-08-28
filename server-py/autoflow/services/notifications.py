@@ -13,6 +13,7 @@ from ._shared import (
     _iso_from_ms,
     _now_ms,
     _post_notification,
+    notification_client_error,
 )
 
 
@@ -171,11 +172,7 @@ class NotificationServices:
                         status = "failed"
                         error = f"NOTIFICATION_REJECTED_{body_code}"
             except Exception as exc:
-                error = (
-                    "NOTIFICATION_TIMEOUT"
-                    if isinstance(exc, TimeoutError)
-                    else str(exc)[:200]
-                )
+                error = notification_client_error(exc)
             attempts = int(delivery[4]) + 1
             retry = status == "failed" and attempts < NOTIFICATION_MAX_ATTEMPTS
             next_attempt_at = (
@@ -334,9 +331,9 @@ class NotificationServices:
             "completedAt": now(),
         }
 
-    def queue_run_deliveries(self, run: dict[str, Any], status: str, *, flush: bool = True) -> None:
-        """登记待投递记录；``flush=False`` 只入队不发送（供外层事务内调用，
-        网络发送由调用方在事务提交后统一触发，见 W1-1）。"""
+    def queue_run_deliveries(self, run: dict[str, Any], status: str, *, flush: bool = False) -> None:
+        """登记待投递记录。默认只入队；网络发送由维护循环
+        ``deliver_pending_notifications`` 执行，避免占用 ManagedRunner worker。"""
         if status not in ("success", "failed", "canceled"):
             return
         project = self.project_for(run["projectId"])

@@ -45,10 +45,13 @@ console.log(`[setup:py] Using ${uvCheck.stdout.trim()}`);
 const pythonFlag = process.env.AUTOFLOW_PYTHON
   ? ["--python", process.env.AUTOFLOW_PYTHON]
   : [];
+const frozen = process.env.CI ? ["--frozen"] : [];
 run(
   "uv",
-  ["sync", "--project", "server-py", ...pythonFlag],
-  "Sync Python dependencies (uv sync, from uv.lock)",
+  ["sync", "--project", "server-py", ...frozen, ...pythonFlag],
+  process.env.CI
+    ? "Sync Python dependencies (uv sync --frozen, from uv.lock)"
+    : "Sync Python dependencies (uv sync, from uv.lock)",
 );
 
 const browserCache = process.env.PLAYWRIGHT_BROWSERS_PATH

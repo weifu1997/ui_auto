@@ -602,8 +602,14 @@ class RecordingCoordinator:
             if isinstance(normalizer, RecorderNormalizer):
                 session["result"] = normalizer.result()
             else:
-                # 重启后无归并器：结果只可能来自持久化的已停会话，返回空结果。
-                session["result"] = {}
+                # 重启后无归并器：返回与 normalizer.result() 同形的空结果。
+                session["result"] = {
+                    "steps": [],
+                    "elements": [],
+                    "requiredBindings": [],
+                    "warnings": [],
+                    "lastSeq": 0,
+                }
         return {
             "session": self.session_response(session),
             "result": session["result"],

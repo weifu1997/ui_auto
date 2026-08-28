@@ -3,10 +3,12 @@ import type { ElementAsset } from "./mock-data";
 import type { RecordingEvent, RecordingResult } from "../api/platform-api";
 import {
   clearStoredRecordingSession,
+  isImportableRecordingStatus,
   isTerminalRecordingStatus,
   mergeRecordingEvents,
   nextRecordingEventPage,
   planRecordingImport,
+  recordingResultHasSteps,
   recordingSessionStorageKey,
   storeRecordingSessionId,
 } from "./recording-editor-state";
@@ -65,6 +67,10 @@ describe("recording editor state", () => {
     expect(isTerminalRecordingStatus("failed")).toBe(true);
     expect(isTerminalRecordingStatus("interrupted")).toBe(true);
     expect(isTerminalRecordingStatus("paused")).toBe(false);
+    expect(isImportableRecordingStatus("failed")).toBe(true);
+    expect(isImportableRecordingStatus("canceled")).toBe(false);
+    expect(recordingResultHasSteps({ steps: [{ id: "s1", title: "打开", action: "打开页面", value: "/" }], elements: [], requiredBindings: [], warnings: [], lastSeq: 1 })).toBe(true);
+    expect(recordingResultHasSteps({ steps: [], elements: [], requiredBindings: [], warnings: [], lastSeq: 0 })).toBe(false);
 
     clearStoredRecordingSession(sessionStorage, key);
     expect(sessionStorage.getItem(key)).toBeNull();

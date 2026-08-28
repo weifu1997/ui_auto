@@ -19,7 +19,10 @@
   `PLATFORM_SECRET_KEY_FILE` may point to a readable, non-blank key file
   (absolute, or relative to the repository root); the Node gate validates the
   file and the Python service reads it, mirroring `services.py`. A direct
-  `PLATFORM_SECRET_KEY` always wins when both are set.
+  `PLATFORM_SECRET_KEY` always wins when both are set. Direct Python startup
+  (bypassing `npm run start`) also fails closed unless a key is configured;
+  `AUTOFLOW_ALLOW_INSECURE_DEV_KEY=1` enables the documented development
+  default and is ignored when `NODE_ENV=production`.
 - `AUTOFLOW_STATIC_DIRECTORY`: optional static directory, default `dist`.
 - `AUTOFLOW_LISTEN_HOST`: optional listener override, default `127.0.0.1`.
 - `PORT`: optional port override, default `8787`.
@@ -49,6 +52,9 @@
   Worker URL returns the ordinary 404 response.
 - LAN exposure requires an explicit `AUTOFLOW_LISTEN_HOST=0.0.0.0` (or another
   chosen address); the default remains loopback.
+- When `AUTOFLOW_REQUIRE_HTTPS=1`, `/ready` and `/health` remain reachable over
+  loopback HTTP so `upgrade.ps1` and soak probes can check liveness. Authenticated
+  API routes still require TLS or a trusted forwarded HTTPS hop.
 
 ### 4. Validation & Error Matrix
 

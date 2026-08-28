@@ -20,7 +20,7 @@ import { shouldReloadEditorSteps, useFlowStore } from "../stores/flow-store";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { message, modal } from "../lib/antd-feedback";
-import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getPlatformElementValidation, listRecordingSessions, pauseRecordingSession, previewPlatformRun, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
+import { PlatformApiError, cancelActiveRecordingSession, cancelRecordingSession, createPlatformElementValidation, createPlatformRevision, createPlatformRun, createRecordingSession, getPlatformRevisions, getRecordingEvents, getRecordingSession, getRecordingSessionResult, getPlatformElementValidation, listRecordingSessions, pauseRecordingSession, previewPlatformRun, resumeRecordingSession, stopRecordingSession } from "../api/platform-api";
 import type { PlatformPreviewRun } from "../api/platform-api";
 
 // W3 试点：只读流程图懒加载为独立 chunk（React Flow 体积较大，避免进主包）。
@@ -31,8 +31,10 @@ import { elementValidationLoginMessage } from "../lib/element-validation";
 import { createRunDispatchKeyStore, describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey } from "./shared";
 import {
   clearStoredRecordingSession,
+  isImportableRecordingStatus,
   isTerminalRecordingStatus,
   mergeRecordingEvents,
+  recordingResultHasSteps,
   nextRecordingEventPage,
   planRecordingImport,
   readStoredRecordingSession,
@@ -523,6 +525,26 @@ export default function FlowEditorPage() {
       recordingPollRef.current = undefined;
     }
   }, []);
+  const loadTerminalRecordingResult = useCallback(async (
+    sessionId: string,
+    status: RecordingSession["status"],
+  ) => {
+    if (!platformContext || !isImportableRecordingStatus(status)) return;
+    try {
+      const { result } = await getRecordingSessionResult(
+        platformContext.session.token,
+        platformContext.projectId,
+        sessionId,
+      );
+      if (recordingResultHasSteps(result)) {
+        setRecordingResult(result);
+        setSelectedAssertionIds(new Set());
+        setRecordingSecretMap({});
+      }
+    } catch {
+      // Missing or empty terminal result is not an importable draft.
+    }
+  }, [platformContext]);
   const pollRecording = useCallback(async (sessionId: string) => {
     if (!platformContext || recordingPollInFlightRef.current) return;
     recordingPollInFlightRef.current = true;
@@ -554,13 +576,14 @@ export default function FlowEditorPage() {
       if (isTerminalRecordingStatus(detail.session.status)) {
         clearRecordingPoll();
         clearRecordingStorage();
+        void loadTerminalRecordingResult(sessionId, detail.session.status);
       }
     } catch {
       // Keep the cursor; a transient failure is retried by the next tick.
     } finally {
       recordingPollInFlightRef.current = false;
     }
-  }, [clearRecordingPoll, clearRecordingStorage, platformContext]);
+  }, [clearRecordingPoll, clearRecordingStorage, loadTerminalRecordingResult, platformContext]);
   const startRecordingPoll = useCallback((sessionId: string) => {
     clearRecordingPoll();
     void pollRecording(sessionId);
@@ -577,7 +600,10 @@ export default function FlowEditorPage() {
       listRecordingSessions(platformContext.session.token, platformContext.projectId, 1, 5)
         .then((page) => {
           const interrupted = page.sessions.find((item) => item.status === "interrupted");
-          if (interrupted) setRecordingSession(interrupted);
+          if (interrupted) {
+            setRecordingSession(interrupted);
+            void loadTerminalRecordingResult(interrupted.id, interrupted.status);
+          }
         })
         .catch(() => {})
         .finally(() => {
@@ -594,6 +620,7 @@ export default function FlowEditorPage() {
       recordingLastSeqRef.current = session.lastSeq;
       if (isTerminalRecordingStatus(session.status)) {
         clearRecordingStorage();
+        void loadTerminalRecordingResult(session.id, session.status);
         return;
       }
       startRecordingPoll(session.id);
@@ -602,7 +629,7 @@ export default function FlowEditorPage() {
     }).finally(() => {
       recordingRestoreInFlightRef.current = false;
     });
-  }, [clearRecordingStorage, platformContext, recordingSession, recordingStorageKey, startRecordingPoll]);
+  }, [clearRecordingStorage, loadTerminalRecordingResult, platformContext, recordingSession, recordingStorageKey, startRecordingPoll]);
 
   if (!project || !flow) {
     return <Navigate to={project ? `/project/${project.id}/flows` : "/projects"} replace />;
@@ -987,12 +1014,22 @@ export default function FlowEditorPage() {
             </Button>
           ) : null}
           {recordingSession && isTerminalRecordingStatus(recordingSession.status) && (
-            <span className="recording-status" aria-live="polite">
-              录制{terminalRecordingStatusLabel[recordingSession.status] ?? "已取消"}
-              {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
-              {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
-              {recordingSession.errorCode ? ` · ${recordingSession.errorCode}` : ""}
-            </span>
+            <>
+              <span className="recording-status" aria-live="polite">
+                录制{terminalRecordingStatusLabel[recordingSession.status] ?? "已取消"}
+                {recordingSession.environmentId ? ` · ${environments.find((item) => item.id === recordingSession.environmentId)?.name ?? recordingSession.environmentId}` : ""}
+                {recordingSession.currentUrl ? ` · ${recordingSession.currentUrl}` : ""}
+                {recordingSession.errorCode ? ` · ${recordingSession.errorCode}` : ""}
+              </span>
+              {isImportableRecordingStatus(recordingSession.status) && !recordingResult ? (
+                <Button
+                  icon={<FileSearchOutlined />}
+                  onClick={() => void loadTerminalRecordingResult(recordingSession.id, recordingSession.status)}
+                >
+                  导入录制结果
+                </Button>
+              ) : null}
+            </>
           )}
           <Button icon={<PlayCircleFilled />} loading={runToStep} onClick={() => run()}>
             运行整个流程

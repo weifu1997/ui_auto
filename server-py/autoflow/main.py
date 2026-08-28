@@ -21,7 +21,12 @@ from typing import Any
 
 from .http import PlatformError
 from .services import PlatformServices
-from .transport import effective_https, require_https, trusted_proxy
+from .transport import (
+    effective_https,
+    is_https_probe_path,
+    require_https,
+    trusted_proxy,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
@@ -175,7 +180,10 @@ class SecureTransportMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and self.require_https:
-            if not effective_https(scope, self.trusted_proxy):
+            path = scope.get("path") or ""
+            if not is_https_probe_path(path) and not effective_https(
+                scope, self.trusted_proxy
+            ):
                 response = JSONResponse(
                     status_code=426,
                     content={"error": "HTTPS_REQUIRED"},

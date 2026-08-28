@@ -1,6 +1,15 @@
 from autoflow.core import json, now
 from autoflow.services import AuthUser, PlatformServices
 from autoflow.services import notifications as notifications_module
+from autoflow.services._shared import notification_client_error
+
+
+def test_notification_client_error_is_stable_code():
+    assert notification_client_error(TimeoutError("timed out")) == "NOTIFICATION_TIMEOUT"
+    assert (
+        notification_client_error(RuntimeError("/var/lib/autoflow/platform.sqlite locked"))
+        == "NOTIFICATION_DELIVERY_FAILED"
+    )
 
 
 def test_deliver_pending_notification_marks_delivered_and_audits(tmp_path):

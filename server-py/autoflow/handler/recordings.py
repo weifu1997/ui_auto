@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
+from starlette.concurrency import run_in_threadpool
 from ..http import PlatformError
 from ..services import PlatformServices
 from ._shared import (
@@ -43,17 +44,20 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         environment = _recording_environment(
             services, project_id, environment_id
         )
-        session = services.recording_coordinator.create_session(
-            project_id,
-            flow_id,
-            environment,
-            start_url or "/",
-            owner_id=user.id,
-            fresh_login=fresh_login,
-            login_state_provider=lambda recording_project_id, recording_environment_id: services.recording_login_state(
-                user.id, recording_project_id, recording_environment_id
-            ),
-        )
+        def _create_session():
+            return services.recording_coordinator.create_session(
+                project_id,
+                flow_id,
+                environment,
+                start_url or "/",
+                owner_id=user.id,
+                fresh_login=fresh_login,
+                login_state_provider=lambda recording_project_id, recording_environment_id: services.recording_login_state(
+                    user.id, recording_project_id, recording_environment_id
+                ),
+            )
+
+        session = await run_in_threadpool(_create_session)
         services.audit(
             project["workspace_id"],
             {"type": "user", "id": user.id},
@@ -111,8 +115,11 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         environment_id = _text(body.get("environmentId")).strip()
         if not environment_id:
             raise PlatformError(400, "RECORDING_INPUT_INVALID")
-        session = services.recording_coordinator.cancel_active(
-            project_id, environment_id, user.id
+        session = await run_in_threadpool(
+            services.recording_coordinator.cancel_active,
+            project_id,
+            environment_id,
+            user.id,
         )
         if session is not None:
             services.audit(
@@ -146,6 +153,23 @@ def register(router: APIRouter, services: PlatformServices) -> None:
             _recording_session_for_owner(services, project_id, session_id, user.id)
         )
         return _send(Response(), 200, {"session": session})
+
+    @router.api_route(
+        "/api/platform/projects/{project_id}/recording-sessions/{session_id}/result",
+        methods=["GET"],
+    )
+    async def recording_session_result(
+        request: Request, project_id: str, session_id: str
+    ) -> Response:
+        user = services.session_user(dict(request.headers))
+        services.require_project_capability(project_id, user.id, "flow.edit")
+        _recording_session_for_owner(services, project_id, session_id, user.id)
+        payload = services.recording_coordinator.session_result(session_id)
+        return _send(
+            Response(),
+            200,
+            {"session": payload["session"], "result": payload["result"]},
+        )
 
     @router.api_route(
         "/api/platform/projects/{project_id}/recording-sessions/{session_id}/events",
@@ -225,7 +249,9 @@ def register(router: APIRouter, services: PlatformServices) -> None:
             services, project_id, session_id, user.id
         )
         was_active = session["status"] not in ("stopped", "canceled", "expired", "failed")
-        stopped = services.recording_coordinator.stop(session_id)
+        stopped = await run_in_threadpool(
+            services.recording_coordinator.stop, session_id
+        )
         result = services.recording_coordinator.session_result(session_id)
         if was_active:
             services.audit(
@@ -261,7 +287,9 @@ def register(router: APIRouter, services: PlatformServices) -> None:
             services, project_id, session_id, user.id
         )
         was_active = session["status"] not in ("stopped", "canceled", "expired", "failed")
-        canceled = services.recording_coordinator.cancel(session_id)
+        canceled = await run_in_threadpool(
+            services.recording_coordinator.cancel, session_id
+        )
         if was_active:
             services.audit(
                 capability["project"]["workspace_id"],

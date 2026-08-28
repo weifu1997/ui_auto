@@ -37,18 +37,32 @@ Set-Content -LiteralPath $serviceConfig -Value $config -Encoding UTF8
 $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $appRoot = Join-Path $resolvedRoot "app"
 $python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { "python" }
-& robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "data") /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" /NFL /NDL /NJH /NJS | Out-Null
+& robocopy $sourceRoot $appRoot /E /XD (Join-Path $sourceRoot "node_modules") (Join-Path $sourceRoot ".git") (Join-Path $sourceRoot "data") ".trellis" ".venv" ".venv-linux" "venv" /XF "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.zip" ".env" ".env.*" /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Application file copy failed with robocopy exit code $LASTEXITCODE" }
 $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $resolvedRoot "browsers"
-try { Push-Location $appRoot; npm ci; npm run build; npx playwright install chromium; Pop-Location }
-finally { $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath }
-& $python -m pip install --upgrade uv
-$env:UV_PROJECT_ENVIRONMENT = Join-Path $appRoot "venv"
-Push-Location (Join-Path $appRoot "server-py")
-& $python -m uv sync --no-dev --locked
-& $python -m uv run --no-dev --frozen python -m playwright install chromium
-Pop-Location
-Remove-Item Env:UV_PROJECT_ENVIRONMENT
+try {
+  Push-Location $appRoot
+  npm ci
+  if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
+  npm run build
+  if ($LASTEXITCODE -ne 0) { throw "npm run build failed with exit code $LASTEXITCODE" }
+  npx playwright install chromium
+  if ($LASTEXITCODE -ne 0) { throw "npx playwright install failed with exit code $LASTEXITCODE" }
+  Pop-Location
+  & $python -m pip install --upgrade uv
+  if ($LASTEXITCODE -ne 0) { throw "pip install uv failed with exit code $LASTEXITCODE" }
+  $env:UV_PROJECT_ENVIRONMENT = Join-Path $appRoot "venv"
+  Push-Location (Join-Path $appRoot "server-py")
+  & $python -m uv sync --no-dev --locked --python $python
+  if ($LASTEXITCODE -ne 0) { throw "uv sync failed with exit code $LASTEXITCODE" }
+  & $python -m uv run --no-dev --frozen python -m playwright install chromium
+  if ($LASTEXITCODE -ne 0) { throw "python playwright install failed with exit code $LASTEXITCODE" }
+  Pop-Location
+}
+finally {
+  $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath
+  Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+}
 & (Join-Path $resolvedRoot "AutoFlow.exe") install
 & (Join-Path $resolvedRoot "AutoFlow.exe") start

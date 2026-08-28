@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from ..audit import create_audit_writer, create_deployment_audit_writer
 from ..core import json, now
-from ..crypto import key_material
+from ..crypto import DEFAULT_PLATFORM_SECRET, key_material
 from ..migrations import run_platform_migrations
 from ..managed_runner import ManagedRunner
 from ..recorder import RecordingCoordinator
@@ -62,8 +62,15 @@ class CoreServices:
                     ).strip()
                 except Exception:
                     configured_secret = None
-        if os.environ.get("NODE_ENV") == "production" and not configured_secret:
-            raise RuntimeError("PLATFORM_SECRET_KEY is required in production")
+        if not configured_secret:
+            if os.environ.get("NODE_ENV") == "production":
+                raise RuntimeError("PLATFORM_SECRET_KEY is required in production")
+            if os.environ.get("AUTOFLOW_ALLOW_INSECURE_DEV_KEY") != "1":
+                raise RuntimeError(
+                    "PLATFORM_SECRET_KEY is required. For local development only, "
+                    "set AUTOFLOW_ALLOW_INSECURE_DEV_KEY=1"
+                )
+            configured_secret = DEFAULT_PLATFORM_SECRET
         self.key_material = key_material(configured_secret)
         self._configured_secret = configured_secret
         interrupted = self.database.execute(

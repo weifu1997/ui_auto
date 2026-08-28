@@ -59,14 +59,18 @@ class _FakeLocator:
 class _FakePage:
     # 类级配置：测试运行前指定「唯一命中的候选 (kind, value)」，其余一律 count 0。
     HEAL: tuple[str, str] | None = None
+    PRIMARY_UNACTIONABLE = False
 
     def __init__(self) -> None:
         self.actions: list[tuple[str, str | None]] = []
         self.url = "https://app.test/login"
 
     def _loc(self, kind: str, value: str, *, fail_action: bool = False) -> _FakeLocator:
-        count = 1 if self.HEAL and (kind, value) == self.HEAL else 0
-        return _FakeLocator(self, count=count, fail_action=fail_action)
+        if self.HEAL and (kind, value) == self.HEAL:
+            return _FakeLocator(self, count=1, fail_action=False)
+        if self.PRIMARY_UNACTIONABLE:
+            return _FakeLocator(self, count=1, fail_action=True)
+        return _FakeLocator(self, count=0, fail_action=fail_action)
 
     def locator(self, selector: str) -> _FakeLocator:
         m = _ATTR_SELECTOR.match(selector)
@@ -79,7 +83,7 @@ class _FakePage:
         return self._loc("css", selector)
 
     def get_by_role(self, role: str, name: object = None) -> _FakeLocator:
-        return self._loc("role", role)
+        return self._loc("role", f"{role}:{name}" if name else role)
 
     def get_by_label(self, value: str, **kwargs: object) -> _FakeLocator:
         # 真实语义：缺省精确匹配（主定位失败以驱动自愈），exact=False 才按候选命中。
@@ -261,10 +265,12 @@ def _run(
     monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
     monkeypatch.setenv("MANAGED_RUNNER_HEADLESS", "1")
     _FakePage.HEAL = heal
+    _FakePage.PRIMARY_UNACTIONABLE = False
     try:
         result = execute_browser_run(_flow(secret=secret), _make_hooks(recorder))  # type: ignore[arg-type]
     finally:
         _FakePage.HEAL = None
+        _FakePage.PRIMARY_UNACTIONABLE = False
     page = fake_pw.chromium.launches[0][1].contexts[0].pages[0]
     return result, page
 
@@ -305,6 +311,55 @@ def test_no_heal_when_no_candidate_uniquely_matches(monkeypatch: pytest.MonkeyPa
     kinds = _event_kinds(recorder)
     assert "step.locatorFallback" not in kinds
     assert "step.failed" in kinds
+
+
+def test_does_not_heal_when_original_locator_matched_but_was_unactionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: list[tuple[str, object]] = []
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setenv("MANAGED_RUNNER_HEADLESS", "1")
+    _FakePage.HEAL = ("testidPartial", "login-submit")
+    _FakePage.PRIMARY_UNACTIONABLE = True
+    try:
+        result = execute_browser_run(_flow(), _make_hooks(recorder))  # type: ignore[arg-type]
+    finally:
+        _FakePage.HEAL = None
+        _FakePage.PRIMARY_UNACTIONABLE = False
+
+    assert result["status"] == "failed"
+    assert "step.locatorFallback" not in _event_kinds(recorder)
+    page = fake_pw.chromium.launches[0][1].contexts[0].pages[0]
+    assert page.actions == []
+
+
+def test_named_role_heal_does_not_drop_accessible_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: list[tuple[str, object]] = []
+    flow = _flow()
+    flow["elements"] = [
+        {
+            "id": "e1",
+            "name": "登录按钮",
+            "path": "/login",
+            "method": "role",
+            "value": "button[name='Submit']",
+        }
+    ]
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setenv("MANAGED_RUNNER_HEADLESS", "1")
+    # Unique nameless button on the page must not be adopted.
+    _FakePage.HEAL = ("role", "button")
+    try:
+        result = execute_browser_run(flow, _make_hooks(recorder))  # type: ignore[arg-type]
+    finally:
+        _FakePage.HEAL = None
+
+    assert result["status"] == "failed"
+    assert "step.locatorFallback" not in _event_kinds(recorder)
 
 
 def test_heals_fill_via_label_substring(monkeypatch: pytest.MonkeyPatch) -> None:
