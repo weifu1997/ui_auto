@@ -8,7 +8,7 @@ import ipaddress
 import json as _json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -31,6 +31,13 @@ WEBHOOK_RATE_LIMIT_PER_MINUTE = int(
     os.environ.get("WEBHOOK_RATE_LIMIT_PER_MINUTE", "10")
 )
 WEBHOOK_MAX_RUNS = int(os.environ.get("WEBHOOK_MAX_RUNS", "100"))
+# 单次数据集批量派发（schedule/manual 绑定 dataset 时按行 fan-out）默认上限。
+# 数据集导入允许到 1 万行，无上限时一次派发会在单个 BEGIN IMMEDIATE 里写上万行
+# run+event（每行重复整份 snapshot），持全局写锁；超限在写任何行之前以
+# RUN_COUNT_LIMIT_EXCEEDED 拒绝。webhook 路径仍用自身的 WEBHOOK_MAX_RUNS。
+MAX_RUNS_PER_DISPATCH = int(
+    os.environ.get("AUTOFLOW_MAX_RUNS_PER_DISPATCH", "1000")
+)
 NOTIFICATION_MAX_ATTEMPTS = max(
     1, int(os.environ.get("NOTIFICATION_MAX_ATTEMPTS", "5"))
 )
@@ -273,18 +280,58 @@ def cron_matches(expression: str, date: datetime, time_zone: str) -> bool:
     )
 
 
+def _cron_day_matches(fields: list[str], day: date) -> bool:
+    """Day-level match for one calendar date (mirrors ``cron_matches``).
+
+    ``cron_matches`` additionally constrains minute/hour, but those fields are
+    day-independent and — after validation — always satisfiable on any day that
+    clears month/dom/dow, so a matching date always yields a firing time.
+    """
+    if not cron_field_matches(fields[3], day.month, 1, 12):
+        return False
+    day_of_month_matches = cron_field_matches(fields[2], day.day, 1, 31)
+    day_of_week_matches = cron_field_matches(fields[4], (day.weekday() + 1) % 7, 0, 6)
+    if fields[2] == "*":
+        return day_of_week_matches
+    if fields[4] == "*":
+        return day_of_month_matches
+    return day_of_month_matches or day_of_week_matches
+
+
 def next_cron_time(
     expression: str,
     time_zone: str,
     from_time: datetime | None = None,
 ) -> str:
     assert_valid_cron_expression(expression)
-    cursor = _as_utc(from_time or datetime.now(timezone.utc))
-    cursor = cursor.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    for _ in range(5000):
-        if cron_matches(expression, cursor, time_zone):
-            return cursor.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        cursor += timedelta(minutes=1)
+    fields = expression.strip().split()
+    start = _as_utc(from_time or datetime.now(timezone.utc))
+    start = start.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    try:
+        zone = ZoneInfo(time_zone)
+    except Exception as exc:
+        raise PlatformError(400, "SCHEDULE_TIMEZONE_INVALID") from exc
+    local = start.astimezone(zone)
+    local_date = local.date()
+    start_slot = local.hour * 60 + local.minute
+    # 从 from_time 起逐“本地日历日”推进：周/月/年频度（下周/下月可能远在
+    # 3.5 天之外）都必须能算出下一次触发。horizon 封顶 9 年，让“0 9 30 2 *”
+    # 这类永不可达的日期照常抛错，同时闰年 2/29（世纪交界可隔 8 年）仍可命中。
+    for _ in range(366 * 9):
+        if _cron_day_matches(fields, local_date):
+            first_slot = start_slot if local_date == local.date() else 0
+            for slot in range(first_slot, 1440):
+                candidate = datetime(
+                    local_date.year,
+                    local_date.month,
+                    local_date.day,
+                    slot // 60,
+                    slot % 60,
+                    tzinfo=zone,
+                )
+                if cron_matches(expression, candidate, time_zone):
+                    return _as_utc(candidate).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        local_date += timedelta(days=1)
     raise PlatformError(400, "SCHEDULE_CRON_INVALID")
 
 
