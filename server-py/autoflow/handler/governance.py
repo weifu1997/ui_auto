@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from ..core import parse_json
 from ..services import PlatformServices
+from ..workspaces import role_has_capability
 from ._shared import (
     _send,
 )
@@ -19,6 +20,7 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         user = services.session_user(dict(request.headers))
         result = services.require_project_role(project_id, user.id)
         project = result["project"]
+        role = result["role"]
         params = request.query_params
         try:
             page = max(1, int(params.get("page", "1")))
@@ -34,10 +36,20 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         from_value = params.get("from", "").strip()
         to_value = params.get("to", "").strip()
         q = params.get("q", "").strip()
-        conditions = [
-            "(project_id = ? OR (project_id IS NULL AND workspace_id = ?))"
-        ]
-        sql_params: list[Any] = [project_id, project["workspace_id"]]
+        # 项目级审计对能读该项目的人可见；工作区级事件（登录/IP、workspace.*、
+        # 账号变更等安全记录）只对具备 workspace.manage 能力的管理员可见，避免任意
+        # 项目成员顺带读取整个工作区里其他成员的安全审计。
+        workspace_capable = role_has_capability(role, "workspace.manage")
+        conditions: list[str]
+        sql_params: list[Any]
+        if workspace_capable:
+            conditions = [
+                "(project_id = ? OR (project_id IS NULL AND workspace_id = ?))"
+            ]
+            sql_params = [project_id, project["workspace_id"]]
+        else:
+            conditions = ["project_id = ?"]
+            sql_params = [project_id]
         if action:
             conditions.append("action LIKE ?")
             sql_params.append(f"{action}%")
