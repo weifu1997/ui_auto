@@ -5,7 +5,7 @@ import type { PlatformRevision } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
-import { PageHeading, canUseCapability, createRunDispatchKeyStore, describePlatformRunError, emptyEnvironments, emptyFlows, emptyVariables, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey, statusTag, uniqueNameValidator } from "./shared";
+import { PageHeading, canUseCapability, createRunDispatchKeyStore, describePlatformRunError, emptyEnvironments, emptyFlows, emptyVariables, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunSummaryAsRun, releaseRunDispatchKey, runIntentKey, statusTag, uniqueNameValidator } from "./shared";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -107,7 +107,7 @@ export function FlowsPage({ project }: { project: Project }) {
       const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
       const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: activeEnvironment.id, dispatchKey });
       releaseRunDispatchKey(runDispatchKeysRef.current, intent);
-      result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+      result.runs.forEach((run) => upsertRun(project.id, platformRunSummaryAsRun(run)));
       updateFlowStatus(flow.id, "running");
       message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
       navigate(`/project/${project.id}/runs`);

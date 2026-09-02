@@ -18,7 +18,7 @@ import {
   ensurePlatformRunSecrets,
   createRunDispatchKeyStore,
   nextRunDispatchKey,
-  platformRunAsRun,
+  platformRunSummaryAsRun,
   releaseRunDispatchKey,
   runIntentKey,
 } from "./shared";
@@ -90,7 +90,7 @@ export function AgentsPage({ project }: { project: Project }) {
       const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
       const result = await createPlatformRun(session.token, platformProjectId, { revisionId: revision.id, environmentId, dispatchKey });
       releaseRunDispatchKey(runDispatchKeysRef.current, intent);
-      result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+      result.runs.forEach((run) => upsertRun(project.id, platformRunSummaryAsRun(run)));
       message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
       if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
     } catch (error) {

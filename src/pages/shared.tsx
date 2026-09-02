@@ -3,7 +3,7 @@
 import { message, modal } from "../lib/antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../lib/mock-data";
 import { getPlatformHealth, PlatformApiError } from "../api/platform-api";
-import type { PlatformCapability, PlatformRun, PlatformSession } from "../api/platform-api";
+import type { PlatformCapability, PlatformRun, PlatformRunSummary, PlatformSession } from "../api/platform-api";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../api/platform-context";
 import { getPlatformSecrets, logoutPlatform, savePlatformSecret } from "../api/platform-api";
 import { readConflictSnapshotRaw } from "../lib/sync-outbox";
@@ -819,6 +819,34 @@ export function platformRunAsRun(run: PlatformRun): Run {
     screenshots: run.artifacts.filter((artifact) => artifact.contentType.startsWith("image/")).length,
     retries: 0,
   };
+}
+
+/** P1-5: 列表 / 派发现在收到的是服务器端算好的轻量摘要（不再内嵌整份
+ *  snapshot/events/artifacts）；派生字段直接消费摘要，无需再拉全量。 */
+export function platformRunSummaryAsRun(run: PlatformRunSummary): Run {
+  const status: Run["status"] = run.status === "dispatched" ? "running" : run.status;
+  return {
+    id: run.id,
+    flowName: run.flowName || "平台运行",
+    status,
+    environment: run.environmentName || run.environmentId,
+    progress: status === "success" ? 100 : run.progress,
+    completedSteps: run.completedSteps,
+    totalSteps: run.totalSteps,
+    startedAt: new Date(run.createdAt).toLocaleString(),
+    duration: isTerminalStatus(status) ? "已完成" : "进行中",
+    screenshots: run.screenshotCount,
+    retries: 0,
+  };
+}
+
+/** 统一入口：既吃 POST /runs 派发的轻量摘要，也吃单 run 接口返回的全量
+ *  PlatformRun（retry/cancel/getPlatformRun）。按是否有 snapshot/events 区分。 */
+export function platformRunAsStoreRun(run: PlatformRun | PlatformRunSummary): Run {
+  if ("snapshot" in run) {
+    return platformRunAsRun(run);
+  }
+  return platformRunSummaryAsRun(run);
 }
 
 // 统一轮询 hook：页面隐藏时暂停定时器，恢复可见时重新调度。

@@ -68,9 +68,9 @@ class _RunsLifecycleMixin:
             if dataset_version
             else [{"rowNumber": None, "data": None}]
         )
-        max_runs = input.get("maxRuns")
         # 调用方显式给 maxRuns 用调用方的；否则落到平台默认上限，避免一次数据集
         # 批量派发在单事务里无界写行。webhook 已自带 maxRuns=WEBHOOK_MAX_RUNS。
+        max_runs = input.get("maxRuns")
         if max_runs is None:
             max_runs = MAX_RUNS_PER_DISPATCH
         if len(rows) > int(max_runs):
@@ -423,14 +423,27 @@ class _RunsLifecycleMixin:
         if batch_id:
             snapshot["batchId"] = batch_id
             snapshot["batchItemIndex"] = batch_item_index
+        # P1-5c：全量快照外置到 run_snapshots，热行只留轻量派生列 —— 数据集/批次
+        # 派发不再让平台_runs 的高频扫描/去重/聚合查询背着整份 blob。
+        flow = flow_snapshot if isinstance(flow_snapshot, dict) else {}
+        flow_name = flow.get("name") if isinstance(flow.get("name"), str) else ""
+        environment_name = (
+            environment.get("name") if isinstance(environment.get("name"), str) else ""
+        )
+        total_steps = (
+            len(flow["steps"]) if isinstance(flow.get("steps"), list) else 0
+        )
         self.database.execute(
             """
             INSERT INTO platform_runs (
               id, project_id, revision_id, environment_id, agent_id,
-              executor_type, dispatch_key, status, snapshot,
+              executor_type, dispatch_key, status,
+              flow_name, environment_name, total_steps, snapshot,
               batch_id, batch_item_index, retry_of_run_id,
               created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'managed', ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 'managed', ?, 'queued',
+                      ?, ?, ?, '',
+                      ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -439,7 +452,9 @@ class _RunsLifecycleMixin:
                 environment_id,
                 agent["id"],
                 dispatch_key,
-                json(snapshot),
+                flow_name,
+                environment_name,
+                total_steps,
                 batch_id,
                 batch_item_index,
                 retry_of_run_id,
@@ -447,6 +462,13 @@ class _RunsLifecycleMixin:
                 created_at,
                 created_at,
             ),
+        )
+        self.database.execute(
+            """
+            INSERT INTO run_snapshots (run_id, snapshot, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (run_id, json(snapshot), created_at),
         )
         self.append_run_event(
             run_id,
@@ -476,7 +498,7 @@ class _RunsLifecycleMixin:
         row = self.database.execute(
             """
             SELECT id, project_id, revision_id, environment_id, agent_id,
-                   executor_type, status, snapshot, cancellation_requested,
+                   executor_type, status, cancellation_requested,
                    result, created_at, updated_at, retry_of_run_id
             FROM platform_runs
             WHERE id = ? AND (? IS NULL OR project_id = ?)
@@ -485,6 +507,11 @@ class _RunsLifecycleMixin:
         ).fetchone()
         if not row:
             raise PlatformError(404, "RUN_NOT_FOUND")
+        # P1-5c：全量快照外置在 run_snapshots，详情读取按需单查，热行不再内嵌 blob。
+        snapshot_row = self.database.execute(
+            "SELECT snapshot FROM run_snapshots WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
         return {
             "id": row[0],
             "projectId": row[1],
@@ -493,12 +520,12 @@ class _RunsLifecycleMixin:
             "agentId": row[4],
             "executorType": row[5],
             "status": row[6],
-            "snapshot": parse_json(row[7], {}),
-            "cancellationRequested": bool(row[8]),
-            "result": parse_json(row[9], None),
-            "createdAt": row[10],
-            "updatedAt": row[11],
-            "retryOfRunId": row[12],
+            "snapshot": parse_json(snapshot_row[0] if snapshot_row else "", {}),
+            "cancellationRequested": bool(row[7]),
+            "result": parse_json(row[8], None),
+            "createdAt": row[9],
+            "updatedAt": row[10],
+            "retryOfRunId": row[11],
         }
 
     def delete_run(self, project_id: str, run_id: str) -> dict[str, Any]:
@@ -516,6 +543,7 @@ class _RunsLifecycleMixin:
             raise PlatformError(409, "RUN_NOT_DELETABLE")
         self.database.execute("BEGIN IMMEDIATE")
         try:
+            self.database.execute("DELETE FROM run_snapshots WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM deliveries WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM flow_outputs WHERE run_id = ?", (run_id,))
             self.database.execute("DELETE FROM platform_artifacts WHERE run_id = ?", (run_id,))
@@ -547,6 +575,10 @@ class _RunsLifecycleMixin:
         deletable_placeholders = ",".join("?" for _ in deletable_run_ids)
         self.database.execute("BEGIN IMMEDIATE")
         try:
+            self.database.execute(
+                f"DELETE FROM run_snapshots WHERE run_id IN ({deletable_placeholders})",
+                deletable_run_ids,
+            )
             self.database.execute(
                 f"DELETE FROM deliveries WHERE run_id IN ({deletable_placeholders})",
                 deletable_run_ids,
@@ -766,6 +798,16 @@ class _RunsLifecycleMixin:
         from ...http import PlatformError
         from ...runner import execute_browser_run
 
+        environment = as_record(input.get("environment"))
+        base_url = (
+            str(environment.get("baseUrl", "")) if isinstance(environment, dict) else ""
+        )
+        # P1-1 SSRF：preview 的 environment 完全由调用方随请求提供（不走已发布
+        # 环境快照），需在拉起浏览器前先拒 link-local/云 metadata baseUrl；
+        # 正常 run 由 runner._target_url 在导航出口拦同一类地址。
+        if base_url and is_link_local_or_metadata_host(urlsplit(base_url).hostname):
+            raise PlatformError(400, "PREVIEW_URL_FORBIDDEN")
+
         flow = as_record(input.get("flow"))
         steps = flow.get("steps") if isinstance(flow, dict) else []
         if not isinstance(steps, list):
@@ -783,15 +825,6 @@ class _RunsLifecycleMixin:
                 *self._flow_secret_names(flow),
             }
         )
-        environment = as_record(input.get("environment"))
-        base_url = (
-            str(environment.get("baseUrl", "")) if isinstance(environment, dict) else ""
-        )
-        # P1-1 SSRF：preview 的 environment 完全由调用方随请求提供（不走已发布
-        # 环境快照），需在拉起浏览器前先拒 link-local/云 metadata baseUrl；
-        # 正常 run 由 runner._target_url 在导航出口拦同一类地址。
-        if base_url and is_link_local_or_metadata_host(urlsplit(base_url).hostname):
-            raise PlatformError(400, "PREVIEW_URL_FORBIDDEN")
         execution_input = {
             "environment": environment,
             "flow": {

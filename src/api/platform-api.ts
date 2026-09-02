@@ -232,6 +232,25 @@ export type PlatformRun = {
   flowOutputs: Array<{ name: string; value: string; source: string; createdAt: string }>;
 };
 
+/** P1-5: 列表 / 派发返回的轻量 run 摘要（服务器端已算好派生字段），
+ *  不含整份 snapshot / events / artifacts / flowOutputs —— 那些只在
+ *  GET /runs/{id} 详情全量返回。 */
+export type PlatformRunSummary = {
+  id: string;
+  projectId: string;
+  environmentId: string;
+  status: PlatformRun["status"];
+  retryOfRunId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  flowName: string;
+  environmentName: string;
+  totalSteps: number;
+  completedSteps: number;
+  progress: number;
+  screenshotCount: number;
+};
+
 export type PlatformElementValidation = {
   id: string;
   projectId: string;
@@ -778,7 +797,7 @@ export function rollbackPlatformRevision(token: string, projectId: string, revis
 }
 
 export function createPlatformRun(token: string, projectId: string, input: { revisionId?: string; flowId?: string; environmentId: string; datasetVersionId?: string; upToStepId?: string; dispatchKey?: string }) {
-  return request<{ run?: PlatformRun; runs: PlatformRun[]; runIds: string[] }>(
+  return request<{ run?: PlatformRunSummary; runs: PlatformRunSummary[]; runIds: string[] }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs`,
     { method: "POST", body: JSON.stringify(input) },
     token,
@@ -879,7 +898,7 @@ export function getPlatformRuns(token: string, projectId: string, query: Platfor
   if (query.from) params.set("from", query.from);
   if (query.to) params.set("to", query.to);
   const suffix = params.size ? `?${params.toString()}` : "";
-  return request<{ runs: PlatformRun[]; total: number; page: number; pageSize: number }>(
+  return request<{ runs: PlatformRunSummary[]; total: number; page: number; pageSize: number }>(
     `/platform/projects/${encodeURIComponent(projectId)}/runs${suffix}`,
     {},
     token,

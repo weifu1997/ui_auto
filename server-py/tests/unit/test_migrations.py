@@ -59,6 +59,7 @@ def test_run_platform_migrations_records_exactly_once():
             (13, "deployment-security-audit"),
             (14, "scope-run-dispatch-key-uniqueness"),
             (15, "recording-sessions-metadata"),
+            (16, "externalize-run-snapshots"),
         ]
         columns = _columns(database, "flow_revisions")
         assert "flow_id" in columns

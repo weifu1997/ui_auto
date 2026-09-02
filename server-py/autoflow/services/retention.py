@@ -93,6 +93,9 @@ class RetentionServices:
             summary["flowOutputs"] += self.database.execute(
                 "DELETE FROM flow_outputs WHERE run_id = ?", (run_id,)
             ).rowcount
+            summary["runSnapshots"] = summary.get("runSnapshots", 0) + self.database.execute(
+                "DELETE FROM run_snapshots WHERE run_id = ?", (run_id,)
+            ).rowcount
             self.database.execute(
                 "DELETE FROM deliveries WHERE run_id = ?", (run_id,)
             )

@@ -722,6 +722,89 @@ def add_recording_sessions(database: sqlite3.Connection) -> None:
     )
 
 
+def externalize_run_snapshots(database: sqlite3.Connection) -> None:
+    """P1-5c：把运行快照从高频扫描表 platform_runs 外置到 run_snapshots。
+
+    之前 ``insert_run_from_spec`` 把整份运行快照内嵌到每行 ``platform_runs``
+    （数据集/批次派发按行复制全量 JSON），列表/聚合/去重扫描都要背着大 blob，
+    列表摘要还要逐行解析快照取 flow/env 名。迁移后：
+      * ``run_snapshots``（run_id 引用 platform_runs，级联删除）持有全量快照；
+      * ``platform_runs`` 只留轻量派生列 flow_name/environment_name/total_steps，
+        供列表摘要与按流程名过滤，热行不再携带 blob；
+    存量行：快照回填到 run_snapshots，轻量列由解析快照一次性派生，
+    原内嵌 blob 清空（VACUUM 后再回收空间）。
+    """
+    exec_sql(
+        database,
+        """
+        CREATE TABLE IF NOT EXISTS run_snapshots (
+          run_id TEXT PRIMARY KEY REFERENCES platform_runs(id) ON DELETE CASCADE,
+          snapshot TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        """,
+    )
+    ensure_column(database, "platform_runs", "flow_name", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(
+        database, "platform_runs", "environment_name", "TEXT NOT NULL DEFAULT ''"
+    )
+    ensure_column(
+        database, "platform_runs", "total_steps", "INTEGER NOT NULL DEFAULT 0"
+    )
+    platform_columns = {
+        row[1]
+        for row in database.execute("PRAGMA table_info(platform_runs)").fetchall()
+    }
+    if "snapshot" in platform_columns:
+        database.execute(
+            """
+            INSERT OR IGNORE INTO run_snapshots (run_id, snapshot, created_at)
+            SELECT id, snapshot, created_at FROM platform_runs
+            WHERE snapshot IS NOT NULL AND snapshot <> ''
+            """
+        )
+        # 热行不再携带 blob：清空存量内嵌快照（VACUUM 后再回收空间）。
+        database.execute(
+            """
+            UPDATE platform_runs SET snapshot = ''
+            WHERE snapshot IS NOT NULL AND snapshot <> ''
+            """
+        )
+    rows = database.execute(
+        "SELECT run_id, snapshot FROM run_snapshots"
+    ).fetchall()
+    for run_id, snapshot_text in rows:
+        flow_name = ""
+        environment_name = ""
+        total_steps = 0
+        try:
+            snapshot = _json.loads(snapshot_text)
+        except (TypeError, ValueError):
+            snapshot = None
+        if isinstance(snapshot, dict):
+            flow = snapshot.get("flow")
+            if isinstance(flow, dict):
+                if isinstance(flow.get("name"), str):
+                    flow_name = flow["name"]
+                steps = flow.get("steps")
+                if isinstance(steps, list):
+                    total_steps = len(steps)
+            environment = snapshot.get("environment")
+            if (
+                isinstance(environment, dict)
+                and isinstance(environment.get("name"), str)
+            ):
+                environment_name = environment["name"]
+        database.execute(
+            """
+            UPDATE platform_runs
+            SET flow_name = ?, environment_name = ?, total_steps = ?
+            WHERE id = ?
+            """,
+            (flow_name, environment_name, total_steps, run_id),
+        )
+
+
 def run_platform_migrations(
     database: sqlite3.Connection,
     bootstrap_schema: str,
@@ -798,6 +881,11 @@ def run_platform_migrations(
                 "version": 15,
                 "name": "recording-sessions-metadata",
                 "up": add_recording_sessions,
+            },
+            {
+                "version": 16,
+                "name": "externalize-run-snapshots",
+                "up": externalize_run_snapshots,
             },
         ],
     )
