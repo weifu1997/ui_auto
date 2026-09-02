@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
 import sys
-import time
 from pathlib import Path
 
 
@@ -14,20 +12,18 @@ def _integrity_ok(database: sqlite3.Connection) -> bool:
     return database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
-def _source_stats(database: sqlite3.Connection) -> dict[str, tuple[int, str | None]]:
-    stats: dict[str, tuple[int, str | None]] = {}
-    for table in ("platform_users", "platform_runs"):
-        exists = database.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,),
-        ).fetchone()
-        if not exists:
-            continue
-        row = database.execute(
-            f"SELECT COUNT(*), MAX(created_at) FROM {table}"
-        ).fetchone()
-        stats[table] = (int(row[0]), row[1])
-    return stats
+def _drop_sidecars(base: Path) -> None:
+    """Best-effort remove SQLite WAL/SHM sidecars for ``base``.
+
+    ``Connection.backup`` produces a file that keeps its ``journal_mode``; a
+    read-only verification open can briefly recreate ``-shm``. Leave no stale
+    companion files behind the moved backup.
+    """
+    for suffix in ("-wal", "-shm"):
+        try:
+            Path(f"{base}{suffix}").unlink()
+        except FileNotFoundError:
+            pass
 
 
 def backup(source: str, destination: str, required: bool = False) -> None:
@@ -36,47 +32,42 @@ def backup(source: str, destination: str, required: bool = False) -> None:
         if required:
             raise SystemExit(f"Required database missing: {source_path}")
         return
-    database = sqlite3.connect(source_path)
-    try:
-        if not _integrity_ok(database):
-            raise RuntimeError(
-                f"Integrity check failed: {database.execute('PRAGMA integrity_check').fetchone()[0]}"
-            )
-        checkpoint = database.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        attempt = 1
-        while checkpoint[0] == 1 and attempt <= 3:
-            time.sleep(1)
-            checkpoint = database.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            attempt += 1
-        if checkpoint[0] != 0:
-            raise RuntimeError(
-                f"WAL checkpoint did not complete (busy={checkpoint[0]}); backup aborted"
-            )
-        stats = _source_stats(database)
-    finally:
-        database.close()
+    # Connection.backup() takes a consistent snapshot of a live WAL database
+    # without needing a TRUNCATE checkpoint first. The previous raw copyfile
+    # after wal_checkpoint raced with live writers: a transaction committed
+    # between the checkpoint and the copy lived only in a fresh -wal and was
+    # silently omitted, and any older reader kept wal_checkpoint busy, aborting
+    # the whole backup.
     temp_path = Path(f"{destination}.tmp")
+    source_conn = sqlite3.connect(source_path)
     try:
-        shutil.copyfile(source_path, temp_path)
+        if not _integrity_ok(source_conn):
+            raise RuntimeError(
+                f"Integrity check failed: {source_conn.execute('PRAGMA integrity_check').fetchone()[0]}"
+            )
+        temp_conn = sqlite3.connect(temp_path)
+        try:
+            source_conn.backup(temp_conn)
+            # Fold all frames into the main file so the moved backup is
+            # self-contained and never depends on a sidecar -wal at rest.
+            temp_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            temp_conn.commit()
+        finally:
+            temp_conn.close()
+        _drop_sidecars(temp_path)
         copy = sqlite3.connect(f"file:{temp_path}?mode=ro", uri=True)
         try:
             if not _integrity_ok(copy):
                 raise RuntimeError("Backup verification failed")
-            for table, expected in stats.items():
-                actual = copy.execute(
-                    f"SELECT COUNT(*), MAX(created_at) FROM {table}"
-                ).fetchone()
-                actual_value = (int(actual[0]), actual[1])
-                if actual_value != expected:
-                    raise RuntimeError(
-                        f"Backup row-count mismatch on {table}: source {expected} vs copy {actual_value}"
-                    )
         finally:
             copy.close()
+        _drop_sidecars(temp_path)
         temp_path.replace(destination)
     finally:
+        source_conn.close()
         if temp_path.exists():
             temp_path.unlink()
+        _drop_sidecars(temp_path)
 
 
 if __name__ == "__main__":
