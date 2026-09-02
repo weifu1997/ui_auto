@@ -374,7 +374,9 @@ def _maintenance_pass(services: PlatformServices, schedule: _MaintenanceSchedule
     ).fetchall()
     for row in stuck:
         services.finalize_run_as_interrupted(row[0], "MANAGED_RUN_WATCHDOG_TIMEOUT")
-        services.cancel_managed_run(row[0])
+        # P2-6: 普通协作 cancel 对卡死在 Playwright 调用下的 worker 无效（只置
+        # 信号，到不了步骤边界）；用 reap_lost 摘槽并补员恢复并发容量。
+        services.reap_lost_managed_run(row[0])
     # W1-3：运行期收割卡死的元素校验。经 getattr 探测：维护流程必须容忍
     # 最小服务面（如 operational-readiness 自检桩）。
     reap_stale_validations = getattr(services, "reap_stale_element_validations", None)

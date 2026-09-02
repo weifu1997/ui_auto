@@ -602,6 +602,16 @@ class _RunsLifecycleMixin:
     def cancel_managed_run(self, run_id: str) -> bool:
         return self.managed_runner.cancel(run_id)
 
+    def reap_lost_managed_run(self, run_id: str) -> bool:
+        """P2-6: 判死一个被认定卡死的 worker 并补员恢复并发容量。
+
+        DB watchdog 已把 run 行置为 failed 后调用。对普通协作取消用
+        ``cancel_managed_run``（worker 会自行收尾返回，不丢容量）；对卡在
+        Playwright 调用下、永不返回的 worker，只有这里能摘槽并补起替换线程，
+        否则并发槽被永久占死、后续 run 无限排队。
+        """
+        return self.managed_runner.reclaim_lost(run_id)
+
     def managed_runner_input(self, run: dict[str, Any]) -> dict[str, Any]:
         snapshot = run["snapshot"]
         flow = as_record(snapshot.get("flow"))
