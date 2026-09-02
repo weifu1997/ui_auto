@@ -9,7 +9,14 @@ import uuid
 import re
 from pathlib import Path
 from typing import Any
-from ...core import json, now, parse_json, public_flow_output_names, safe_artifact_name
+from ...core import (
+    MAX_RUNS_PER_DISPATCH,
+    json,
+    now,
+    parse_json,
+    public_flow_output_names,
+    safe_artifact_name,
+)
 from ...resources import as_record
 from .._shared import _TERMINAL_RUN_STATUSES
 
@@ -60,7 +67,11 @@ class _RunsLifecycleMixin:
             else [{"rowNumber": None, "data": None}]
         )
         max_runs = input.get("maxRuns")
-        if max_runs is not None and len(rows) > int(max_runs):
+        # 调用方显式给 maxRuns 用调用方的；否则落到平台默认上限，避免一次数据集
+        # 批量派发在单事务里无界写行。webhook 已自带 maxRuns=WEBHOOK_MAX_RUNS。
+        if max_runs is None:
+            max_runs = MAX_RUNS_PER_DISPATCH
+        if len(rows) > int(max_runs):
             raise PlatformError(413, "RUN_COUNT_LIMIT_EXCEEDED")
         flow = parse_json(revision["flow_snapshot"], {})
         flow_steps = flow.get("steps", []) if isinstance(flow, dict) else []
