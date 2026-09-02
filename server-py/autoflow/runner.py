@@ -18,6 +18,7 @@ from .assertion_contract import (
     ASSERT_VISIBILITIES,
 )
 from .locator_score import HeuristicLocatorScorer, LocatorScorer
+from .netguard import is_link_local_or_metadata_host
 
 # 有头运行在 WSL/Windows 宿主上复用 Windows Chrome（WSLg 下 Linux Chromium 不可见）。
 from .browser_session import (
@@ -75,6 +76,12 @@ def _target_url(base_url: str, value: str) -> str:
         or target.netloc != base.netloc
     ):
         raise RuntimeError("TARGET_URL_ORIGIN_FORBIDDEN")
+    # P1-1 SSRF：同源限制挡不住 base 本身是 link-local/云 metadata（例如
+    # baseUrl 被写成 http://169.254.169.254/）。浏览器导航的唯一出口都走这里，
+    # 出站前拒绝这类地址，避免 runner 浏览器被指去读实例凭据。loopback/私网
+    # 仍放行（部署会自动化 127.0.0.1 / 局域网应用）。
+    if is_link_local_or_metadata_host(base.hostname):
+        raise RuntimeError("TARGET_URL_LINK_LOCAL_FORBIDDEN")
     return target.geturl()
 
 

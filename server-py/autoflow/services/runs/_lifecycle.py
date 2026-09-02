@@ -9,6 +9,8 @@ import uuid
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from ...netguard import is_link_local_or_metadata_host
 from ...core import (
     MAX_RUNS_PER_DISPATCH,
     json,
@@ -771,8 +773,17 @@ class _RunsLifecycleMixin:
                 *self._flow_secret_names(flow),
             }
         )
+        environment = as_record(input.get("environment"))
+        base_url = (
+            str(environment.get("baseUrl", "")) if isinstance(environment, dict) else ""
+        )
+        # P1-1 SSRF：preview 的 environment 完全由调用方随请求提供（不走已发布
+        # 环境快照），需在拉起浏览器前先拒 link-local/云 metadata baseUrl；
+        # 正常 run 由 runner._target_url 在导航出口拦同一类地址。
+        if base_url and is_link_local_or_metadata_host(urlsplit(base_url).hostname):
+            raise PlatformError(400, "PREVIEW_URL_FORBIDDEN")
         execution_input = {
-            "environment": as_record(input.get("environment")),
+            "environment": environment,
             "flow": {
                 "id": flow.get("id") if isinstance(flow, dict) else "preview",
                 "name": flow.get("name") if isinstance(flow, dict) else "试跑流程",
