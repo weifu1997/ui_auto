@@ -58,13 +58,15 @@ def register(router: APIRouter, services: PlatformServices) -> None:
         encrypted = services.encrypt(value)
         existing = services.database.execute(
             """
-            SELECT id, key_version, created_at FROM project_secrets
+            SELECT id, created_at FROM project_secrets
             WHERE project_id = ? AND name = ?
             """,
             (project_id, name),
         ).fetchone()
         secret_id = existing[0] if existing else str(uuid.uuid4())
-        key_version = (int(existing[1]) if existing else 0) + 1
+        # key_version 是「加密所用主密钥版本」，不是「该密钥被覆盖写了几次」：
+        # 只要主密钥没轮换，覆盖写入不回拨也不递增。
+        key_version = services.active_secret_version
         project = services.project_for(project_id)
         services.database.execute(
             """
@@ -87,7 +89,7 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 encrypted["iv"],
                 encrypted["tag"],
                 encrypted["ciphertext"],
-                existing[2] if existing else now(),
+                existing[1] if existing else now(),
                 now(),
             ),
         )
