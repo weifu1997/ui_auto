@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -149,6 +150,21 @@ def reveal_headed_window(page: Any) -> None:
         return
 
 
+# 有头会话可以并发启动（录制线程 + 多个 ManagedRunner worker），纯 connect_ex
+# 探测存在“同时看到端口空闲”的竞态，两路会撞进同一个调试端口与同一个
+# `autoflow-headed-{port}` profile。进程内用保留集串行化选取，直到 Chrome 真正
+# 监听后再释放（不做 bind-and-release：WSL 镜像网络下 Python 刚占过的端口会让
+# Windows Chrome 起不来）。
+_DEBUG_PORT_LOCK = threading.Lock()
+_RESERVED_DEBUG_PORTS: set[int] = set()
+
+
+def _port_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.15)
+        return sock.connect_ex(("127.0.0.1", port)) != 0
+
+
 def _pick_debug_port(start: int = 9330, count: int = 100) -> int:
     """Return a localhost port nothing is listening on.
 
@@ -156,11 +172,38 @@ def _pick_debug_port(start: int = 9330, count: int = 100) -> int:
     Windows; a port Python just held can make Windows Chrome fail to listen.
     """
     for port in range(start, start + count):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.15)
-            if sock.connect_ex(("127.0.0.1", port)) != 0:
-                return port
+        if _port_free(port):
+            return port
     raise RuntimeError("no free Chrome debugging port")
+
+
+def _reserve_debug_port(start: int = 9330, count: int = 100) -> int:
+    """Pick a port that is loopback-free and not already being launched by
+    another headed session in this process, reserving it until the caller hands
+    it to Chrome (then :func:`_release_debug_port`)."""
+    with _DEBUG_PORT_LOCK:
+        for port in range(start, start + count):
+            if port in _RESERVED_DEBUG_PORTS:
+                continue
+            if not _port_free(port):
+                continue
+            _RESERVED_DEBUG_PORTS.add(port)
+            return port
+    raise RuntimeError("no free Chrome debugging port")
+
+
+def _release_debug_port(port: int) -> None:
+    with _DEBUG_PORT_LOCK:
+        _RESERVED_DEBUG_PORTS.discard(port)
+
+
+def _debug_port_in_use(port: int) -> bool:
+    """True when the port is already listening or reserved for an in-flight
+    headed session — used by purge to avoid deleting a live profile."""
+    with _DEBUG_PORT_LOCK:
+        if port in _RESERVED_DEBUG_PORTS:
+            return True
+    return not _port_free(port)
 
 
 def _windows_local_app_data() -> str:
@@ -216,6 +259,12 @@ def purge_stale_windows_chrome_profiles(
         for entry in root.glob("autoflow-headed-*"):
             try:
                 if not entry.is_dir() or now - entry.stat().st_mtime < max_age_s:
+                    continue
+                # 目录名自带端口：活跃会话的 Chrome 空闲时 mtime 也可能很旧，
+                # 按 mtime 直接删会毁掉正在使用的 profile。端口仍在监听或正被
+                # 并发选取时一律保留。
+                port_text = entry.name.rsplit("-", 1)[-1]
+                if port_text.isdigit() and _debug_port_in_use(int(port_text)):
                     continue
                 shutil.rmtree(entry, ignore_errors=True)
             except OSError:
@@ -287,31 +336,34 @@ def launch_windows_chrome_session(
     if chrome is None:
         raise RuntimeError("Windows Chrome executable was not found")
     purge_stale_windows_chrome_profiles()
-    port = _pick_debug_port()
+    # 先选并“保留”端口，防止并发有头会话拿到同一个调试端口/profile。
+    port = _reserve_debug_port()
     user_data_dir = rf"{_windows_local_app_data()}\Temp\autoflow-headed-{port}"
     bounds = HEADED_WINDOW_BOUNDS
-    subprocess.Popen(
-        [
-            str(chrome),
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={user_data_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-sync",
-            "--disable-session-crashed-bubble",
-            f"--window-size={bounds['width']},{bounds['height']}",
-            f"--window-position={bounds['left']},{bounds['top']}",
-            "about:blank",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=False,
-        cwd=None if is_native_windows() else "/mnt/c/Windows",
-    )
     endpoint = f"http://127.0.0.1:{port}"
     browser = None
     try:
+        subprocess.Popen(
+            [
+                str(chrome),
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={user_data_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-sync",
+                "--disable-session-crashed-bubble",
+                f"--window-size={bounds['width']},{bounds['height']}",
+                f"--window-position={bounds['left']},{bounds['top']}",
+                "about:blank",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=False,
+            cwd=None if is_native_windows() else "/mnt/c/Windows",
+        )
         _wait_for_cdp(endpoint)
+        # Chrome 已真正监听，释放保留（后续选端口会因 connect 探测而跳过它）。
+        _release_debug_port(port)
         browser = playwright.chromium.connect_over_cdp(endpoint)
         default_contexts = list(browser.contexts)
         if context_kwargs is None:
@@ -339,6 +391,8 @@ def launch_windows_chrome_session(
             "windowsUserDataDir": user_data_dir,
         }
     except Exception:
+        # 启动失败（Chrome 没起来 / CDP 没等到 / 连接异常）：让端口可被复用。
+        _release_debug_port(port)
         if browser is not None:
             close_windows_chrome(browser)
         raise

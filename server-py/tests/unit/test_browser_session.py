@@ -5,6 +5,8 @@ from pathlib import Path
 from autoflow.browser_session import (
     HEADED_WINDOW_BOUNDS,
     _pick_debug_port,
+    _release_debug_port,
+    _reserve_debug_port,
     _windows_local_app_data,
     _windows_temp_root,
     close_browser_session,
@@ -196,6 +198,73 @@ def test_pick_debug_port_returns_a_closed_localhost_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.2)
         assert sock.connect_ex(("127.0.0.1", port)) != 0
+
+
+def test_reserve_debug_port_never_hands_out_the_same_port_concurrently(monkeypatch):
+    """两次并发的有头会话不能在选取阶段拿到同一个调试端口（P2-4）。
+
+    `_pick_debug_port` 只用 connect_ex 探测，多个 worker/录制线程同时在
+    “端口空闲”的结论上启动 Windows Chrome，就会撞进同一个
+    `--remote-debugging-port` 和同一个 `autoflow-headed-{port}` profile。
+    这里把端口“探测全空闲”固定住，模拟并发的两路选取：必须拿到不同端口，
+    且 release 之后端口可复用（没有泄漏）。
+    """
+    import autoflow.browser_session as browser_session
+
+    monkeypatch.setattr(browser_session, "_port_free", lambda port: True)
+    try:
+        first = _reserve_debug_port()
+        second = _reserve_debug_port()
+        assert first != second  # 修复前两路都返回 9330 → 断言失败
+
+        _release_debug_port(first)
+        _release_debug_port(second)
+        # 释放后最早的空闲端口可再次分配 → 证明没有永久泄漏。
+        reused = _reserve_debug_port()
+        assert reused == first
+        _release_debug_port(reused)
+    finally:
+        # 清理可能遗留的保留项，避免影响同进程其他测试。
+        browser_session._RESERVED_DEBUG_PORTS.clear()
+
+
+def test_purge_keeps_profile_whose_chrome_is_still_listening(tmp_path, monkeypatch):
+    """purge 不得删掉仍在监听的活跃有头会话 profile（P2-4）。
+
+    目录按 mtime 判“陈旧”，但一个仍在运行的有头会话在 Chrome 空闲时目录
+    mtime 可能超过 24h；按 mtime 直接删会毁掉正在使用的 profile。删除前须先
+    按目录名里的端口做存活探测：端口仍在监听 → 保留。
+    """
+    import os
+    import socket
+    import time
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        active = tmp_path / f"autoflow-headed-{port}"
+        active.mkdir()
+        old = time.time() - 48 * 3600
+        os.utime(active, (old, old))
+
+        monkeypatch.setattr(
+            "autoflow.browser_session._windows_local_app_data",
+            lambda: r"C:\Users\t\AppData\Local",
+        )
+        monkeypatch.setattr(
+            "autoflow.browser_session._windows_temp_root",
+            lambda local, native=None: tmp_path,
+        )
+
+        purge_stale_windows_chrome_profiles()
+
+        # 修复前：只按 mtime 删除 → 活跃 profile 被误删 → 断言失败。
+        assert active.exists()
+    finally:
+        listener.close()
 
 
 def test_windows_chrome_executable_skips_missing_paths(tmp_path):
@@ -418,7 +487,10 @@ def _install_windows_chrome_stubs(monkeypatch, *, native: bool) -> dict[str, obj
     monkeypatch.setattr("autoflow.browser_session.should_use_windows_chrome", lambda: True)
     monkeypatch.setattr("autoflow.browser_session.windows_chrome_executable", lambda: chrome)
     monkeypatch.setattr("autoflow.browser_session.is_native_windows", lambda: native)
-    monkeypatch.setattr("autoflow.browser_session._pick_debug_port", lambda: 9334)
+    monkeypatch.setattr("autoflow.browser_session._reserve_debug_port", lambda: 9334)
+    monkeypatch.setattr(
+        "autoflow.browser_session._release_debug_port", lambda port: None
+    )
     monkeypatch.setattr(
         "autoflow.browser_session._windows_local_app_data",
         lambda: r"C:\Users\tester\AppData\Local",
