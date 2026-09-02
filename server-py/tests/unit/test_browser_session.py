@@ -275,8 +275,12 @@ def test_windows_local_app_data_native_reads_env(monkeypatch):
 
 def test_windows_temp_root_maps_between_hosts():
     local = r"C:\Users\t\AppData\Local"
-    assert _windows_temp_root(local, native=True) == Path(local)
-    assert _windows_temp_root(local, native=False) == Path("/mnt/c/Users/t/AppData/Local")
+    # 有头 Chrome 的 profile 建在 `Local\Temp\autoflow-headed-<port>`，清理扫的是
+    # Temp 根；映射必须带 Temp 后缀，否则 purge 永远 glob 不到任何 profile。
+    assert _windows_temp_root(local, native=True) == Path(local) / "Temp"
+    assert _windows_temp_root(local, native=False) == Path(
+        "/mnt/c/Users/t/AppData/Local"
+    ) / "Temp"
     # 无法解析的格式兜底到不存在的目录，glob 自然为空
     assert _windows_temp_root("not-a-path", native=False) == Path("/nonexistent")
 

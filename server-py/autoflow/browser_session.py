@@ -182,14 +182,19 @@ def _windows_local_app_data() -> str:
 
 
 def _windows_temp_root(local_app_data: str, *, native: bool | None = None) -> Path:
-    """POSIX path of the Windows Temp root holding headed-Chrome profiles."""
+    """POSIX path of the Windows Temp root holding headed-Chrome profiles.
+
+    有头会话把 profile 建在 ``{LocalAppData}\\Temp\\autoheaded-<port>``，清理逻辑扫
+    的是 Temp 根；这里必须补上 ``Temp`` 段，否则 purge 扫到的是 Local 根，永远匹配
+    不到任何 ``autoflow-headed-*`` 目录。
+    """
     use_native = is_native_windows() if native is None else native
     if use_native:
-        return Path(local_app_data)
+        return Path(local_app_data) / "Temp"
     drive, _, rest = local_app_data.partition("\\")
     if not drive or not rest:
         return Path("/nonexistent")
-    return Path("/mnt", drive.rstrip(":").lower(), rest.replace("\\", "/"))
+    return Path("/mnt", drive.rstrip(":").lower(), rest.replace("\\", "/")) / "Temp"
 
 
 STALE_PROFILE_MAX_AGE_S = 24 * 3600
