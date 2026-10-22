@@ -471,8 +471,9 @@ def _fetch_runs(
     to_iso: str | None,
     limit: int = 2000,
 ) -> list[dict[str, Any]]:
+    # P1-5c：快照外置后热表不再内嵌 blob；仅对分析窗口内的 run 按 id 回读快照。
     query = """
-        SELECT id, revision_id, status, snapshot, created_at
+        SELECT id, revision_id, status, created_at
         FROM platform_runs WHERE project_id = ?
     """
     params: list[Any] = [project_id]
@@ -484,16 +485,32 @@ def _fetch_runs(
         params.append(to_iso)
     query += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
-    return [
+    rows = database.execute(query, tuple(params)).fetchall()
+    runs = [
         {
             "id": row[0],
             "revision_id": row[1],
             "status": row[2],
-            "snapshot": row[3],
-            "created_at": row[4],
+            "snapshot": "",
+            "created_at": row[3],
         }
-        for row in database.execute(query, tuple(params)).fetchall()
+        for row in rows
     ]
+    if runs:
+        placeholders = ",".join("?" for _ in runs)
+        snapshot_by_id = {
+            snap_row[0]: snap_row[1]
+            for snap_row in database.execute(
+                f"""
+                SELECT run_id, snapshot FROM run_snapshots
+                WHERE run_id IN ({placeholders})
+                """,
+                tuple(run["id"] for run in runs),
+            ).fetchall()
+        }
+        for run in runs:
+            run["snapshot"] = snapshot_by_id.get(run["id"], "")
+    return runs
 
 
 def _summarize_runs(run_rows: list[dict[str, Any]]) -> dict[str, int]:

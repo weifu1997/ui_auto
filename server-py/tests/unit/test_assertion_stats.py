@@ -119,6 +119,18 @@ def _seed_run(
             *batch_params,
         ),
     )
+    # P1-5c：快照外置到 run_snapshots，batch detail 读数改走外置表。
+    services.database.execute(
+        """
+        INSERT INTO run_snapshots (run_id, snapshot, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (
+            run_id,
+            json.dumps({"flow": {"name": "Flow"}}, ensure_ascii=False),
+            created_at or now(),
+        ),
+    )
 
 
 def _route(services: PlatformServices, path: str):

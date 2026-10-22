@@ -66,7 +66,8 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 conditions.append("status = ?")
                 params.append(status)
             if flow:
-                conditions.append("json_extract(snapshot, '$.flow.name') LIKE ?")
+                # P1-5c：快照外置后改用轻量派生列过滤，列表不再对整份 JSON 做 extract。
+                conditions.append("flow_name LIKE ?")
                 params.append(f"%{flow}%")
             if source == "schedule":
                 conditions.append("created_by LIKE 'schedule:%'")
@@ -96,14 +97,15 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 """,
                 (*params, page_size, (page - 1) * page_size),
             ).fetchall()
+            # P1-5：列表只回服务器端算好的摘要（flowName/progress/screenshot 等），
+            # 不再每 run 内嵌整份 snapshot + 最多 500 事件/artifacts/flowOutputs，
+            # 也不再 run_by_id 逐行查 4 次（无 N+1）。详情页仍走 GET /runs/{id} 全量。
+            run_ids = [row[0] for row in rows]
             return _send(
                 Response(),
                 200,
                 {
-                    "runs": [
-                        services.run_response(services.run_by_id(row[0]))
-                        for row in rows
-                    ],
+                    "runs": services.run_summaries(project_id, run_ids),
                     "total": total,
                     "page": page,
                     "pageSize": page_size,
@@ -132,10 +134,8 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                 "dispatchKey": dispatch_key or None,
             }
         )
-        runs = [
-            services.run_response(services.run_by_id(run_id))
-            for run_id in queued["runIds"]
-        ]
+        # P1-5：派发响应只带摘要（不重复内嵌快照/事件/产物），大派发不再爆 JSON。
+        runs = services.run_summaries(project_id, queued["runIds"])
         services.audit(
             project["workspace_id"],
             {"type": "user", "id": user.id},

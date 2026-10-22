@@ -71,16 +71,17 @@ const mockPlatformRuns = [
   {
     id: "run-1",
     projectId: "proj-1",
-    revisionId: "rev-1",
     environmentId: "env-1",
-    agentId: "ag-1",
-    executorType: "managed",
     status: "success",
-    snapshot: { flow: { id: "flow-1", name: "流程1", steps: [{ id: "s1" }] }, environment: { id: "env-1", name: "测试环境" } },
-    events: [],
-    artifacts: [],
+    retryOfRunId: null,
     createdAt: "2026-01-01",
     updatedAt: "2026-01-01",
+    flowName: "流程1",
+    environmentName: "测试环境",
+    totalSteps: 1,
+    completedSteps: 1,
+    progress: 100,
+    screenshotCount: 0,
   },
 ];
 

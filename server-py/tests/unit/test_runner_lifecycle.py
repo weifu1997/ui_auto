@@ -391,6 +391,91 @@ def test_browser_run_in_step_heartbeat_keeps_progress(monkeypatch: pytest.Monkey
     assert ticks.count(0) >= 2
 
 
+def test_heartbeat_stops_and_reclaims_when_step_wedged_past_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P2-6：单步卡死在 Playwright 之下（超过自身健康预算仍不返回）时，
+    心跳线程必须在步骤超窗后停更（否则 updated_at 一直新鲜，DB watchdog
+    永不判死），并通过 reclaim 钩子请求释放并发槽。
+
+    卡死判定依据：Playwright 对每个动作都传了显式 timeout，健康步骤必然在
+    各自超时前返回/抛错。此处 fake goto 永不返回（也永不抛错），模拟卡在
+    CDP 传输层的 worker。
+    """
+    import threading
+
+    fake_pw = _FakePlaywright()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setenv("RUN_HEARTBEAT_INTERVAL_S", "1")
+    monkeypatch.setenv("RUN_HEARTBEAT_STEP_GRACE_MS", "0")
+    # 压缩导航地板/步骤超时，让「健康预算」缩到 ~2.5s，测试不用等 30s+。
+    monkeypatch.setattr("autoflow.runner._NAVIGATE_TIMEOUT_FLOOR_MS", 500)
+
+    unblock = threading.Event()
+
+    class _WedgedPage(_FakePage):
+        def goto(self, *args: object, **kwargs: object) -> None:
+            # 卡死：真实 Playwright 本应于 1s（timeout:1）后抛 Timeout。
+            unblock.wait(timeout=60)
+
+    monkeypatch.setattr(_FakeContext, "new_page", lambda self: _WedgedPage())
+
+    ticks: list[float] = []
+    reclaimed: list[float] = []
+    results: list[dict[str, object]] = []
+    recorder: list[tuple[str, object]] = []
+
+    def run_flow() -> None:
+        results.append(
+            execute_browser_run(
+                {
+                    "environment": {"baseUrl": "https://app.test"},
+                    "flow": {
+                        "steps": [
+                            {
+                                "id": "s1",
+                                "action": "打开页面",
+                                "title": "Open",
+                                "value": "/",
+                                "timeout": 1,
+                            }
+                        ]
+                    },
+                    "secrets": {},
+                },
+                {
+                    **_make_hooks(recorder),
+                    "progress": lambda _index: ticks.append(time.monotonic()),
+                    "reclaim": lambda: reclaimed.append(time.monotonic()),
+                },
+            )
+        )
+
+    worker = threading.Thread(target=run_flow)
+    worker.start()
+    try:
+        # 期望（修复后）：步骤超窗后心跳停更，并触发一次 reclaim。
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline and not reclaimed:
+            time.sleep(0.05)
+        assert reclaimed, (
+            "步骤超过健康预算仍不返回时，心跳必须触发 reclaim 释放并发槽；"
+            "当前实现只无限续命，DB watchdog 永不判死"
+        )
+        assert len(reclaimed) == 1
+
+        # reclaim 之后心跳已停更：后续窗口内不得再有 progress 刷新。
+        frozen = len(ticks)
+        time.sleep(2.5)
+        assert len(ticks) == frozen, (
+            "超窗后心跳必须停更，否则 updated_at 一直新鲜，DB watchdog 永不判死"
+        )
+    finally:
+        unblock.set()
+        worker.join(timeout=5)
+    assert results and results[0]["status"] == "success"
+
+
 # ---------- execute_element_validation ----------
 
 

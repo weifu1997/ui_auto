@@ -3,7 +3,7 @@
 import { message, modal } from "../lib/antd-feedback";
 import type { ElementAsset, Environment, Flow, FlowStep, Project, Run, Variable } from "../lib/mock-data";
 import { getPlatformHealth, PlatformApiError } from "../api/platform-api";
-import type { PlatformCapability, PlatformRun, PlatformSession } from "../api/platform-api";
+import type { PlatformCapability, PlatformRun, PlatformRunSummary, PlatformSession } from "../api/platform-api";
 import { readStoredPlatformSession, readStoredPlatformWorkspaceId, storePlatformSession, storePlatformWorkspaceId } from "../api/platform-context";
 import { getPlatformSecrets, logoutPlatform, savePlatformSecret } from "../api/platform-api";
 import { readConflictSnapshotRaw } from "../lib/sync-outbox";
@@ -12,9 +12,11 @@ import { Link, useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { platformConflictActionEvent } from "../ServerWorkspaceSynchronizer";
-import { AppstoreOutlined, ClockCircleOutlined, CloudServerOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, LogoutOutlined, MenuOutlined, PlayCircleFilled, SafetyCertificateOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
-import { Alert, Avatar, Badge, Button, Input, Select, Tag, Tooltip } from "antd";
+import { AppstoreOutlined, ClockCircleOutlined, CodeOutlined, DatabaseOutlined, DownOutlined, FileSearchOutlined, FolderOpenOutlined, GlobalOutlined, MenuOutlined, PlayCircleFilled, SafetyCertificateOutlined, ThunderboltOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { Alert, Avatar, Badge, Button, Dropdown, Input, Select, Tag, Tooltip } from "antd";
 import { useEffect, useRef, useState } from "react";
+import { useThemeStore } from "../theme-mode";
+import type { ThemeMode } from "../theme-mode";
 import "../App.css";
 import "../responsive.css";
 
@@ -42,12 +44,9 @@ export type ProjectSection =
   | "variables"
   | "environments"
   | "data"
-  | "agents"
   | "automations"
   | "governance"
-  | "runs"
-  | "settings"
-  | "platform";
+  | "runs";
 
 export const sectionMeta: Record<
   ProjectSection,
@@ -59,13 +58,28 @@ export const sectionMeta: Record<
   variables: { label: "变量", icon: <CodeOutlined /> },
   environments: { label: "环境", icon: <GlobalOutlined /> },
   data: { label: "数据集", icon: <DatabaseOutlined /> },
-  agents: { label: "发布与运行", icon: <CloudServerOutlined /> },
-  automations: { label: "持续回归", icon: <ClockCircleOutlined /> },
-  governance: { label: "系统管理", icon: <SafetyCertificateOutlined /> },
   runs: { label: "运行中心", icon: <PlayCircleFilled /> },
-  settings: { label: "项目设置", icon: <SettingOutlined /> },
-  platform: { label: "平台", icon: <CloudServerOutlined /> },
+  automations: { label: "持续回归", icon: <ClockCircleOutlined /> },
+  governance: { label: "审计", icon: <SafetyCertificateOutlined /> },
 };
+
+export const projectNavSections = [
+  "overview",
+  "flows",
+  "elements",
+  "variables",
+  "environments",
+  "data",
+  "runs",
+  "automations",
+  "governance",
+] as const satisfies readonly ProjectSection[];
+
+const themeModeOptions: { key: ThemeMode; label: string }[] = [
+  { key: "system", label: "跟随系统" },
+  { key: "light", label: "浅色" },
+  { key: "dark", label: "深色" },
+];
 
 export const statusMeta = {
   success: { label: "通过", color: "success" },
@@ -140,34 +154,79 @@ export function WorkspaceSide({ compact = false }: { compact?: boolean }) {
         )}
       </nav>
       <div className="side-spacer" />
-      <div className="side-profile">
-        <Avatar className="side-avatar" size={28}>
-          {session?.user.name.slice(0, 1).toUpperCase() ?? "A"}
-        </Avatar>
-        {!compact && (
-          <div>
-            <strong>{session?.user.name ?? "AutoFlow 用户"}</strong>
-            <span>{session?.user.email ?? "未登录"}</span>
-            {session && session.workspaces.length > 1 && (
-              <Select
-                aria-label="切换工作区"
-                size="small"
-                value={workspaceId || undefined}
-                options={session.workspaces.map((workspace) => ({
-                  value: workspace.id,
-                  label: workspace.name,
-                }))}
-                onChange={(nextWorkspaceId) => {
-                  storePlatformWorkspaceId(nextWorkspaceId);
-                  window.location.assign("/projects");
-                }}
-              />
-            )}
-          </div>
-        )}
-        {!compact && session && <Tooltip title="退出登录"><Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logoutPlatform().finally(() => { storePlatformSession(); window.location.assign("/"); })} /></Tooltip>}
-      </div>
+      <AccountMenu compact={compact} session={session} />
+      {!compact && session && session.workspaces.length > 1 && (
+        <Select
+          className="workspace-switcher"
+          aria-label="切换工作区"
+          size="small"
+          value={workspaceId || undefined}
+          options={session.workspaces.map((workspace) => ({
+            value: workspace.id,
+            label: workspace.name,
+          }))}
+          onChange={(nextWorkspaceId) => {
+            storePlatformWorkspaceId(nextWorkspaceId);
+            window.location.assign("/projects");
+          }}
+        />
+      )}
     </aside>
+  );
+}
+
+function AccountMenu({
+  compact,
+  session,
+}: {
+  compact: boolean;
+  session: PlatformSession | undefined;
+}) {
+  const themeMode = useThemeStore((state) => state.mode);
+  const setThemeMode = useThemeStore((state) => state.setMode);
+  const displayName = session?.user.name ?? "AutoFlow 用户";
+  return (
+    <div className="side-profile">
+      <Dropdown
+        trigger={["click"]}
+        placement={compact ? "rightBottom" : "topRight"}
+        menu={{
+          selectedKeys: [`theme-${themeMode}`],
+          items: [
+            ...themeModeOptions.map((option) => ({
+              key: `theme-${option.key}`,
+              label: option.label,
+              onClick: () => setThemeMode(option.key),
+            })),
+            { type: "divider" as const },
+            {
+              key: "logout",
+              label: "退出登录",
+              danger: true,
+              disabled: !session,
+              onClick: () => {
+                void logoutPlatform().finally(() => {
+                  storePlatformSession();
+                  window.location.assign("/");
+                });
+              },
+            },
+          ],
+        }}
+      >
+        <button type="button" className="account-menu-trigger" aria-label="用户菜单">
+          <Avatar className="side-avatar" size={28}>
+            {displayName.slice(0, 1).toUpperCase()}
+          </Avatar>
+          {!compact && (
+            <span className="account-menu-identity">
+              <strong>{displayName}</strong>
+              <span>{session?.user.email ?? "未登录"}</span>
+            </span>
+          )}
+        </button>
+      </Dropdown>
+    </div>
   );
 }
 
@@ -201,7 +260,7 @@ export function ProjectLayout({
   useEffect(() => {
     setProjectNavOpen(false);
   }, [location.pathname]);
-  const visibleSections = ["overview", "flows", "elements", "variables", "environments", "data", "automations", "runs", "platform", "governance", "settings"] as ProjectSection[];
+  const visibleSections = projectNavSections;
   const storedEnvironments = useWorkspaceStore(
     (state) => state.environmentsByProject[project.id],
   );
@@ -821,6 +880,34 @@ export function platformRunAsRun(run: PlatformRun): Run {
   };
 }
 
+/** P1-5: 列表 / 派发现在收到的是服务器端算好的轻量摘要（不再内嵌整份
+ *  snapshot/events/artifacts）；派生字段直接消费摘要，无需再拉全量。 */
+export function platformRunSummaryAsRun(run: PlatformRunSummary): Run {
+  const status: Run["status"] = run.status === "dispatched" ? "running" : run.status;
+  return {
+    id: run.id,
+    flowName: run.flowName || "平台运行",
+    status,
+    environment: run.environmentName || run.environmentId,
+    progress: status === "success" ? 100 : run.progress,
+    completedSteps: run.completedSteps,
+    totalSteps: run.totalSteps,
+    startedAt: new Date(run.createdAt).toLocaleString(),
+    duration: isTerminalStatus(status) ? "已完成" : "进行中",
+    screenshots: run.screenshotCount,
+    retries: 0,
+  };
+}
+
+/** 统一入口：既吃 POST /runs 派发的轻量摘要，也吃单 run 接口返回的全量
+ *  PlatformRun（retry/cancel/getPlatformRun）。按是否有 snapshot/events 区分。 */
+export function platformRunAsStoreRun(run: PlatformRun | PlatformRunSummary): Run {
+  if ("snapshot" in run) {
+    return platformRunAsRun(run);
+  }
+  return platformRunSummaryAsRun(run);
+}
+
 // 统一轮询 hook：页面隐藏时暂停定时器，恢复可见时重新调度。
 export function usePolling(callback: () => void | Promise<void>, intervalMs: number) {
   const savedCallback = useRef(callback);
@@ -862,12 +949,12 @@ export function readFileAsBase64(file: File) {
   });
 }
 
-export function PlatformProjectRequired({ project, title, description }: { project: Project; title: string; description: string }) {
+export function PlatformProjectRequired({ title, description }: { project: Project; title: string; description: string }) {
   const [session] = useState<PlatformSession | undefined>(readStoredPlatformSession);
   return (
     <>
       <PageHeading title={title} description={description} />
-      <Alert type="info" showIcon title={session ? "项目数据尚未就绪" : "请先连接平台账户"} action={<Link to={session ? "/projects" : `/project/${project.id}/platform`}>{session ? "返回项目列表" : "前往平台"}</Link>} />
+      <Alert type="info" showIcon title={session ? "项目数据尚未就绪" : "请先连接平台账户"} action={<Link to="/projects">返回项目列表</Link>} />
     </>
   );
 }

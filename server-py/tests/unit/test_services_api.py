@@ -313,6 +313,14 @@ def test_project_analytics_summary_trend_and_impact(tmp_path):
                     created_at,
                 ),
             )
+            # P1-5c：快照外置到 run_snapshots，analytics 读回走外置表。
+            services.database.execute(
+                """
+                INSERT INTO run_snapshots (run_id, snapshot, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (run_id, json(snapshot), created_at),
+            )
 
         insert_run("run-failed", "failed", "2026-08-14T00:00:00.000Z")
         insert_run("run-success", "success", "2026-08-15T00:00:00.000Z")

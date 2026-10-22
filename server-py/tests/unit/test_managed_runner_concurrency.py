@@ -200,3 +200,43 @@ def test_started_exception_fails_and_releases_slot(tmp_path, monkeypatch):
         assert executed == ["next"]
     finally:
         runner.stop()
+
+
+def test_cancel_reclaims_slot_when_worker_wedged(tmp_path, monkeypatch):
+    """P2-6: watchdog 判死一个卡死 worker 后，cancel 必须立刻释放并发槽。
+
+    旧实现只置 signal；卡在 Playwright 调用里、永远到不了步骤边界的 worker
+    看不到它 → ``_execute`` 的 finally 不跑 → ``_active`` 槽被永久占死，
+    后续 run 无限排队（哪怕 DB 行已被 watchdog 置 failed）。
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    started: list[str] = []
+
+    def fake_execute(_input, _hooks):
+        entered.set()
+        release.wait(timeout=30)  # wedged：模拟卡在 CDP 传输层，从不返回
+        return {
+            "status": "success",
+            "completedSteps": 0,
+            "totalSteps": 0,
+            "elapsedMs": 0,
+            "flowOutputs": {},
+        }
+
+    monkeypatch.setattr(module, "execute_browser_run", fake_execute)
+    runner = ManagedRunner(str(tmp_path), global_concurrency=1, workspace_concurrency=1)
+    try:
+        runner.enqueue("A", {}, _callbacks("A", started), "run", workspace_id="w1")
+        assert _wait_until(lambda: entered.is_set())
+        runner.enqueue("B", {}, _callbacks("B", started), "run", workspace_id="w1")
+
+        # watchdog 视角：对判死（failed）的 A 调 reap_lost —— 摘槽并补员，
+        # B 应立即开始执行（即使 A 的 worker 永不返回）。
+        assert runner.reclaim_lost("A") is True
+        assert _wait_until(lambda: "B" in started, timeout=3), (
+            "reap_lost 判死卡死 run 后必须释放并发槽并补员，否则后续 run 无限排队"
+        )
+    finally:
+        release.set()
+        runner.stop()

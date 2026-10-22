@@ -105,6 +105,26 @@
   width: 100%;
   border-top: 1px solid var(--separator);
 }
+.account-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.account-menu-identity {
+  min-width: 0;
+}
+.workspace-switcher {
+  width: 100%;
+  margin-top: var(--space-2);
+}
 .side-profile strong,
 .side-profile span {
   display: block;
@@ -2136,9 +2156,9 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
 }
-.side-profile .ant-select {
-  width: 164px;
-  margin-top: var(--space-2);
+.workspace-side.compact .account-menu-trigger {
+  width: auto;
+  justify-content: center;
 }
 .debug-session-meta {
   display: grid;
@@ -2449,7 +2469,8 @@
   }
   .workspace-side:not(.compact) .brand > span:last-child,
   .workspace-side:not(.compact) .workspace-link > span:last-child,
-  .workspace-side:not(.compact) .side-profile > div {
+  .workspace-side:not(.compact) .account-menu-identity,
+  .workspace-side:not(.compact) .workspace-switcher {
     display: none;
   }
   .workspace-side:not(.compact) .workspace-link {

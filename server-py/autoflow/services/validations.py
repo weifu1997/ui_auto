@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit
 from typing import Any
 from ..core import json, now, parse_json, safe_artifact_name
+from ..netguard import is_link_local_or_metadata_host
 
 
 class ValidationServices:
@@ -194,6 +195,7 @@ class ValidationServices:
                 base.scheme not in ("http", "https")
                 or target.scheme != base.scheme
                 or target.netloc != base.netloc
+                or is_link_local_or_metadata_host(base.hostname)
             ):
                 raise PlatformError(400, "ELEMENT_VALIDATION_TARGET_FORBIDDEN")
         except PlatformError:

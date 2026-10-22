@@ -28,7 +28,7 @@ const FlowGraphView = lazy(() => import("../components/FlowGraphView"));
 import type { RecordingEvent, RecordingResult, RecordingSession } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { elementValidationLoginMessage } from "../lib/element-validation";
-import { createRunDispatchKeyStore, describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, runIntentKey } from "./shared";
+import { createRunDispatchKeyStore, describePlatformRunError, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunSummaryAsRun, releaseRunDispatchKey, runIntentKey } from "./shared";
 import {
   clearStoredRecordingSession,
   isImportableRecordingStatus,
@@ -891,7 +891,7 @@ export default function FlowEditorPage() {
       const dispatchKey = nextRunDispatchKey(runDispatchKeysRef.current, intent);
       const result = await createPlatformRun(platformContext.session.token, platformContext.projectId, { flowId: flow.id, environmentId: environment.id, upToStepId, dispatchKey });
       releaseRunDispatchKey(runDispatchKeysRef.current, intent);
-      result.runs.forEach((run) => upsertRun(project.id, platformRunAsRun(run)));
+      result.runs.forEach((run) => upsertRun(project.id, platformRunSummaryAsRun(run)));
       message.success(`已创建 ${result.runIds.length} 个运行（部署机执行）`);
       if (result.runIds[0]) navigate(`/project/${project.id}/runs/${result.runIds[0]}`);
     } catch (error) {

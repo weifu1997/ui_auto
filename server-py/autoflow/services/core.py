@@ -7,8 +7,8 @@ import concurrent.futures
 import threading
 from pathlib import Path
 from ..audit import create_audit_writer, create_deployment_audit_writer
-from ..core import json, now
-from ..crypto import DEFAULT_PLATFORM_SECRET, key_material
+from ..core import json, now, parse_json
+from ..crypto import DEFAULT_PLATFORM_SECRET, SecretKeyring, key_material
 from ..migrations import run_platform_migrations
 from ..managed_runner import ManagedRunner
 from ..recorder import RecordingCoordinator
@@ -71,6 +71,12 @@ class CoreServices:
                     "set AUTOFLOW_ALLOW_INSECURE_DEV_KEY=1"
                 )
             configured_secret = DEFAULT_PLATFORM_SECRET
+        retired = self._read_retired_key_versions()
+        active_version = int(os.environ.get("PLATFORM_SECRET_KEY_VERSION", "1") or 1)
+        self._secret_keyring = SecretKeyring(
+            configured_secret, retired=retired, active_version=active_version
+        )
+        self.active_secret_version = self._secret_keyring.active_version
         self.key_material = key_material(configured_secret)
         self._configured_secret = configured_secret
         interrupted = self.database.execute(
@@ -130,6 +136,34 @@ class CoreServices:
         connection.isolation_level = None
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    def _read_retired_key_versions(self) -> dict[int, str]:
+        """Parse ``PLATFORM_SECRET_KEY_VERSIONS`` (JSON {version: secret}).
+
+        Retired keys are used to *decrypt* rows stamped with old versions during
+        a rotation window; the active key always lives at
+        ``PLATFORM_SECRET_KEY_VERSION`` and is never listed here.
+        """
+        raw = os.environ.get("PLATFORM_SECRET_KEY_VERSIONS")
+        if not raw:
+            return {}
+        parsed = parse_json(raw, {})
+        if not isinstance(parsed, dict):
+            raise RuntimeError("PLATFORM_SECRET_KEY_VERSIONS must be a JSON object")
+        retired: dict[int, str] = {}
+        for version, secret in parsed.items():
+            try:
+                number = int(version)
+            except (TypeError, ValueError):
+                raise RuntimeError(
+                    "PLATFORM_SECRET_KEY_VERSIONS keys must be integer versions"
+                ) from None
+            if not isinstance(secret, str) or not secret:
+                raise RuntimeError(
+                    "PLATFORM_SECRET_KEY_VERSIONS values must be non-empty secrets"
+                )
+            retired[number] = secret
+        return retired
 
     def _current_database(self) -> sqlite3.Connection:
         return self.database

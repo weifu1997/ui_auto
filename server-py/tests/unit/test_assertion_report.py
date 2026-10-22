@@ -145,6 +145,14 @@ def _seed_run(
             now(),
         ),
     )
+    # P1-5c：快照外置到 run_snapshots，列表/详情读取不再走 platform_runs.snapshot。
+    services.database.execute(
+        """
+        INSERT INTO run_snapshots (run_id, snapshot, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (run_id, json.dumps(SNAPSHOT, ensure_ascii=False), now()),
+    )
 
 
 def _seed_artifact(

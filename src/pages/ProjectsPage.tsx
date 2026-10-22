@@ -1,7 +1,7 @@
 import { message, modal } from "../lib/antd-feedback";
 import { useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
-import { WorkspaceSide, emptyRuns, isTerminalStatus } from "./shared";
+import { WorkspaceSide, emptyRuns, isTerminalStatus, uniqueNameValidator } from "./shared";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import { InboxOutlined, MoreOutlined, PlusOutlined, SearchOutlined, UndoOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Empty, Form, Input, List, Modal, Progress, Space, Table, theme } from "antd";
@@ -24,6 +24,7 @@ export function ProjectsPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archivedProjects, setArchivedProjects] = useState<PlatformProject[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -33,6 +34,7 @@ export function ProjectsPage() {
   const runRecords = useRunStore((state) => state.apiRuns);
   const archiveProject = useWorkspaceStore((state) => state.archiveProject);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
   const projectRows: ProjectListRow[] = projectList.map((project) => {
@@ -146,6 +148,17 @@ export function ProjectsPage() {
                 key: "open",
                 label: "进入项目",
                 onClick: () => navigate(`/project/${project.id}/overview`),
+              },
+              {
+                key: "rename",
+                label: "编辑项目",
+                onClick: () => {
+                  setEditingProject(project);
+                  editForm.setFieldsValue({
+                    name: project.name,
+                    description: project.description,
+                  });
+                },
               },
               {
                 key: "archive",
@@ -263,6 +276,57 @@ export function ProjectsPage() {
           </Form.Item>
           <Form.Item label="项目说明" name="description">
             <Input.TextArea rows={3} placeholder="简要说明被测系统和范围" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        title="编辑项目"
+        open={Boolean(editingProject)}
+        okText="保存修改"
+        onCancel={() => setEditingProject(null)}
+        onOk={() =>
+          editForm.validateFields().then(async (values: { name: string; description?: string }) => {
+            if (!editingProject) return;
+            const session = readStoredPlatformSession();
+            if (!session) throw new Error("AUTH_REQUIRED");
+            const name = values.name.trim();
+            const description = values.description?.trim() ?? "";
+            await updatePlatformProject(session.token, editingProject.id, {
+              name,
+              description,
+            });
+            await queryClient.invalidateQueries({ queryKey: ["server-workspace"] });
+            useWorkspaceStore.getState().updateProject(editingProject.id, { name, description });
+            setEditingProject(null);
+            message.success("项目已更新");
+          }).catch((error: unknown) => {
+            if (Array.isArray(error) || (error && typeof error === "object" && "errorFields" in error)) return;
+            message.error("保存项目失败，请稍后重试");
+          })
+        }
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item
+            label="项目名称"
+            name="name"
+            validateTrigger={["onChange", "onBlur"]}
+            rules={[
+              { required: true, whitespace: true, message: "请输入项目名称" },
+              {
+                validator: uniqueNameValidator({
+                  items: projectList,
+                  getName: (item) => item.name,
+                  getId: (item) => item.id,
+                  editingId: editingProject?.id,
+                  entityLabel: "项目",
+                }),
+              },
+            ]}
+          >
+            <Input autoFocus />
+          </Form.Item>
+          <Form.Item label="项目说明" name="description">
+            <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
       </Modal>

@@ -7,7 +7,7 @@ import { readPlatformProjectMap, readStoredPlatformSession } from "../api/platfo
 import { useLocation, useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { useWorkspaceStore } from "../stores/workspace-store";
-import { FilterBar, FilterItem, PageHeading, canUseCapability, createRunDispatchKeyStore, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
+import { FilterBar, FilterItem, PageHeading, canUseCapability, createRunDispatchKeyStore, isTerminalStatus, nextRunDispatchKey, platformRunAsRun, platformRunAsStoreRun, platformRunSummaryAsRun, releaseRunDispatchKey, reportRetryError, runIntentKey, statusMeta, statusTag, usePolling } from "./shared";
 import { OrchestrationDashboard } from "./OrchestrationDashboard";
 import { DeleteOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip } from "antd";
@@ -78,7 +78,7 @@ export function RunsPage({ project }: { project: Project }) {
         from: fromFilter || undefined,
         to: toFilter || undefined,
       });
-      const pageRuns = response.runs.map((run) => platformRunAsRun(run));
+      const pageRuns = response.runs.map((run) => platformRunSummaryAsRun(run));
       setPlatformPageRuns(pageRuns);
       setPlatformTotal(response.total);
       pageRuns.forEach((run) => upsertRun(project.id, run));
@@ -249,7 +249,7 @@ export function RunsPage({ project }: { project: Project }) {
           releaseRunDispatchKey(runDispatchKeysRef.current, intent);
         }
         if (prior.run.status === "success" && created.runIds.length === 0) throw new Error("PLATFORM_FRESH_RUN_NOT_CREATED");
-        created.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsRun(platformRun)));
+        created.runs.forEach((platformRun) => upsertRun(project.id, platformRunAsStoreRun(platformRun)));
         if (created.runIds[0]) navigate(`/project/${project.id}/runs/${created.runIds[0]}`);
         message.success(prior.run.status === "success" ? "已按最新已发布版本创建新运行" : "已按原快照重新提交");
         return;

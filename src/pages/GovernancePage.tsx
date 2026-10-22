@@ -57,7 +57,7 @@ export function GovernancePage({ project }: { project: Project }) {
       setAnalytics(analyticsResponse.analytics);
       setReleaseEvents(releaseResponse.events);
     } catch {
-      message.error("无法读取治理与质量数据");
+      message.error("无法读取审计与质量数据");
     } finally {
       setLoading(false);
     }
@@ -79,7 +79,7 @@ export function GovernancePage({ project }: { project: Project }) {
 
   useEffect(() => { void loadGovernance(); }, [loadGovernance]);
   useEffect(() => { void loadAudit(); }, [loadAudit]);
-  if (!platformSession || !platformProjectId || !workspaceId) return <PlatformProjectRequired project={project} title="治理分析" description="查看质量趋势与发布审计。" />;
+  if (!platformSession || !platformProjectId || !workspaceId) return <PlatformProjectRequired project={project} title="审计" description="查看质量趋势、发布记录和审计日志。" />;
 
   const summary = analytics?.summary ?? { totalRuns: 0, successRate: 0, failedRuns: 0, canceledRuns: 0, failedRate: 0, canceledRate: 0 };
   const previous = analytics?.previous;
@@ -100,7 +100,7 @@ export function GovernancePage({ project }: { project: Project }) {
 
   return (
     <>
-      <PageHeading title="治理分析" description="聚合已冻结运行快照、步骤事件和发布审计；质量指标不读取密钥或原始通知配置。" actions={<Tooltip title="刷新治理数据"><Button icon={<ReloadOutlined />} aria-label="刷新治理数据" loading={loading} onClick={() => void loadGovernance()} /></Tooltip>} />
+      <PageHeading title="审计" description="聚合已冻结运行快照、步骤事件和发布记录；质量指标不读取密钥或原始通知配置。" actions={<Tooltip title="刷新审计数据"><Button icon={<ReloadOutlined />} aria-label="刷新审计数据" loading={loading} onClick={() => void loadGovernance()} /></Tooltip>} />
       <FilterBar>
         <FilterItem label="时间窗口">
           <Select aria-label="时间窗口" value={analyticsQuery.window ?? 0} onChange={(value) => { setAnalyticsQuery((query) => ({ ...query, window: value || undefined, from: undefined, to: undefined })); setAnalyticsRangeKey((key) => key + 1); }} options={[{ value: 7, label: "近 7 天" }, { value: 14, label: "近 14 天" }, { value: 30, label: "近 30 天" }, { value: 0, label: "全部" }]} style={{ width: 110 }} />

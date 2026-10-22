@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+from .netguard import is_link_local_or_metadata_host
 from .sensitive import is_sensitive_field as shared_is_sensitive_field
 
 def sanitize_url(url: str) -> str:
@@ -53,6 +54,10 @@ def recording_target_url(base_url: str, start_url: str) -> str:
     except ValueError:
         raise PlatformError(400, "RECORDING_ENVIRONMENT_INVALID") from None
     if base.scheme not in ("http", "https") or not base.netloc:
+        raise PlatformError(400, "RECORDING_ENVIRONMENT_INVALID")
+    # P1-1 SSRF：录制起始导航同源但 base 本身可能是 link-local/云 metadata；
+    # 拒绝，避免录制浏览器被指去读实例凭据。
+    if is_link_local_or_metadata_host(base.hostname):
         raise PlatformError(400, "RECORDING_ENVIRONMENT_INVALID")
     try:
         target = urlsplit(urljoin(base_url, start_url or "/"))

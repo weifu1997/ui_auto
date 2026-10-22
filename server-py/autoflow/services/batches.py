@@ -160,7 +160,7 @@ class BatchServices:
         rows = self.database.execute(
             """
             SELECT id, project_id, revision_id, environment_id, agent_id,
-                   executor_type, status, snapshot, cancellation_requested,
+                   executor_type, status, cancellation_requested,
                    result, created_at, updated_at, batch_item_index,
                    retry_of_run_id
             FROM platform_runs
@@ -169,7 +169,7 @@ class BatchServices:
             """,
             (batch_id, project_id),
         ).fetchall()
-        return [
+        runs: list[dict[str, Any]] = [
             {
                 "id": row[0],
                 "projectId": row[1],
@@ -178,16 +178,35 @@ class BatchServices:
                 "agentId": row[4],
                 "executorType": row[5],
                 "status": row[6],
-                "snapshot": parse_json(row[7], {}),
-                "cancellationRequested": bool(row[8]),
-                "result": parse_json(row[9], None),
-                "createdAt": row[10],
-                "updatedAt": row[11],
-                "batchItemIndex": row[12],
-                "retryOfRunId": row[13],
+                "snapshot": {},
+                "cancellationRequested": bool(row[7]),
+                "result": parse_json(row[8], None),
+                "createdAt": row[9],
+                "updatedAt": row[10],
+                "batchItemIndex": row[11],
+                "retryOfRunId": row[12],
             }
             for row in rows
         ]
+        if not runs:
+            return runs
+        # P1-5c：全量快照外置在 run_snapshots，批量读取按 id 一次性带回。
+        placeholders = ",".join("?" for _ in runs)
+        snapshot_by_id = {
+            snap_row[0]: snap_row[1]
+            for snap_row in self.database.execute(
+                f"""
+                SELECT run_id, snapshot FROM run_snapshots
+                WHERE run_id IN ({placeholders})
+                """,
+                tuple(run["id"] for run in runs),
+            ).fetchall()
+        }
+        for run in runs:
+            run["snapshot"] = parse_json(
+                snapshot_by_id.get(run["id"], ""), {}
+            )
+        return runs
 
     def _validate_batch_input(self, input: dict[str, Any]) -> list[str]:
         from ..http import PlatformError

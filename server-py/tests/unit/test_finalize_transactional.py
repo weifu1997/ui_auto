@@ -103,6 +103,14 @@ def _insert_running_run(
         """,
         (run_id, project_id, revision_id, agent_id, json.dumps(snapshot)),
     )
+    # P1-5c：快照外置到 run_snapshots；finalize 读回走外置表。
+    services.database.execute(
+        """
+        INSERT INTO run_snapshots (run_id, snapshot, created_at)
+        VALUES (?, ?, '2026-08-24T00:00:00.000Z')
+        """,
+        (run_id, json.dumps(snapshot)),
+    )
     return run_id
 
 

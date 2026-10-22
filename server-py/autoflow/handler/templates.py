@@ -812,13 +812,14 @@ def register(router: APIRouter, services: PlatformServices) -> None:
                                 INSERT INTO project_secrets (
                                   id, project_id, name, key_version, iv, tag, ciphertext,
                                   created_at, updated_at
-                                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 ON CONFLICT(project_id, name) DO NOTHING
                                 """,
                                 (
                                     secret_id,
                                     project_id,
                                     s_name,
+                                    services.active_secret_version,
                                     encrypted["iv"],
                                     encrypted["tag"],
                                     encrypted["ciphertext"],

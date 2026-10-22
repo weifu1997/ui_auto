@@ -18,6 +18,7 @@ from .assertion_contract import (
     ASSERT_VISIBILITIES,
 )
 from .locator_score import HeuristicLocatorScorer, LocatorScorer
+from .netguard import is_link_local_or_metadata_host
 
 # 有头运行在 WSL/Windows 宿主上复用 Windows Chrome（WSLg 下 Linux Chromium 不可见）。
 from .browser_session import (
@@ -75,6 +76,12 @@ def _target_url(base_url: str, value: str) -> str:
         or target.netloc != base.netloc
     ):
         raise RuntimeError("TARGET_URL_ORIGIN_FORBIDDEN")
+    # P1-1 SSRF：同源限制挡不住 base 本身是 link-local/云 metadata（例如
+    # baseUrl 被写成 http://169.254.169.254/）。浏览器导航的唯一出口都走这里，
+    # 出站前拒绝这类地址，避免 runner 浏览器被指去读实例凭据。loopback/私网
+    # 仍放行（部署会自动化 127.0.0.1 / 局域网应用）。
+    if is_link_local_or_metadata_host(base.hostname):
+        raise RuntimeError("TARGET_URL_LINK_LOCAL_FORBIDDEN")
     return target.geturl()
 
 
@@ -109,6 +116,44 @@ def _wait_step_cap_ms() -> int:
     except ValueError:
         value = 600_000
     return max(1_000, value)
+
+
+def _heartbeat_step_grace_ms() -> int:
+    """P2-6: 步骤健康预算之外追加的宽限（毫秒），默认 10s。
+
+    吸收单步内多次 Playwright 调用之间、输出捕获等微小时延；配置异常时钳制在
+    [0, 300_000]。仅影响卡死判定的时机，不改变健康步骤行为。
+    """
+    raw = os.environ.get("RUN_HEARTBEAT_STEP_GRACE_MS", "10000")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 10_000
+    return max(0, min(300_000, value))
+
+
+def _step_heartbeat_budget_ms(step: dict[str, Any], attempts: int) -> int:
+    """P2-6: 单个步骤健康执行的上限（毫秒），作为心跳续命截止。
+
+    Playwright 对每个动作都传显式 timeout（导航另有 30s 地板），健康步骤必然在
+    各自超时前返回/抛错；重试（attempts）与 D5 自愈各追加一次动作，故按
+    ``attempts × 2 × 动作超时 + 导航地板`` 取一个必然覆盖健康执行的上界。
+    等待步骤走页面端 JS 定时器，单独按封顶后的 wait_ms 计。
+    超过该上界仍不返回的步骤 = 卡在 Playwright 之下，心跳不再续命，让
+    DB watchdog 判死。
+    """
+    timeout_ms = max(1, int(step.get("timeout", 30))) * 1000
+    budget_ms = attempts * 2 * timeout_ms + _NAVIGATE_TIMEOUT_FLOOR_MS
+    if step.get("action") == "等待":
+        try:
+            wait_ms = int(step.get("value", ""))
+        except (TypeError, ValueError):
+            wait_ms = timeout_ms
+        budget_ms = max(
+            budget_ms,
+            min(wait_ms, _wait_step_cap_ms()) + _NAVIGATE_TIMEOUT_FLOOR_MS,
+        )
+    return budget_ms + _heartbeat_step_grace_ms()
 
 
 def _ensure_page_opened(
@@ -872,15 +917,38 @@ def execute_browser_run(
     started = time.time()
     assertions: list[dict[str, Any]] = []
     heartbeat_index = {"value": -1}
+    # P2-6: 当前步骤的心跳续命截止（monotonic 秒）。None = 处于浏览器启动等
+    # 阶段，保持旧行为（不设限）。只在步骤执行期设置截止。
+    step_keep_alive_until = {"value": None}
+    reclaim_fired = {"value": False}
     stop_heartbeat = threading.Event()
 
     def _heartbeat_loop() -> None:
         interval = _heartbeat_interval_s()
         while not stop_heartbeat.wait(interval):
+            index = heartbeat_index["value"]
+            deadline = step_keep_alive_until["value"]
+            if (
+                index >= 0
+                and deadline is not None
+                and time.monotonic() >= deadline
+            ):
+                # P2-6: 当前步骤超过健康预算仍未返回 = 卡在 Playwright 之下
+                # （其自身 timeout 应早已触发）。心跳停更，让 updated_at 冻结、
+                # DB watchdog 得以判死；并请求释放并发槽，避免后续 run 无限排队。
+                if not reclaim_fired["value"]:
+                    reclaim_fired["value"] = True
+                    reclaim = hooks.get("reclaim")
+                    if callable(reclaim):
+                        try:
+                            reclaim()
+                        except Exception:
+                            pass
+                continue
             progress = hooks.get("progress")
             if callable(progress):
                 try:
-                    progress(heartbeat_index["value"])
+                    progress(index)
                 except Exception:
                     pass
 
@@ -902,7 +970,15 @@ def execute_browser_run(
                 for index, step in enumerate(steps):
                     if hooks.get("signal") and hooks["signal"].is_set():
                         raise RuntimeError("RUN_CANCELED")
+                    attempts = 2 if step.get("failurePolicy") == "重试 1 次" else 1
                     heartbeat_index["value"] = index
+                    # P2-6: 每步开始设好续命截止 = 健康预算。步内由 heartbeat
+                    # 线程续命（避免单步 timeout 大于 watchdog 窗口时被误杀），
+                    # 但一旦超窗（卡死）心跳即停更并释放槽。
+                    step_keep_alive_until["value"] = (
+                        time.monotonic()
+                        + _step_heartbeat_budget_ms(step, attempts) / 1000
+                    )
                     # W0-4 心跳：每步开始上报，步内由 heartbeat 线程续命，避免
                     # 单步 timeout 大于 watchdog 窗口时被误杀。
                     progress = hooks.get("progress")
@@ -913,7 +989,6 @@ def execute_browser_run(
                         "step.started",
                         {"index": index, "stepId": step.get("id"), "title": step.get("title")},
                     )
-                    attempts = 2 if step.get("failurePolicy") == "重试 1 次" else 1
                     failure: Exception | None = None
                     assertion_record: dict[str, Any] | None = None
                     for attempt in range(1, attempts + 1):

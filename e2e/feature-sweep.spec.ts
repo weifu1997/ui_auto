@@ -39,4 +39,16 @@ test("creates isolated environment, element, and a flow with user-authored steps
   await page.getByRole("button", { name: "保存" }).click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "新步骤" })).toBeVisible();
+
+  await page.locator(".editor-topbar").getByRole("button").first().click();
+  await page.getByRole("button", { name: "查看 表单提交验证 的版本" }).click();
+  await expect(page.getByText("保存流程后将自动生成版本快照")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "用户菜单" }).click();
+  await page.getByRole("menuitem", { name: "深色" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "用户菜单" }).click();
+  await page.getByRole("menuitem", { name: "浅色" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
