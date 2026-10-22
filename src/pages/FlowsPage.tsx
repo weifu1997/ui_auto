@@ -1,21 +1,22 @@
 import { message } from "../lib/antd-feedback";
 import type { Flow, Project, Run } from "../lib/mock-data";
-import { PlatformApiError, createPlatformRun, createPlatformRunBatch, getPlatformRevisions } from "../api/platform-api";
+import { PlatformApiError, createPlatformRun, createPlatformRunBatch, getPlatformRevisions, rollbackPlatformRevision } from "../api/platform-api";
 import type { PlatformRevision } from "../api/platform-api";
 import { platformProjectContext } from "../api/platform-context";
 import { useNavigate } from "../router";
 import { useRunStore } from "../stores/run-store";
 import { PageHeading, canUseCapability, createRunDispatchKeyStore, describePlatformRunError, emptyEnvironments, emptyFlows, emptyVariables, ensurePlatformRunSecrets, nextRunDispatchKey, platformRunSummaryAsRun, releaseRunDispatchKey, runIntentKey, statusTag, uniqueNameValidator } from "./shared";
 import { useWorkspaceStore } from "../stores/workspace-store";
-import { CopyOutlined, DeleteOutlined, ExperimentOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { CopyOutlined, DeleteOutlined, ExperimentOutlined, HistoryOutlined, PlayCircleFilled, PlusOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function FlowsPage({ project }: { project: Project }) {
   const navigate = useNavigate();
   const canEditFlow = canUseCapability("flow.edit");
   const canRunFlow = canUseCapability("run.execute");
+  const canRollback = canUseCapability("release.publish");
   const storedFlows = useWorkspaceStore((state) => state.flowsByProject[project.id]);
   const storedVariables = useWorkspaceStore(
     (state) => state.variablesByProject[project.id],
@@ -46,37 +47,70 @@ export function FlowsPage({ project }: { project: Project }) {
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
   const [draftOpen, setDraftOpen] = useState(false);
+  const [revisions, setRevisions] = useState<PlatformRevision[]>([]);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [publishedFlowIds, setPublishedFlowIds] = useState<ReadonlySet<string> | null>(null);
+  const [versionsFlow, setVersionsFlow] = useState<Flow | null>(null);
+  const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const platformToken = platformProjectContext(project.id)?.session.token;
   const platformProjectIdValue = platformProjectContext(project.id)?.projectId;
-  useEffect(() => {
+  const loadRevisions = useCallback(async () => {
     if (!platformToken || !platformProjectIdValue) {
+      setRevisions([]);
       setPublishedFlowIds(null);
       return;
     }
-    let cancelled = false;
-    getPlatformRevisions(platformToken, platformProjectIdValue)
-      .then((result) => {
-        if (cancelled) return;
-        const environmentId = activeEnvironment?.id;
-        setPublishedFlowIds(
-          new Set(
-            result.revisions
-              .filter((revision): revision is PlatformRevision & { flowId: string } =>
-                revision.status === "published" &&
-                (!environmentId || revision.environmentId === environmentId) &&
-                typeof revision.flowId === "string")
-              .map((revision) => revision.flowId),
-          ),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setPublishedFlowIds(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [platformToken, platformProjectIdValue, activeEnvironment?.id]);
+    setRevisionsLoading(true);
+    try {
+      const result = await getPlatformRevisions(platformToken, platformProjectIdValue);
+      const environmentId = activeEnvironment?.id;
+      setRevisions(result.revisions);
+      setPublishedFlowIds(
+        new Set(
+          result.revisions
+            .filter((revision): revision is PlatformRevision & { flowId: string } =>
+              revision.status === "published" &&
+              (!environmentId || revision.environmentId === environmentId) &&
+              typeof revision.flowId === "string")
+            .map((revision) => revision.flowId),
+        ),
+      );
+    } catch {
+      setRevisions([]);
+      setPublishedFlowIds(null);
+    } finally {
+      setRevisionsLoading(false);
+    }
+  }, [activeEnvironment?.id, platformProjectIdValue, platformToken]);
+  useEffect(() => {
+    void loadRevisions();
+  }, [loadRevisions]);
+  const rollbackToRevision = async (revision: PlatformRevision) => {
+    if (!platformToken || !platformProjectIdValue) return;
+    setRollingBackId(revision.id);
+    try {
+      await rollbackPlatformRevision(
+        platformToken,
+        platformProjectIdValue,
+        revision.id,
+        `回滚到 v${revision.revisionNumber}`,
+      );
+      await loadRevisions();
+      message.success(`已回滚到 v${revision.revisionNumber}，并生成新版本`);
+    } catch {
+      message.error("回滚失败，请稍后重试");
+    } finally {
+      setRollingBackId(null);
+    }
+  };
+  const flowRevisions = versionsFlow
+    ? revisions
+        .filter((revision) =>
+          revision.flowId === versionsFlow.id ||
+          (!revision.flowId && revision.flowName === versionsFlow.name))
+        .slice()
+        .sort((left, right) => right.revisionNumber - left.revisionNumber)
+    : [];
   const filtered = items.filter((item) =>
     item.name.toLowerCase().includes(search.toLowerCase()) &&
     (tagFilter === "all" || item.tags.includes(tagFilter)),
@@ -225,9 +259,20 @@ export function FlowsPage({ project }: { project: Project }) {
     {
       title: "",
       key: "actions",
-      width: 142,
+      width: 176,
       render: (_, flow) => (
         <Space size={0}>
+          {platformMode && (
+            <Tooltip title="版本与回滚">
+              <Button
+                type="text"
+                size="small"
+                icon={<HistoryOutlined />}
+                aria-label={`查看 ${flow.name} 的版本`}
+                onClick={() => setVersionsFlow(flow)}
+              />
+            </Tooltip>
+          )}
           {canRunFlow && (
             <Tooltip title={isFlowRunnable(flow.id) ? "运行流程" : "该流程尚未发布版本，请先在编排器中保存流程"}>
               <Button
@@ -409,6 +454,74 @@ export function FlowsPage({ project }: { project: Project }) {
         <div className="drawer-note">
           批次按提交顺序串行执行（同一时间最多一个运行）；每个流程完成或失败后自动执行下一个，并可能产生多条完成通知。
         </div>
+      </Modal>
+      <Modal
+        title={versionsFlow ? `${versionsFlow.name} 的版本` : "流程版本"}
+        open={Boolean(versionsFlow)}
+        footer={null}
+        width={720}
+        onCancel={() => setVersionsFlow(null)}
+      >
+        <p className="drawer-note">保存流程后自动生成版本快照。回滚会基于所选版本生成新的已发布版本。</p>
+        <Table
+          rowKey="id"
+          size="small"
+          loading={revisionsLoading}
+          dataSource={flowRevisions}
+          pagination={false}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="保存流程后将自动生成版本快照" /> }}
+          columns={[
+            { title: "版本", dataIndex: "revisionNumber", width: 80, render: (value: number) => `v${value}` },
+            {
+              title: "状态",
+              dataIndex: "status",
+              width: 100,
+              render: (status: PlatformRevision["status"]) => (
+                <Tag color={status === "published" ? "success" : "default"}>
+                  {status === "published" ? "已发布" : status === "superseded" ? "已覆盖" : status}
+                </Tag>
+              ),
+            },
+            {
+              title: "环境",
+              dataIndex: "environmentId",
+              render: (environmentId?: string) =>
+                environments.find((environment) => environment.id === environmentId)?.name ?? "未记录",
+            },
+            {
+              title: "创建时间",
+              dataIndex: "createdAt",
+              width: 180,
+              render: (value: string) => new Date(value).toLocaleString(),
+            },
+            {
+              title: "",
+              key: "actions",
+              width: 72,
+              align: "right",
+              render: (_: unknown, revision: PlatformRevision) => canRollback ? (
+                <Popconfirm
+                  title={`回滚到 v${revision.revisionNumber}`}
+                  description="将基于该版本生成新的已发布版本。"
+                  okText="回滚"
+                  cancelText="取消"
+                  onConfirm={() => void rollbackToRevision(revision)}
+                >
+                  <Tooltip title="回滚到此版本">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<HistoryOutlined />}
+                      aria-label={`回滚到版本 v${revision.revisionNumber}`}
+                      loading={rollingBackId === revision.id}
+                      disabled={rollingBackId !== null}
+                    />
+                  </Tooltip>
+                </Popconfirm>
+              ) : null,
+            },
+          ]}
+        />
       </Modal>
       <NewFlowDrawer
         open={draftOpen}

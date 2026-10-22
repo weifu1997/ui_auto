@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"按后端项目规范检查 API、数据库、运行和安全边界。"}
+{"file":".trellis/spec/backend/run-batch-recording-contracts.md","reason":"核对录制/运行状态机、事件顺序、重试取消和隔离回归。"}
+{"file":".trellis/spec/backend/assertion-field-contract.md","reason":"核对断言契约 parity、默认值和旧快照兼容。"}
+{"file":".trellis/spec/backend/production-startup.md","reason":"核对构建、启动、配置和 readiness 验收。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"执行前端 build、lint、unit、E2E 和可访问性质量门禁。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"检查 API/领域类型是否存在漂移或未收窄的原始 payload。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查录制、契约、运行和报告跨层数据流闭环。"}
+{"file":".trellis/spec/guides/architecture-boundaries.md","reason":"确认没有误改稳定契约区且新增能力保持可回滚。"}

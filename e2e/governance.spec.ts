@@ -41,7 +41,7 @@ test("renders quality analysis, audit log and release audit", async ({ page }) =
   }, { session });
   await page.reload();
 
-  await expect(page.getByRole("heading", { name: "治理分析" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "审计", exact: true })).toBeVisible();
   await expect(page.getByText("93%", { exact: true })).toBeVisible();
   await expect(page.getByText("↑3", { exact: true })).toBeVisible();
   await expect(page.getByText("Checkout button", { exact: true })).toBeVisible();

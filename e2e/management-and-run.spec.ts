@@ -37,7 +37,7 @@ async function createVariable(
   await page.getByRole("button", { name: "保存变量" }).click();
 }
 
-test("persists managed assets, settings, and project archival", async ({ page }) => {
+test("persists managed assets, project rename, and project archival", async ({ page }) => {
   await createProject(page, "管理回归项目");
 
   await page.locator(".project-nav-item").filter({ hasText: "环境" }).click();
@@ -57,16 +57,19 @@ test("persists managed assets, settings, and project archival", async ({ page })
   await expect(page.getByText("account", { exact: true })).toBeVisible();
   await expect(page.getByText("region", { exact: true })).toBeVisible();
 
-  await page.locator(".project-nav-item").filter({ hasText: "项目设置" }).click();
+  await page.getByRole("link", { name: "项目" }).first().click();
+  await page.getByRole("button", { name: "管理回归项目更多操作" }).click();
+  await page.getByRole("menuitem", { name: "编辑项目" }).click();
   await page.getByLabel("项目名称").fill("已更新的管理项目");
   await page.getByLabel("项目说明").fill("设置保存后应保持不变");
   await page.getByRole("button", { name: "保存修改" }).click();
+  await expect(page.locator(".project-cell", { hasText: "已更新的管理项目" })).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("项目名称")).toHaveValue("已更新的管理项目");
+  await expect(page.locator(".project-cell", { hasText: "已更新的管理项目" })).toBeVisible();
 
-  await page.getByRole("button", { name: "归档项目" }).click();
+  await page.getByRole("button", { name: "已更新的管理项目更多操作" }).click();
+  await page.getByRole("menuitem", { name: "归档项目" }).click();
   await page.getByRole("button", { name: "归档项目", exact: true }).click();
-  await expect(page).toHaveURL(/\/projects$/);
   await expect(page.getByText("尚未创建测试项目", { exact: true })).toBeVisible();
 });
 
